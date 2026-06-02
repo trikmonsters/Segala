@@ -48,8 +48,8 @@ jobs:
           pwd
           ls -lah
 
-          if [ ! -f generate.py ]; then
-            echo "generate.py not found"
+          if [ ! -f genre.py ]; then
+            echo "genre.py not found"
             exit 1
           fi
 
