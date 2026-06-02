@@ -21,7 +21,7 @@ jobs:
 
       - name: Generate frames
         run: |
-          python generate.py
+          python genre.py
 
       - name: Encode video
         run: |
