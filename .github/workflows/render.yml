@@ -1,10 +1,10 @@
-name: Render Stickman
+name: Stickman Battle
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  render:
     runs-on: ubuntu-latest
 
     steps:
@@ -14,15 +14,27 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install
+      - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install numpy pillow ffmpeg
 
-      - name: Render
+      - name: Generate frames
         run: |
-          python genre.py
+          python generate.py
 
-      - name: Upload
+      - name: Encode video
+        run: |
+          ffmpeg \
+          -framerate 60 \
+          -i frames/frame_%05d.png \
+          -c:v libx264 \
+          -pix_fmt yuv420p \
+          -preset medium \
+          -crf 20 \
+          battle.mp4
+
+      - name: Upload Video
         uses: actions/upload-artifact@v4
         with:
           name: stickman-battle
