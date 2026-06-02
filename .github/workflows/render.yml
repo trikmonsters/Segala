@@ -1,41 +1,115 @@
-name: Stickman Battle
+name: Stickman Battle Render
 
 on:
   workflow_dispatch:
 
 jobs:
   render:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Upgrade Pip
         run: |
           python -m pip install --upgrade pip
-          pip install numpy pillow ffmpeg
 
-      - name: Generate frames
+      - name: Install Python Dependencies
+        run: |
+          pip install numpy pillow
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Verify Environment
+        run: |
+          echo "Python:"
+          python --version
+
+          echo "Pip:"
+          pip --version
+
+          echo "FFmpeg:"
+          which ffmpeg
+          ffmpeg -version
+
+      - name: Verify Files
+        run: |
+          pwd
+          ls -lah
+
+          if [ ! -f generate.py ]; then
+            echo "generate.py not found"
+            exit 1
+          fi
+
+      - name: Generate Frames
         run: |
           python genre.py
 
-      - name: Encode video
+      - name: Validate Frames Folder
+        run: |
+          if [ ! -d frames ]; then
+            echo "frames folder not found"
+            exit 1
+          fi
+
+          COUNT=$(find frames -name "*.png" | wc -l)
+
+          echo "Frame count: $COUNT"
+
+          if [ "$COUNT" -eq "0" ]; then
+            echo "No frames generated"
+            exit 1
+          fi
+
+      - name: Encode MP4
         run: |
           ffmpeg \
-          -framerate 60 \
-          -i frames/frame_%05d.png \
-          -c:v libx264 \
-          -pix_fmt yuv420p \
-          -preset medium \
-          -crf 20 \
-          battle.mp4
+            -y \
+            -framerate 60 \
+            -i frames/frame_%05d.png \
+            -c:v libx264 \
+            -pix_fmt yuv420p \
+            -preset medium \
+            -crf 20 \
+            battle.mp4
+
+      - name: Validate Video
+        run: |
+          if [ ! -f battle.mp4 ]; then
+            echo "battle.mp4 not found"
+            exit 1
+          fi
+
+          SIZE=$(stat -c%s battle.mp4)
+
+          echo "Video size: $SIZE bytes"
+
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "Video too small"
+            exit 1
+          fi
 
       - name: Upload Video
         uses: actions/upload-artifact@v4
         with:
           name: stickman-battle
           path: battle.mp4
+
+      - name: Upload Frames On Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-frames
+          path: frames
