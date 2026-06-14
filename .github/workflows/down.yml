@@ -1,0 +1,154 @@
+name: YT Shorts Download
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install playwright
+
+      - name: Install Chromium
+        run: |
+          npx playwright install chromium --with-deps
+
+      - name: Run Playwright
+        run: |
+          cat > script.mjs <<'EOF'
+          import fs from "fs";
+          import { chromium } from "playwright";
+
+          const browser = await chromium.launch({
+            headless: true,
+            args: [
+              "--disable-blink-features=AutomationControlled",
+              "--no-sandbox",
+              "--disable-dev-shm-usage"
+            ]
+          });
+
+          const context = await browser.newContext({
+            acceptDownloads: true,
+            viewport: { width: 1366, height: 768 },
+            userAgent:
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+          });
+
+          const page = await context.newPage();
+
+          await page.goto("https://ytshortsdl.io/", {
+            waitUntil: "domcontentloaded",
+            timeout: 60000
+          });
+
+          const url =
+            "https://youtube.com/shorts/CIbeRYMGfbk";
+
+          const input = page.locator("input").first();
+          await input.fill(url);
+
+          const buttons = page.locator("button");
+
+          const count = await buttons.count();
+
+          for (let i = 0; i < count; i++) {
+            const btn = buttons.nth(i);
+
+            try {
+              const text = (await btn.textContent()) || "";
+
+              if (
+                text.toLowerCase().includes("download") ||
+                text.toLowerCase().includes("get")
+              ) {
+                await btn.click();
+                break;
+              }
+            } catch {}
+          }
+
+          await page.waitForTimeout(8000);
+
+          await page.screenshot({
+            path: "button-visible.png",
+            fullPage: true
+          });
+
+          const downloadPromise = page.waitForEvent("download", {
+            timeout: 120000
+          });
+
+          const links = page.locator("a");
+
+          const linkCount = await links.count();
+
+          let clicked = false;
+
+          for (let i = 0; i < linkCount; i++) {
+            const a = links.nth(i);
+
+            try {
+              const txt = ((await a.textContent()) || "").toLowerCase();
+
+              if (txt.includes("download")) {
+                await a.click();
+                clicked = true;
+                break;
+              }
+            } catch {}
+          }
+
+          if (!clicked) {
+            const btns = page.locator("button");
+            const btnCount = await btns.count();
+
+            for (let i = 0; i < btnCount; i++) {
+              const b = btns.nth(i);
+
+              try {
+                const txt = ((await b.textContent()) || "").toLowerCase();
+
+                if (txt.includes("download")) {
+                  await b.click();
+                  clicked = true;
+                  break;
+                }
+              } catch {}
+            }
+          }
+
+          const download = await downloadPromise;
+
+          fs.mkdirSync("downloads", { recursive: true });
+
+          await download.saveAs(
+            `downloads/${download.suggestedFilename()}`
+          );
+
+          await browser.close();
+          EOF
+
+          node script.mjs
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: button-visible.png
+
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: video
+          path: downloads/
