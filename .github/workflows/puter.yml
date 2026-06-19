@@ -1,4 +1,4 @@
-name: Generate Puter Image
+name: Generate Putter Image
 
 on:
   workflow_dispatch:
@@ -10,52 +10,28 @@ jobs:
       contents: write
     
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Generate Image Script
-        env:
-          PUTER_TOKEN: ${{ secrets.PUTER_TOKEN }}
+      - name: Install Puter CLI
         run: |
-          node -e "
-          const fs = require('fs');
-          async function main() {
-            const prompt = '2D anime style, a teacher explaining at a blackboard in a classroom, students writing and listening, vibrant colors, high quality';
-            console.log('Generating image...');
-            
-            const response = await fetch('https://api.puter.com/api/v1/ai/txt2img', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + process.env.PUTER_TOKEN
-              },
-              body: JSON.stringify({ prompt: prompt })
-            });
+          curl -LO https://puter.com/cli/linux/puter
+          chmod +x puter
+          sudo mv puter /usr/local/bin/
 
-            if (!response.ok) {
-              const err = await response.text();
-              console.error('API Error:', err);
-              process.exit(1);
-            }
+      - name: Authenticate Puter
+        run: |
+          # Menggunakan token yang disimpan di secret
+          puter auth login --token ${{ secrets.PUTER_TOKEN }}
 
-            const buffer = Buffer.from(await response.arrayBuffer());
-            fs.writeFileSync('classroom.png', buffer);
-            console.log('Image saved as classroom.png');
-          }
-          main();
-          "
+      - name: Generate Image
+        run: |
+          # Menjalankan perintah generate image via CLI
+          puter ai txt2img "2D anime style, a teacher explaining at a blackboard in a classroom, students writing and listening, vibrant colors, high quality" --output classroom.png
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ github.run_id }}
           name: Generated Image - Run ${{ github.run_id }}
-          body: "Image generated automatically using Puter.com API."
+          body: "Image generated automatically using Puter CLI."
           files: classroom.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
