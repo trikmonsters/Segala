@@ -1,0 +1,72 @@
+name: Generate and Release Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Create Temporary Script
+        run: |
+          cat << 'EOF' > generate.js
+          const { puter } = require('@puter/sdk');
+          const fs = require('fs');
+
+          async function main() {
+            // Memastikan token tersedia
+            if (!process.env.PUTER_TOKEN) {
+              console.error("PUTER_TOKEN is not set!");
+              process.exit(1);
+            }
+            
+            console.log("Generating image with Puter...");
+            const prompt = "2D anime style, a teacher explaining at a blackboard in a classroom, students writing and listening, vibrant colors, high quality";
+            
+            // Konfigurasi auth menggunakan token
+            puter.auth.setToken(process.env.PUTER_TOKEN);
+            
+            const image = await puter.ai.txt2img(prompt);
+            
+            // Konversi blob ke buffer
+            const arrayBuffer = await image.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            
+            fs.writeFileSync('classroom.png', buffer);
+            console.log("Image saved successfully.");
+          }
+
+          main().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: Install Dependencies
+        run: npm install @puter/sdk
+
+      - name: Generate Image
+        env:
+          PUTER_TOKEN: ${{ secrets.PUTER_TOKEN }}
+        run: node generate.js
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-${{ github.run_id }}
+          name: Generated Image - Run ${{ github.run_id }}
+          body: "Image generated automatically using Puter.js AI."
+          files: classroom.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
