@@ -1,0 +1,181 @@
+name: Playwright Image Generator Pipeline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install @playwright/test playwright
+          npx playwright install --with-deps
+          sudo apt-get install zip unzip -y
+
+      # LANGKAH BARU: Ambil ZIP lama dari release sebelumnya dan ekstrak
+      - name: Download and Extract Previous Images
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ⚠️ GANTI tag_name di bawah ini sesuai dengan TAG RELEASE Anda yang ada ZIP-nya!
+          TAG_RELEASE_SEBELUMNYA: "ai-images-28259737374" 
+        run: |
+          echo "Mencari release sebelumnya..."
+          # Membuat folder images terlebih dahulu
+          mkdir -p images
+          
+          # Mengunduh asset zip dari release (ganti--pattern jika nama zip berbeda)
+          # Jika Anda ingin otomatis mengambil release TERAKHIR yang sukses, gunakan perintah ini:
+          gh release download --pattern "*.zip" --clobber || echo "Tidak ditemukan release sebelumnya, membuat dari awal."
+          
+          # Jika zip berhasil didownload, ekstrak isinya ke folder images/
+          if [ -f *.zip ]; then
+            echo "Menemukan ZIP. Mengekstrak..."
+            # Unzip langsung menimpa atau mengisi folder images/
+            unzip -o *.zip
+            rm *.zip
+          fi
+
+      - name: Create Test Script
+        run: |
+          cat <<EOF > generate.spec.js
+          const { test, expect, chromium } = require('@playwright/test');
+          const fs = require('fs');
+          const path = require('path');
+
+          test('Resume Generate from Segment 100 with Batch and Cooldown', async () => {
+            const outputDir = path.join(__dirname, 'images');
+            
+            if (!fs.existsSync(outputDir)){
+                fs.mkdirSync(outputDir);
+            }
+
+            // 1. Baca data JSON
+            const dataPrompt = JSON.parse(fs.readFileSync('./prompt.json', 'utf8'));
+
+            // FILTER: Hanya ambil segment 100 sampai selesai
+            const filteredPrompt = dataPrompt.filter(item => item.segment >= 100);
+
+            if (filteredPrompt.length === 0) {
+              console.log("Tidak ada segment yang >= 100 ditemukan di prompt.json");
+              return;
+            }
+
+            console.log(\`Menghidupkan pipeline. Memproses \${filteredPrompt.length} segment baru...\`);
+
+            // Set timeout total berdasarkan sisa segment yang diproses
+            test.setTimeout(filteredPrompt.length * 90000); 
+
+            // 2. Launch 1 Browser
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext();
+
+            const MAX_WORKERS = 5;
+            const queue = [...filteredPrompt];
+            
+            let totalGenerated = 0;
+            let isPaused = false;
+            let pausePromise = Promise.resolve();
+            let resolvePause = () => {};
+
+            // Fungsi pekerja (Worker)
+            async function worker(workerId) {
+              while (queue.length > 0) {
+                await pausePromise;
+
+                const item = queue.shift();
+                if (!item) break;
+
+                console.log(\`[Worker \${workerId}] Memproses Segment \${item.segment}...\\n\`);
+                const page = await context.newPage();
+                
+                try {
+                  await page.goto('https://freegen.app/', { timeout: 60000 });
+                  await page.selectOption('#aspectRatioSelect', '16:9');
+
+                  await page.fill('#prompt', item.ai_image_prompt);
+                  await page.keyboard.press('Enter');
+
+                  const imageContainer = page.locator('#imageContainer');
+                  await expect(imageContainer).toBeVisible({ timeout: 90000 });
+
+                  const generatedImage = imageContainer.locator('img');
+                  const src = await generatedImage.getAttribute('src');
+
+                  const base64Data = src.replace(/^data:image\\/[a-z]+;base64,/, "");
+                  const fileName = \`segment_\${item.segment}.jpg\`;
+                  fs.writeFileSync(path.join(outputDir, fileName), base64Data, 'base64');
+                  
+                  console.log(\`[Worker \${workerId}] Selesai menyimpan \${fileName}\`);
+
+                  // --- LOGIKA DELAY 45 DETIK PER 30 GENERATE ---
+                  totalGenerated++;
+                  if (totalGenerated % 30 === 0 && queue.length > 0) {
+                    if (!isPaused) {
+                      isPaused = true;
+                      pausePromise = new Promise((resolve) => {
+                        resolvePause = resolve;
+                      });
+
+                      console.log(\`\\n[⚠️ COOLDOWN] Sudah mencapai \${totalGenerated} gambar baru. Istirahat selama 45 detik...\\n\`);
+                      
+                      setTimeout(() => {
+                        isPaused = false;
+                        resolvePause();
+                        console.log(\`\\n[▶️ RESUME] Melanjutkan kembali...\\n\`);
+                      }, 45000);
+                    }
+                  }
+                  // ----------------------------------------------
+
+                } catch (err) {
+                  console.error(\`[Worker \${workerId}] Gagal di Segment \${item.segment}: \`, err.message);
+                } finally {
+                  await page.close();
+                }
+              }
+            }
+
+            // 3. Jalankan 5 Worker secara bersamaan
+            const workers = [];
+            for (let i = 1; i <= MAX_WORKERS; i++) {
+              workers.push(worker(i));
+            }
+
+            await Promise.all(workers);
+
+            await context.close();
+            await browser.close();
+          });
+          EOF
+
+      - name: Run Playwright
+        run: npx playwright test generate.spec.js
+
+      - name: Zip Images Folder
+        run: |
+          # Cek untuk memastikan segment 1-100 (lama) dan sisa segment (baru) sudah berkumpul
+          ls images/
+          zip -r hasil-gambar-komplit.zip images/
+
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: "ai-images-komplit-${{ github.run_id }}"
+          name: "Generated AI Images Komplit (1 - Selesai) - Run ${{ github.run_id }}"
+          files: ./hasil-gambar-komplit.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
