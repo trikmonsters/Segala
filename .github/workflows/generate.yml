@@ -1,0 +1,130 @@
+name: Playwright Image Generator Pipeline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install @playwright/test playwright
+          npx playwright install --with-deps
+
+      - name: Create Test Script
+        run: |
+          cat <<EOF > generate.spec.js
+          const { test, expect, chromium } = require('@playwright/test');
+          const fs = require('fs');
+          const path = require('path');
+
+          test('Generate and save images from JSON with Batch Workers', async () => {
+            const outputDir = path.join(__dirname, 'images');
+            if (!fs.existsSync(outputDir)){
+                fs.mkdirSync(outputDir);
+            }
+
+            // 1. Baca data JSON
+            const dataPrompt = JSON.parse(fs.readFileSync('./prompt.json', 'utf8'));
+
+            // Set timeout total sangat longgar karena ratusan gambar
+            test.setTimeout(dataPrompt.length * 60000); 
+
+            // 2. Launch 1 Browser saja untuk menghemat RAM di Github Actions
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext();
+
+            // Batasan maksimum worker paralel (5 Worker)
+            const MAX_WORKERS = 5;
+            const queue = [...dataPrompt];
+
+            // Fungsi pekerja untuk memproses antrean gambar
+            async function worker(workerId) {
+              while (queue.length > 0) {
+                const item = queue.shift(); // Ambil tugas dari antrean
+                if (!item) break;
+
+                console.log(\`[Worker \${workerId}] Memproses Segment \${item.segment}...\`);
+                
+                // Buka tab/page baru di dalam browser yang sama
+                const page = await context.newPage();
+                
+                try {
+                  await page.goto('https://freegen.app/', { timeout: 60000 });
+
+                  // Pilih aspect ratio 16:9
+                  await page.selectOption('#aspectRatioSelect', '16:9');
+
+                  // Masukkan Prompt
+                  await page.fill('#prompt', item.ai_image_prompt);
+                  await page.keyboard.press('Enter');
+
+                  // Tunggu hasil gambar muncul
+                  const imageContainer = page.locator('#imageContainer');
+                  await expect(imageContainer).toBeVisible({ timeout: 90000 });
+
+                  // Ambil Source Gambar Base64
+                  const generatedImage = imageContainer.locator('img');
+                  const src = await generatedImage.getAttribute('src');
+
+                  // Simpan File
+                  const base64Data = src.replace(/^data:image\\/[a-z]+;base64,/, "");
+                  const fileName = \`segment_\${item.segment}.jpg\`;
+                  fs.writeFileSync(path.join(outputDir, fileName), base64Data, 'base64');
+                  
+                  console.log(\`[Worker \${workerId}] Selesai menyimpan \${fileName}\`);
+                } catch (err) {
+                  console.error(\`[Worker \${workerId}] Gagal di Segment \${item.segment}: \`, err.message);
+                  // Masukkan kembali ke antrean jika ingin dicoba lagi (opsional)
+                } finally {
+                  // Tutup tab setelah selesai agar RAM bersih kembali
+                  await page.close();
+                }
+              }
+            }
+
+            // 3. Jalankan 5 Worker secara bersamaan (Paralel)
+            const workers = [];
+            for (let i = 1; i <= MAX_WORKERS; i++) {
+              workers.push(worker(i));
+            }
+
+            // Tunggu semua worker menyelesaikan seluruh antrean JSON
+            await Promise.all(workers);
+
+            // Close browser utama
+            await context.close();
+            await browser.close();
+          });
+          EOF
+
+      - name: Run Playwright
+        run: npx playwright test generate.spec.js
+
+      - name: Zip Images Folder
+        run: |
+          sudo apt-get install zip
+          zip -r hasil-gambar.zip images/
+
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: "ai-images-${{ github.run_id }}"
+          name: "Generated AI Images Batch - Run ${{ github.run_id }}"
+          files: ./hasil-gambar.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
