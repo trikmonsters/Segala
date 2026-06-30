@@ -1,10 +1,10 @@
-name: ChatGPT Playwright Automation
+name: ChatGPT Audio Analysis Automation
 
 on:
-  workflow_dispatch: # Memungkinkan menjalankan pipeline secara manual dari tab Actions
+  workflow_dispatch:
 
 permissions:
-  contents: write # Izin wajib agar GitHub Actions bisa mengunggah hasil ke Release
+  contents: read
 
 jobs:
   run-automation:
@@ -19,9 +19,6 @@ jobs:
       with:
         node-version: '20'
 
-    - name: Buat Struktur Folder
-      run: mkdir -p screenshots
-
     - name: Install Dependencies
       run: |
         npm init -y
@@ -30,11 +27,16 @@ jobs:
     - name: Install Playwright Chromium
       run: npx playwright install chromium --with-deps
 
+    - name: Download Audio File
+      run: |
+        curl -L -o audio.wav https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/audio.wav
+
     - name: Generate Playwright Script
       run: |
         cat << 'EOF' > script.js
         const { chromium } = require('playwright-extra');
         const stealth = require('puppeteer-extra-plugin-stealth')();
+        const path = require('path');
 
         chromium.use(stealth);
 
@@ -47,81 +49,44 @@ jobs:
           const page = await context.newPage();
 
           try {
-            console.log('1. Membuka ChatGPT...');
             await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
-            await page.screenshot({ path: 'screenshots/01_landing_page.png', fullPage: true });
+
+            const fileInputSelector = 'input[type="file"]';
+            await page.waitForSelector(fileInputSelector, { timeout: 30000 });
+            
+            const filePath = path.resolve('audio.wav');
+            await page.setInputFiles(fileInputSelector, filePath);
+            
+            await page.waitForTimeout(3000);
 
             const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"]';
-            
-            console.log('2. Menunggu input teks...');
             await page.waitForSelector(inputSelector, { timeout: 30000 });
             
-            console.log('3. Mengisi prompt...');
-            await page.fill(inputSelector, 'buatkan prompt AI image dengan detail 2D professional background putih seperti cartoon');
-            await page.screenshot({ path: 'screenshots/02_after_fill.png' });
-
-            console.log('4. Mengirim teks (Enter)...');
+            await page.fill(inputSelector, 'Tolong analisis isi dari audio yang saya unggah ini');
             await page.press(inputSelector, 'Enter');
             
-            // Menunggu respon awal mulai di-generate oleh AI
-            await page.waitForTimeout(3000);
-            await page.screenshot({ path: 'screenshots/03_after_enter.png' });
-
-            // Mengubah waktu tunggu respons sesuai request (5 detik)
-            console.log('5. Menunggu respon AI selama 5 detik...');
             await page.waitForTimeout(5000);
 
-            console.log('6. Screenshot hasil akhir...');
-            await page.screenshot({ path: 'screenshots/04_final_result.png', fullPage: true });
-
-            // MENGEKSTRAK TEKS DAN MENAMPILKAN KE LOG / CONSOLE
-            console.log('\n=== HASIL TEKS DARI CHATGPT ===\n');
-            
-            // Menggunakan selector artikel respon ChatGPT (biasanya dibungkus dalam data-testimonial-id atau markdown)
             const responseSelector = 'main div.markdown, div[data-message-author-role="assistant"]';
+            await page.waitForSelector(responseSelector, { timeout: 30000 });
             
-            // Tunggu hingga element text jawaban muncul
-            await page.waitForSelector(responseSelector, { timeout: 15000 });
-            
-            // Mengambil text konten terakhir/terbaru dari asisten AI
             const responses = await page.locator(responseSelector).all();
             if (responses.length > 0) {
               const lastResponseText = await responses[responses.length - 1].innerText();
+              console.log('\n=== HASIL ANALISIS AUDIO CHATGPT ===\n');
               console.log(lastResponseText);
+              console.log('\n====================================\n');
             } else {
-              console.log('Gagal mendeteksi element teks respons.');
+              console.log('Gagal mendeteksi element respons.');
             }
-            
-            console.log('\n================================\n');
 
           } catch (error) {
-            console.error('Terjadi kendala:', error);
-            await page.screenshot({ path: 'screenshots/error_state.png', fullPage: true });
+            console.error('Error:', error);
           } finally {
             await browser.close();
-            console.log('Proses selesai.');
           }
         })();
         EOF
 
     - name: Jalankan Skrip Otomatisasi
       run: node script.js
-
-    - name: Generate Timestamp untuk Tag
-      id: tag_name
-      run: echo "TAG=run-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
-
-    - name: Upload Screenshot ke GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.tag_name.outputs.TAG }}
-        name: Laporan Screenshot ${{ steps.tag_name.outputs.TAG }}
-        body: |
-          Hasil otomatisasi screenshot dari ChatGPT.
-          Silakan cek lampiran di bawah untuk melihat hasilnya.
-        draft: false
-        prerelease: false
-        files: |
-          screenshots/*.png
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
