@@ -1,4 +1,4 @@
-name: Playwright Google Test
+name: Playwright Google AI Search Test
 
 on:
   workflow_dispatch:
@@ -47,7 +47,7 @@ jobs:
           });
           
           const context = await browser.newContext({
-            viewport: { width: 1280, height: 800 },
+            viewport: { width: 1280, height: 1000 },
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             locale: 'id-ID'
           });
@@ -58,12 +58,26 @@ jobs:
             console.log("Membuka Google...");
             await page.goto('https://www.google.com', { waitUntil: 'networkidle' });
             
-            console.log("Mengambil screenshot halaman utama...");
-            await page.screenshot({ path: 'screenshots/1_google_home.png', fullPage: true });
-            console.log("Screenshot sukses disimpan.");
+            console.log("Mencari kolom input pencarian...");
+            const searchInput = page.locator('textarea[name="q"], input[name="q"]').first();
+            
+            console.log("Mengetik kata kunci...");
+            await searchInput.fill('apa itu ijan moli');
+            await page.screenshot({ path: 'screenshots/2_search_typed.png', fullPage: false });
+
+            console.log("Menekan Enter untuk mencari...");
+            await searchInput.press('Enter');
+            
+            await page.waitForNavigation({ waitUntil: 'networkidle' });
+            await page.waitForTimeout(5000); 
+            
+            console.log("Mengambil screenshot hasil pencarian...");
+            await page.screenshot({ path: 'screenshots/3_search_results.png', fullPage: true });
+            console.log("Selesai!");
 
           } catch (error) {
             console.error("Terjadi error:", error.message);
+            await page.screenshot({ path: 'screenshots/ERROR_SEARCH.png', fullPage: true });
             process.exit(1);
           } finally {
             await browser.close();
@@ -74,19 +88,18 @@ jobs:
 
         node script.js
 
-    - name: Compress Screenshots
-      if: always()
-      run: |
-        zip -r screenshots.zip screenshots/
-
     - name: Create GitHub Release and Upload Screenshots
       if: always()
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: test-google-${{ github.run_id }}-${{ github.run_number }}
-        name: Test Buka Google - Run #${{ github.run_number }}
+        tag_name: test-search-${{ github.run_id }}-${{ github.run_number }}
+        name: Test Search Google - Run #${{ github.run_number }}
         body: |
-          Silakan unduh `screenshots.zip` di bawah untuk melihat tampilan awal Google dari IP GitHub Actions.
-        files: screenshots.zip
+          Hasil screenshot langsung tanpa ZIP:
+          - Silakan klik `3_search_results.png` di bawah untuk melihat hasil pencarian Google.
+        files: |
+          screenshots/2_search_typed.png
+          screenshots/3_search_results.png
+          screenshots/ERROR_SEARCH.png
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
