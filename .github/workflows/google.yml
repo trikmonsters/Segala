@@ -56,13 +56,13 @@ jobs:
           
           try {
             console.log("Membuka Google...");
-            await page.goto('https://www.google.com', { waitUntil: 'networkidle' });
+            await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle' });
             
             console.log("Mencari kolom input pencarian...");
             const searchInput = page.locator('textarea[name="q"], input[name="q"]').first();
             
             console.log("Mengetik kata kunci...");
-            await searchInput.fill('apa itu ijan moli');
+            await searchInput.fill('apa itu ikan moli');
             await page.screenshot({ path: 'screenshots/2_search_typed.png', fullPage: false });
 
             console.log("Menekan Enter untuk mencari...");
