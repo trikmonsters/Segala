@@ -1,9 +1,8 @@
 name: YouTube Shorts Downloader & Release
 
 on:
-  workflow_dispatch: # Memungkinkan Anda menjalankan workflow ini secara manual dari tab Actions di GitHub
+  workflow_dispatch:
 
-# Memberikan izin menulis (write) agar GitHub Actions bisa membuat Release dan mengunggah video
 permissions:
   contents: write
 
@@ -35,32 +34,31 @@ jobs:
           const path = require('path');
 
           (async () => {
-            // Meluncurkan browser headless (Chromium)
             const browser = await chromium.launch({ headless: true });
             const page = await browser.newPage();
 
             console.log('Membuka target URL...');
             await page.goto('https://media.ytmp3.gg/tools/youtube-shorts-downloader/cvswxo', { waitUntil: 'networkidle' });
 
-            // 1. Ubah Toggle/Dropdown ke MP4
-            console.log('Mengubah pilihan format ke MP4...');
-            await page.click('.video-group-trigger');
-            await page.click('button[data-custom-group-item="mp4-1080"]');
+            // 1. Ubah Toggle ke MP4 berdasarkan elemen bocoran baru
+            console.log('Menunggu elemen format toggle...');
+            const mp4BtnSelector = '.format-toggle button[data-format="mp4"]';
+            await page.waitForSelector(mp4BtnSelector, { state: 'visible', timeout: 10000 });
+            
+            console.log('Mengklik tombol format MP4...');
+            await page.click(mp4BtnSelector);
 
-            // 2. Centang Checkbox Copyright menggunakan ID Spesifik
+            // 2. Centang Checkbox Copyright
             console.log('Menunggu dan mencentang checkbox copyright...');
             const checkboxSelector = '#copyright-consent-checkbox';
-            
-            // Tunggu hingga elemen checkbox masuk ke dalam DOM halaman
             await page.waitForSelector(checkboxSelector, { state: 'attached', timeout: 5000 });
             
             const isChecked = await page.isChecked(checkboxSelector);
             if (!isChecked) {
-              // Klik langsung pada elemen untuk memicu event listener JavaScript di situs tersebut
               await page.click(checkboxSelector);
               console.log('Checkbox copyright berhasil dicentang.');
             } else {
-              console.log('Checkbox copyright sudah dalam posisi dicentang.');
+              console.log('Checkbox copyright sudah aktif.');
             }
 
             // 3. Isi Input URL YouTube Shorts
@@ -79,8 +77,6 @@ jobs:
             // 6. Proses Download File Video
             console.log('Memulai proses pengunduhan berkas...');
             const downloadPromise = page.waitForEvent('download');
-            
-            // Klik tombol download yang sudah muncul di UI
             await page.click('#download-btn');
             const download = await downloadPromise;
 
