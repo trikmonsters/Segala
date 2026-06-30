@@ -37,138 +37,72 @@ jobs:
         const { chromium } = require('playwright-extra');
         const stealth = require('puppeteer-extra-plugin-stealth')();
         chromium.use(stealth);
-        const fs = require('fs');
 
         (async () => {
-          if (!fs.existsSync('screenshots')) {
-            fs.mkdirSync('screenshots');
+        const targetUrl = process.env.YOUTUBE_URL || 'https://youtube.com/shorts/VxY4OOYCpIw';
+        const browser = await chromium.launch({ 
+        headless: true,
+        args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled'
+        ]
+        });
+        const context = await browser.newContext({
+        viewport: { width: 1280, height: 1000 },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        locale: 'id-ID'
+        });
+        const page = await context.newPage();
+        try {
+        await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle' });
+        const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder="Tanyakan apa saja"]').first();
+        await chatInput.waitFor({ state: 'visible', timeout: 5000 });
+        const promptText = `Saya memiliki video berita dengan link: ${targetUrl}. Buatkan naskah intro berita (maksimal 15 detik) dengan gaya bahasa formal, profesional, hard news journalism, objektif, authoritative, dan credible. Struktur: Hook kuat -> Konteks utama -> Call to action menonton. Berikan juga Voice Over Script (naskah narasi siap dibacakan) dan Social Media Metadata. Untuk kebutuhan visual pendukung, buatkan satu AI Image Prompt with Text yang sangat detail, spesifik, dan komprehensif untuk generator gambar AI modern seperti Midjourney/DALL-E 3. Prompt ini wajib menggabungkan deskripsi komposisi visual latar belakang berita yang dramatis (style, lighting, camera angle, resolution) sekaligus instruksi tipografi teks overlay (maksimal 1-3 baris kalimat berita yang impactful, kontras, menggunakan tanda kutip, jenis font bold sans-serif, warna teks, posisi layout) agar menghasilkan satu kesatuan desain thumbnail yang utuh, optimal, tajam, mudah dibaca, dan sempurna. Format respons wajib menggunakan skema JSON berikut tanpa modifikasi struktur:
+        {
+        "intro_segment": {
+          "voice_over_script": "[naskah intro]",
+          "ai_image_prompt_with_text": "[Tulis di sini prompt gambar AI super detail, panjang, dan komprehensif yang menginstruksikan pembuatan visual latar belakang berita dan pencetakan teks overlay secara langsung di atas gambar untuk hasil akhir thumbnail berita yang sempurna]"
+          },
+        "social_media_metadata": {
+          "title": "[judul menarik dan profesional]",
+          "description": "[deskripsi lengkap dengan konteks dan call-to-action]",
+          "tags": ["tag1", "tag2", "tag3"],
+          "seo_keywords": ["keyword1", "keyword2"]
           }
-
-          const targetUrl = process.env.YOUTUBE_URL || 'https://youtube.com/shorts/VxY4OOYCpIw';
-
-          const browser = await chromium.launch({ 
-            headless: true,
-            args: [
-              '--no-sandbox', 
-              '--disable-setuid-sandbox',
-              '--disable-blink-features=AutomationControlled'
-            ]
-          });
-          
-          const context = await browser.newContext({
-            viewport: { width: 1280, height: 1000 },
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            locale: 'id-ID'
-          });
-          
-          const page = await context.newPage();
-          
-          try {
-            console.log("Membuka Google AI Mode...");
-            await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle' });
-            await page.screenshot({ path: 'screenshots/1_aimode_home.png', fullPage: true });
-
-            console.log("Mencari textarea input...");
-            const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder="Tanyakan apa saja"]').first();
-            await chatInput.waitFor({ state: 'visible', timeout: 5000 });
-
-            // Menyusun prompt dinamis sesuai permintaan Anda
-            console.log(`Menyusun prompt untuk URL: ${targetUrl}`);
-            const promptText = `Saya memiliki video berita dengan link: ${targetUrl}. 
-
-            Buatkan naskah intro berita (maksimal 15 detik) dengan karakteristik:
-            - Gaya bahasa: Formal, profesional, hard news journalism
-            - Tone: Objektif, authoritative, dan credible
-            - Struktur: Hook kuat → Konteks utama → Call to action menonton
-            
-            Berikan juga:
-            1. **Voice Over Script**: Naskah narasi yang siap dibacakan
-            2. **Text Overlay**: Teks yang akan ditampilkan di layar selama intro berlangsung (maksimal 3 baris, font-friendly, impactful)
-            3. **AI Image Prompt**: Prompt detail untuk generate visual pendukung dengan spesifikasi teknis (resolution, style, lighting, composition)
-            4. **Social Media Metadata**: Format JSON lengkap dengan informasi untuk publikasi global
-            
-            Pastikan semua elemen:
-            - Konsisten satu sama lain
-            - Mengikuti standar jurnalisme profesional
-            - Siap diintegrasikan dengan footage video asli dan hasil AI image
-            - Text overlay mudah dibaca dan memperkuat pesan utama
-            
-            Format respons yang diharapkan:
-            {
-              "intro_segment": {
-                "voice_over_script": "[naskah intro]",
-                "text_overlay": {
-                  "line_1": "[teks baris pertama]",
-                  "line_2": "[teks baris kedua]",
-                  "line_3": "[teks baris ketiga]",
-                  "styling_notes": "[rekomendasi font, warna, positioning]"
-                },
-                "ai_image_prompt": "[prompt untuk AI image generator]"
-              },
-              "social_media_metadata": {
-                "title": "[judul menarik dan profesional]",
-                "description": "[deskripsi lengkap dengan konteks dan call-to-action]",
-                "tags": ["tag1", "tag2", "tag3"],
-                "seo_keywords": ["keyword1", "keyword2"],
-                "publish_recommendation": {
-                    "optimal_time": "[waktu posting optimal]",
-                    "target_audience": "[target demografis]"
-                }
-              }
-            }`;
-            
-            await chatInput.fill(promptText);
-            await page.screenshot({ path: 'screenshots/2_prompt_diisi.png', fullPage: false });
-
-            console.log("Mengirim prompt (Enter)...");
-            await chatInput.press('Enter');
-            
-            // Memberikan waktu ekstra bagi AI untuk memproses transkrip/analisis video
-            console.log("Menunggu respon dari Google AI selama 15 detik...");
-            await page.waitForTimeout(60000); 
-            
-            await page.screenshot({ path: 'screenshots/3_hasil_respon.png', fullPage: true });
-
-            console.log("\n=================== HASIL RESPONS GOOGLE AI ===================");
-            // Mencari elemen penampung kode JSON hasil respons AI
-            const codeBlock = page.locator('pre, code, .json').first();
-            if (await codeBlock.isVisible()) {
-              const aiResponseText = await codeBlock.innerText();
-              console.log(aiResponseText);
-            } else {
-              // Fallback jika tidak dibungkus tag pre/code, ambil teks dari container chat teranyar
-              console.log("Blok kode spesifik tidak ditemukan, mengambil teks mentah halaman:");
-              const bodyText = await page.evaluate(() => document.body.innerText);
-              console.log(bodyText.substring(bodyText.indexOf("json")));
-            }
-            console.log("===============================================================\n");
-
-          } catch (error) {
-            console.error("Terjadi error:", error.message);
-            await page.screenshot({ path: 'screenshots/ERROR_AIMODE.png', fullPage: true });
-            process.exit(1);
-          } finally {
-            await browser.close();
-            console.log("Browser ditutup.");
-          }
+        }`;
+        await chatInput.fill(promptText);
+        await chatInput.press('Enter');
+        const codeBlock = page.locator('pre, code, .json').first();
+        await codeBlock.waitFor({ state: 'visible', timeout: 60000 });
+        console.log("\n=================== HASIL RESPONS GOOGLE AI ===================");
+        const aiResponseText = await codeBlock.innerText();
+        console.log(aiResponseText);
+        console.log("===============================================================\n");
+        } catch (error) {
+        console.error("Terjadi error atau timeout saat menunggu respons:", error.message);
+        try {
+        const fallbackBlock = page.locator('pre, code, .json').first();
+        if (await fallbackBlock.isVisible()) {
+        console.log("\n=================== HASIL RESPONS (FALLBACK) ===================");
+        console.log(await fallbackBlock.innerText());
+        console.log("================================================================\n");
+        } else {
+        const bodyText = await page.evaluate(() => document.body.innerText);
+        const jsonStartIndex = bodyText.indexOf("{\n\"intro_segment\"");
+        if (jsonStartIndex !== -1) {
+        console.log("\n=================== HASIL RESPONS (TEXT EXTRACT) ===================");
+        console.log(bodyText.substring(jsonStartIndex));
+        console.log("====================================================================\n");
+        }
+        }
+        } catch (fallbackError) {
+        console.error("Gagal melakukan fallback extraction:", fallbackError.message);
+        }
+        process.exit(1);
+        } finally {
+        await browser.close();
+        }
         })();
         EOF
-
         node script.js
-
-    - name: Create GitHub Release and Upload Screenshots
-      if: always()
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ai-news-analysis-${{ github.run_id }}-${{ github.run_number }}
-        name: Analisis Berita AI - Run #${{ github.run_number }}
-        body: |
-          Proses ekstraksi selesai untuk URL YouTube yang diinput. 
-          Silakan cek tab **Actions Log** untuk menyalin output JSON mentah, atau lihat screenshot terlampir.
-        files: |
-          screenshots/1_aimode_home.png
-          screenshots/2_prompt_diisi.png
-          screenshots/3_hasil_respon.png
-          screenshots/ERROR_AIMODE.png
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
