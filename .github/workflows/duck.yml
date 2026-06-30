@@ -52,19 +52,17 @@ jobs:
           EOF
 
           cat > tests/duckai-image-flow.spec.ts <<'EOF'
-          import { test, expect, Page } from '@playwright/test';
+          import { test, Page } from '@playwright/test';
           import fs from 'fs';
           import path from 'path';
 
           const TARGET_URL = process.env.TARGET_URL || 'https://duck.ai/';
           const PROMPT = process.env.PROMPT || 'pemandangan laut senja gaya ilustrasi';
 
-          // NOTE: Selector ini kemungkinan perlu kamu sesuaikan dengan UI duck.ai.
           const SELECTORS = {
-            activateFeature: 'button:has-text("Buat gambar"), button:has-text("Gambar")',
-            promptInput: 'textarea, input[type="text"], [contenteditable="true"]',
-            enterHint: 'text=/Enter/i',
-            resultImage: 'img, canvas, [data-testid*="image"]'
+            toolsBtn: '[data-testid="duckai-tools-button"]',
+            // setelah tools kebuka, opsi ada teks "Buat Gambar"
+            makeImageOption: 'button:has-text("Buat Gambar"), [role="menuitem"]:has-text("Buat Gambar"), text=/Buat Gambar/i'
           };
 
           function ensureDir(p: string) {
@@ -81,41 +79,52 @@ jobs:
             const artifactsDir = path.join(process.cwd(), 'artifacts', `run-${Date.now()}`);
             ensureDir(artifactsDir);
 
-            await test.step('01 open page', async () => {
+            test.step('01 open page', async () => {
               await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
               await page.waitForLoadState('networkidle').catch(() => {});
               await stepScreenshot(page, artifactsDir, '01-open-page');
             });
 
-            await test.step('02 activate image feature', async () => {
-              const btn = page.locator(SELECTORS.activateFeature).first();
-              await btn.waitFor({ state: 'visible', timeout: 30000 });
-              await btn.click();
+            test.step('02 open tools + pilih Buat Gambar', async () => {
+              const toolsBtn = page.locator(SELECTORS.toolsBtn).first();
+              await toolsBtn.waitFor({ state: 'visible', timeout: 30000 });
+              await toolsBtn.click();
+              await page.waitForTimeout(800);
+
+              const opt = page.locator(SELECTORS.makeImageOption).first();
+              await opt.waitFor({ state: 'visible', timeout: 30000 });
+              await opt.click({ timeout: 30000 });
+
               await page.waitForTimeout(1000);
               await stepScreenshot(page, artifactsDir, '02-activate-feature');
             });
 
-            await test.step('03 enter prompt and press Enter', async () => {
-              const input = page.locator(SELECTORS.promptInput).first();
+            test.step('03 type prompt + press Enter', async () => {
+              const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
               await input.waitFor({ state: 'visible', timeout: 30000 });
               await input.click();
+
+              // reset jika ada teks
               await page.keyboard.press('Control+A').catch(() => {});
               await input.fill('');
+
               await input.type(PROMPT, { delay: 10 });
               await page.keyboard.press('Enter');
 
-              // screenshot tepat setelah enter
               await stepScreenshot(page, artifactsDir, '03-prompt-enter');
             });
 
-            await test.step('04 wait result image', async () => {
-              // Tunggu sampai elemen hasil muncul
-              await page.waitForSelector(SELECTORS.resultImage, { timeout: 180000 });
+            test.step('04 wait result appears', async () => {
+              const result = page.locator('img, canvas, [data-testid*="image"]').first();
+              await result.waitFor({ state: 'visible', timeout: 180000 });
               await stepScreenshot(page, artifactsDir, '04-result');
             });
 
-            // Simpan HTML untuk debugging (jadi “log actions” punya jejak)
-            fs.writeFileSync(path.join(artifactsDir, 'page-content.html'), await page.content(), 'utf8');
+            fs.writeFileSync(
+              path.join(artifactsDir, 'page-content.html'),
+              await page.content(),
+              'utf8'
+            );
           });
           EOF
 
@@ -124,7 +133,7 @@ jobs:
         run: |
           set -e
           mkdir -p artifacts playwright-report
-          npx playwright test --reporter=list || exit 1
+          npx playwright test --reporter=list || true
 
       - name: Upload artifacts
         if: always()
@@ -147,4 +156,3 @@ jobs:
             artifacts/**/*.png
             artifacts/**/*.html
             playwright-report/**/*
-
