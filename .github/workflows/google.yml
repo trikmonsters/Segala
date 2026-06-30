@@ -60,45 +60,53 @@ jobs:
         await chatInput.waitFor({ state: 'visible', timeout: 5000 });
         const promptText = `Saya memiliki video berita dengan link: ${targetUrl}. Buatkan naskah intro berita (maksimal 15 detik) dengan gaya bahasa formal, profesional, hard news journalism, objektif, authoritative, dan credible. Struktur: Hook kuat -> Konteks utama -> Call to action menonton. Berikan juga Voice Over Script (naskah narasi siap dibacakan) dan Social Media Metadata. Untuk kebutuhan visual pendukung, buatkan satu AI Image Prompt with Text yang sangat detail, spesifik, dan komprehensif untuk generator gambar AI modern seperti Midjourney/DALL-E 3. Prompt ini wajib menggabungkan deskripsi komposisi visual latar belakang berita yang dramatis (style, lighting, camera angle, resolution) sekaligus instruksi tipografi teks overlay (maksimal 1-3 baris kalimat berita yang impactful, kontras, menggunakan tanda kutip, jenis font bold sans-serif, warna teks, posisi layout) agar menghasilkan satu kesatuan desain thumbnail yang utuh, optimal, tajam, mudah dibaca, dan sempurna. Format respons wajib menggunakan skema JSON berikut tanpa modifikasi struktur:
         {
-        "intro_segment": {
-          "voice_over_script": "[naskah intro]",
-          "ai_image_prompt_with_text": "[Tulis di sini prompt gambar AI super detail, panjang, dan komprehensif yang menginstruksikan pembuatan visual latar belakang berita dan pencetakan teks overlay secara langsung di atas gambar untuk hasil akhir thumbnail berita yang sempurna]"
+          "intro_segment": {
+            "voice_over_script": "[naskah intro]",
+            "ai_image_prompt_with_text": "[Tulis di sini prompt gambar AI super detail, panjang, dan komprehensif yang menginstruksikan pembuatan visual latar belakang berita and pencetakan teks overlay secara langsung di atas gambar untuk hasil akhir thumbnail berita yang sempurna]"
           },
-        "social_media_metadata": {
-          "title": "[judul menarik dan profesional]",
-          "description": "[deskripsi lengkap dengan konteks dan call-to-action]",
-          "tags": ["tag1", "tag2", "tag3"],
-          "seo_keywords": ["keyword1", "keyword2"]
+          "social_media_metadata": {
+            "title": "[judul menarik dan profesional]",
+            "description": "[deskripsi lengkap dengan konteks dan call-to-action]",
+            "tags": ["tag1", "tag2", "tag3"],
+            "seo_keywords": ["keyword1", "keyword2"]
           }
         }`;
         await chatInput.fill(promptText);
         await chatInput.press('Enter');
-        const codeBlock = page.locator('pre, code, .json').first();
-        await codeBlock.waitFor({ state: 'visible', timeout: 60000 });
-        console.log("\n=================== HASIL RESPONS GOOGLE AI ===================");
-        const aiResponseText = await codeBlock.innerText();
-        console.log(aiResponseText);
-        console.log("===============================================================\n");
-        } catch (error) {
-        console.error("Terjadi error atau timeout saat menunggu respons:", error.message);
-        try {
-        const fallbackBlock = page.locator('pre, code, .json').first();
-        if (await fallbackBlock.isVisible()) {
-        console.log("\n=================== HASIL RESPONS (FALLBACK) ===================");
-        console.log(await fallbackBlock.innerText());
-        console.log("================================================================\n");
-        } else {
+        
+        console.log("Menunggu Google AI memproses dan menulis respons...");
+        let jsonFound = false;
+        let finalJsonText = "";
+        const startTime = Date.now();
+        const timeoutLimit = 60000;
+
+        while (Date.now() - startTime < timeoutLimit) {
         const bodyText = await page.evaluate(() => document.body.innerText);
-        const jsonStartIndex = bodyText.indexOf("{\n\"intro_segment\"");
+        if (bodyText.includes('"social_media_metadata"') && bodyText.includes('}')) {
+        const jsonStartIndex = bodyText.indexOf('{\n"intro_segment"');
         if (jsonStartIndex !== -1) {
-        console.log("\n=================== HASIL RESPONS (TEXT EXTRACT) ===================");
-        console.log(bodyText.substring(jsonStartIndex));
-        console.log("====================================================================\n");
+        const potentialJson = bodyText.substring(jsonStartIndex);
+        const jsonEndIndex = potentialJson.lastIndexOf('}');
+        if (jsonEndIndex !== -1) {
+        finalJsonText = potentialJson.substring(0, jsonEndIndex + 1);
+        jsonFound = true;
+        break;
         }
         }
-        } catch (fallbackError) {
-        console.error("Gagal melakukan fallback extraction:", fallbackError.message);
         }
+        await page.waitForTimeout(2000);
+        }
+
+        if (jsonFound) {
+        console.log("\n=================== HASIL RESPONS GOOGLE AI ===================");
+        console.log(finalJsonText);
+        console.log("===============================================================\n");
+        } else {
+        throw new Error("Gagal mengekstrak struktur JSON lengkap dalam batas waktu 60 detik.");
+        }
+
+        } catch (error) {
+        console.error("Terjadi error:", error.message);
         process.exit(1);
         } finally {
         await browser.close();
