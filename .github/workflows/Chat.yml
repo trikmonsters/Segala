@@ -51,13 +51,14 @@ jobs:
           try {
             await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
 
-            const fileInputSelector = 'input[type="file"]';
-            await page.waitForSelector(fileInputSelector, { timeout: 30000 });
+            // Menggunakan selector ID spesifik milik ChatGPT dan mengizinkan elemen tersembunyi (hidden)
+            const fileInputSelector = 'input#upload-files';
+            await page.waitForSelector(fileInputSelector, { state: 'attached', timeout: 30000 });
             
             const filePath = path.resolve('audio.wav');
             await page.setInputFiles(fileInputSelector, filePath);
             
-            await page.waitForTimeout(3000);
+            await page.waitForTimeout(5000);
 
             const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"]';
             await page.waitForSelector(inputSelector, { timeout: 30000 });
