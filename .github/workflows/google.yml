@@ -1,13 +1,13 @@
-name: Playwright Google AI Chat
+name: Playwright Google Test
 
 on:
-  workflow_dispatch: # Memungkinkan Anda menjalankan workflow ini secara manual dari tab Actions
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Diperlukan agar dapat membuat GitHub Release
+      contents: write
 
     steps:
     - name: Checkout repository
@@ -30,86 +30,63 @@ jobs:
         const { chromium } = require('playwright-extra');
         const stealth = require('puppeteer-extra-plugin-stealth')();
         chromium.use(stealth);
+        const fs = require('fs');
 
         (async () => {
-          // Meluncurkan browser dengan opsi penyamaran tambahan
+          if (!fs.existsSync('screenshots')) {
+            fs.mkdirSync('screenshots');
+          }
+
           const browser = await chromium.launch({ 
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+              '--no-sandbox', 
+              '--disable-setuid-sandbox',
+              '--disable-blink-features=AutomationControlled'
+            ]
           });
           
           const context = await browser.newContext({
             viewport: { width: 1280, height: 800 },
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            locale: 'id-ID'
           });
           
           const page = await context.newPage();
           
-          console.log("Membuka Google...");
-          await page.goto('https://www.google.com', { waitUntil: 'networkidle' });
-          await page.screenshot({ path: 'screenshots/1_google_home.png', fullPage: true });
+          try {
+            console.log("Membuka Google...");
+            await page.goto('https://www.google.com', { waitUntil: 'networkidle' });
+            
+            console.log("Mengambil screenshot halaman utama...");
+            await page.screenshot({ path: 'screenshots/1_google_home.png', fullPage: true });
+            console.log("Screenshot sukses disimpan.");
 
-          console.log("Mencari dan mengklik Mode AI...");
-          // Menggunakan selector text atau class yang Anda berikan
-          const modeAIButton = page.locator('div.u4Uk3c:has-text("Mode AI")').first();
-          
-          if (await modeAIButton.isVisible()) {
-            await modeAIButton.click();
-            console.log("Mode AI diklik.");
-          } else {
-            console.log("Elemen 'Mode AI' tidak langsung terlihat, mencoba alternatif...");
-            // Fallback klik jika struktur dinamis
-            await page.click('text=Mode AI');
+          } catch (error) {
+            console.error("Terjadi error:", error.message);
+            process.exit(1);
+          } finally {
+            await browser.close();
+            console.log("Browser ditutup.");
           }
-          
-          // Tunggu transisi/animasi Mode AI aktif
-          await page.waitForTimeout(3000);
-          await page.screenshot({ path: 'screenshots/2_mode_ai_aktif.png', fullPage: true });
-
-          console.log("Memasukkan prompt...");
-          // Menemukan input chat AI Google (biasanya textarea atau role combobox/textbox)
-          // Menyesuaikan dengan elemen input generik Google AI/Search jika kelasnya dinamis
-          const chatInput = page.locator('textarea, [role="combobox"], [role="textbox"]').first();
-          
-          const promptText = `berikut url youtube yang harus anda analisis, berikan ringkasan dan intro. Beserta image prompt untuk video tersebut. Tulis respons dalam json only. Url: https://youtube.com/shorts/VxY4OOYCpIw`;
-          
-          await chatInput.fill(promptText);
-          await page.screenshot({ path: 'screenshots/3_prompt_diisi.png', fullPage: true });
-
-          console.log("Mengirim prompt (Enter)...");
-          await chatInput.press('Enter');
-
-          console.log("Menunggu respon selama 10 detik...");
-          await page.waitForTimeout(10000);
-
-          console.log("Mengambil screenshot hasil akhir...");
-          await page.screenshot({ path: 'screenshots/4_hasil_respon.png', fullPage: true });
-
-          await browser.close();
-          console.log("Proses selesai.");
         })();
         EOF
 
-        # Membuat folder untuk menyimpan hasil screenshot sebelum skrip berjalan
-        mkdir -p screenshots
         node script.js
 
     - name: Compress Screenshots
+      if: always()
       run: |
         zip -r screenshots.zip screenshots/
 
     - name: Create GitHub Release and Upload Screenshots
+      if: always()
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: report-${{ github.run_id }}-${{ github.run_number }}
-        name: Laporan Hasil AI Chat - Run #${{ github.run_number }}
+        tag_name: test-google-${{ github.run_id }}-${{ github.run_number }}
+        name: Test Buka Google - Run #${{ github.run_number }}
         body: |
-          Berikut adalah hasil screenshot otomatis dari langkah-langkah eksekusi Playwright Stealth ke Google AI Mode.
-          
-          - **1_google_home.png**: Tampilan awal Google.
-          - **2_mode_ai_aktif.png**: Setelah tombol Mode AI diklik.
-          - **3_prompt_diisi.png**: Teks prompt berhasil dimasukkan ke form.
-          - **4_hasil_respon.png**: Hasil setelah menekan Enter dan menunggu selama 10 detik.
+          Silakan unduh `screenshots.zip` di bawah untuk melihat tampilan awal Google dari IP GitHub Actions.
         files: screenshots.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
