@@ -1,4 +1,4 @@
-name: ChatGPT Audio Analysis Automation
+name: ChatGPT Chat Scrape
 
 on:
   workflow_dispatch:
@@ -27,16 +27,11 @@ jobs:
     - name: Install Playwright Chromium
       run: npx playwright install chromium --with-deps
 
-    - name: Download Audio File
-      run: |
-        curl -L -o audio.wav https://github.com/trikmonsters/Auto-Vids/releases/download/run-1/audio.wav
-
     - name: Generate Playwright Script
       run: |
         cat << 'EOF' > script.js
         const { chromium } = require('playwright-extra');
         const stealth = require('puppeteer-extra-plugin-stealth')();
-        const path = require('path');
 
         chromium.use(stealth);
 
@@ -51,32 +46,23 @@ jobs:
           try {
             await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
 
-            // Menggunakan selector ID spesifik milik ChatGPT dan mengizinkan elemen tersembunyi (hidden)
-            const fileInputSelector = 'input#upload-files';
-            await page.waitForSelector(fileInputSelector, { state: 'attached', timeout: 30000 });
-            
-            const filePath = path.resolve('audio.wav');
-            await page.setInputFiles(fileInputSelector, filePath);
-            
-            await page.waitForTimeout(5000);
-
             const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"]';
             await page.waitForSelector(inputSelector, { timeout: 30000 });
             
-            await page.fill(inputSelector, 'Tolong analisis isi dari audio yang saya unggah ini');
+            await page.fill(inputSelector, 'buatkan prompt AI image dengan detail 2D professional background putih seperti cartoon');
             await page.press(inputSelector, 'Enter');
             
             await page.waitForTimeout(5000);
 
             const responseSelector = 'main div.markdown, div[data-message-author-role="assistant"]';
-            await page.waitForSelector(responseSelector, { timeout: 30000 });
+            await page.waitForSelector(responseSelector, { timeout: 15000 });
             
             const responses = await page.locator(responseSelector).all();
             if (responses.length > 0) {
               const lastResponseText = await responses[responses.length - 1].innerText();
-              console.log('\n=== HASIL ANALISIS AUDIO CHATGPT ===\n');
+              console.log('\n=== HASIL CHATGPT ===\n');
               console.log(lastResponseText);
-              console.log('\n====================================\n');
+              console.log('\n=====================\n');
             } else {
               console.log('Gagal mendeteksi element respons.');
             }
