@@ -125,7 +125,7 @@ jobs:
             
             // Memberikan waktu ekstra bagi AI untuk memproses transkrip/analisis video
             console.log("Menunggu respon dari Google AI selama 15 detik...");
-            await page.waitForTimeout(15000); 
+            await page.waitForTimeout(60000); 
             
             await page.screenshot({ path: 'screenshots/3_hasil_respon.png', fullPage: true });
 
