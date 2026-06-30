@@ -63,14 +63,36 @@ jobs:
             console.log('4. Mengirim teks (Enter)...');
             await page.press(inputSelector, 'Enter');
             
-            await page.waitForTimeout(5000);
+            // Menunggu respon awal mulai di-generate oleh AI
+            await page.waitForTimeout(3000);
             await page.screenshot({ path: 'screenshots/03_after_enter.png' });
 
-            console.log('5. Menunggu respon AI selama 2 menit...');
-            await page.waitForTimeout(120000);
+            // Mengubah waktu tunggu respons sesuai request (5 detik)
+            console.log('5. Menunggu respon AI selama 5 detik...');
+            await page.waitForTimeout(5000);
 
             console.log('6. Screenshot hasil akhir...');
             await page.screenshot({ path: 'screenshots/04_final_result.png', fullPage: true });
+
+            // MENGEKSTRAK TEKS DAN MENAMPILKAN KE LOG / CONSOLE
+            console.log('\n=== HASIL TEKS DARI CHATGPT ===\n');
+            
+            // Menggunakan selector artikel respon ChatGPT (biasanya dibungkus dalam data-testimonial-id atau markdown)
+            const responseSelector = 'main div.markdown, div[data-message-author-role="assistant"]';
+            
+            // Tunggu hingga element text jawaban muncul
+            await page.waitForSelector(responseSelector, { timeout: 15000 });
+            
+            // Mengambil text konten terakhir/terbaru dari asisten AI
+            const responses = await page.locator(responseSelector).all();
+            if (responses.length > 0) {
+              const lastResponseText = await responses[responses.length - 1].innerText();
+              console.log(lastResponseText);
+            } else {
+              console.log('Gagal mendeteksi element teks respons.');
+            }
+            
+            console.log('\n================================\n');
 
           } catch (error) {
             console.error('Terjadi kendala:', error);
