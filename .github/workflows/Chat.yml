@@ -1,0 +1,105 @@
+name: ChatGPT Playwright Automation
+
+on:
+  workflow_dispatch: # Memungkinkan menjalankan pipeline secara manual dari tab Actions
+
+permissions:
+  contents: write # Izin wajib agar GitHub Actions bisa mengunggah hasil ke Release
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Buat Struktur Folder
+      run: mkdir -p screenshots
+
+    - name: Install Dependencies
+      run: |
+        npm init -y
+        npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+
+    - name: Install Playwright Chromium
+      run: npx playwright install chromium --with-deps
+
+    - name: Generate Playwright Script
+      run: |
+        cat << 'EOF' > script.js
+        const { chromium } = require('playwright-extra');
+        const stealth = require('puppeteer-extra-plugin-stealth')();
+
+        chromium.use(stealth);
+
+        (async () => {
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            viewport: { width: 1280, height: 720 }
+          });
+          const page = await context.newPage();
+
+          try {
+            console.log('1. Membuka ChatGPT...');
+            await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
+            await page.screenshot({ path: 'screenshots/01_landing_page.png', fullPage: true });
+
+            const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"]';
+            
+            console.log('2. Menunggu input teks...');
+            await page.waitForSelector(inputSelector, { timeout: 30000 });
+            
+            console.log('3. Mengisi prompt...');
+            await page.fill(inputSelector, 'buatkan prompt AI image dengan detail 2D professional background putih seperti cartoon');
+            await page.screenshot({ path: 'screenshots/02_after_fill.png' });
+
+            console.log('4. Mengirim teks (Enter)...');
+            await page.press(inputSelector, 'Enter');
+            
+            await page.waitForTimeout(5000);
+            await page.screenshot({ path: 'screenshots/03_after_enter.png' });
+
+            console.log('5. Menunggu respon AI selama 2 menit...');
+            await page.waitForTimeout(120000);
+
+            console.log('6. Screenshot hasil akhir...');
+            await page.screenshot({ path: 'screenshots/04_final_result.png', fullPage: true });
+
+          } catch (error) {
+            console.error('Terjadi kendala:', error);
+            await page.screenshot({ path: 'screenshots/error_state.png', fullPage: true });
+          } finally {
+            await browser.close();
+            console.log('Proses selesai.');
+          }
+        })();
+        EOF
+
+    - name: Jalankan Skrip Otomatisasi
+      run: node script.js
+
+    - name: Generate Timestamp untuk Tag
+      id: tag_name
+      run: echo "TAG=run-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+    - name: Upload Screenshot ke GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.tag_name.outputs.TAG }}
+        name: Laporan Screenshot ${{ steps.tag_name.outputs.TAG }}
+        body: |
+          Hasil otomatisasi screenshot dari ChatGPT.
+          Silakan cek lampiran di bawah untuk melihat hasilnya.
+        draft: false
+        prerelease: false
+        files: |
+          screenshots/*.png
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
