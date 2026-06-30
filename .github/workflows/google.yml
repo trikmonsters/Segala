@@ -1,4 +1,4 @@
-name: Playwright Google AI Search Test
+name: Playwright Google AI Mode Chat
 
 on:
   workflow_dispatch:
@@ -49,35 +49,39 @@ jobs:
           const context = await browser.newContext({
             viewport: { width: 1280, height: 1000 },
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            locale: 'id-ID'
+            locale: 'en-US' // Menggunakan en-US agar sesuai dengan placeholder "Ask anything" di gambar
           });
           
           const page = await context.newPage();
           
           try {
-            console.log("Membuka Google...");
+            console.log("Membuka Google AI Mode...");
             await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle' });
-            
-            console.log("Mencari kolom input pencarian...");
-            const searchInput = page.locator('textarea[name="q"], input[name="q"]').first();
-            
-            console.log("Mengetik kata kunci...");
-            await searchInput.fill('apa itu ikan moli');
-            await page.screenshot({ path: 'screenshots/2_search_typed.png', fullPage: false });
+            await page.screenshot({ path: 'screenshots/1_aimode_home.png', fullPage: true });
 
-            console.log("Menekan Enter untuk mencari...");
-            await searchInput.press('Enter');
+            console.log("Mencari kolom input chat...");
+            // Menargetkan input berdasarkan placeholder "Ask anything" yang terlihat di gambar ERROR_SEARCH.png
+            const chatInput = page.locator('textarea[placeholder*="Ask anything"], [contenteditable="true"], input[placeholder*="Ask anything"]').first();
             
-            await page.waitForNavigation({ waitUntil: 'networkidle' });
-            await page.waitForTimeout(5000); 
+            console.log("Memasukkan prompt analisis...");
+            const promptText = `berikut url youtube yang harus anda analisis, berikan ringkasan dan intro. Beserta image prompt untuk video tersebut. Tulis respons dalam json only. Url: https://youtube.com/shorts/VxY4OOYCpIw`;
             
-            console.log("Mengambil screenshot hasil pencarian...");
-            await page.screenshot({ path: 'screenshots/3_search_results.png', fullPage: true });
+            await chatInput.fill(promptText);
+            await page.screenshot({ path: 'screenshots/2_prompt_diisi.png', fullPage: false });
+
+            console.log("Mengirim prompt (Enter)...");
+            await chatInput.press('Enter');
+            
+            console.log("Menunggu respon dari Google AI selama 10 detik...");
+            await page.waitForTimeout(10000); 
+            
+            console.log("Mengambil screenshot hasil akhir...");
+            await page.screenshot({ path: 'screenshots/3_hasil_respon.png', fullPage: true });
             console.log("Selesai!");
 
           } catch (error) {
             console.error("Terjadi error:", error.message);
-            await page.screenshot({ path: 'screenshots/ERROR_SEARCH.png', fullPage: true });
+            await page.screenshot({ path: 'screenshots/ERROR_AIMODE.png', fullPage: true });
             process.exit(1);
           } finally {
             await browser.close();
@@ -92,14 +96,17 @@ jobs:
       if: always()
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: test-search-${{ github.run_id }}-${{ github.run_number }}
-        name: Test Search Google - Run #${{ github.run_number }}
+        tag_name: ai-mode-chat-${{ github.run_id }}-${{ github.run_number }}
+        name: Hasil Chat Google AI Mode - Run #${{ github.run_number }}
         body: |
-          Hasil screenshot langsung tanpa ZIP:
-          - Silakan klik `3_search_results.png` di bawah untuk melihat hasil pencarian Google.
+          Hasil eksekusi chat langsung ke Google AI Mode:
+          - **1_aimode_home.png**: Tampilan awal halaman `/aimode`.
+          - **2_prompt_diisi.png**: Kondisi saat prompt berhasil diketik ke dalam kolom input.
+          - **3_hasil_respon.png**: Tampilan hasil jawaban AI setelah menunggu 10 detik.
         files: |
-          screenshots/2_search_typed.png
-          screenshots/3_search_results.png
-          screenshots/ERROR_SEARCH.png
+          screenshots/1_aimode_home.png
+          screenshots/2_prompt_diisi.png
+          screenshots/3_hasil_respon.png
+          screenshots/ERROR_AIMODE.png
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
