@@ -1,0 +1,150 @@
+name: duck.ai Playwright image flow (single pipeline)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      PROMPT: "pemandangan laut senja gaya ilustrasi"
+      TARGET_URL: "https://duck.ai/"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps + Playwright
+        run: |
+          set -e
+          sudo apt-get update
+          npm init -y
+          npm i -D @playwright/test
+          npx playwright install --with-deps
+
+      - name: Write Playwright project files
+        run: |
+          set -e
+          mkdir -p tests playwright-report artifacts
+
+          cat > playwright.config.ts <<'EOF'
+          import { defineConfig } from '@playwright/test';
+          export default defineConfig({
+            testDir: './tests',
+            timeout: 180000,
+            use: {
+              headless: true,
+              screenshot: 'off',
+              trace: 'off',
+              viewport: { width: 1400, height: 900 }
+            },
+            reporter: [['list']]
+          });
+          EOF
+
+          cat > tests/duckai-image-flow.spec.ts <<'EOF'
+          import { test, expect, Page } from '@playwright/test';
+          import fs from 'fs';
+          import path from 'path';
+
+          const TARGET_URL = process.env.TARGET_URL || 'https://duck.ai/';
+          const PROMPT = process.env.PROMPT || 'pemandangan laut senja gaya ilustrasi';
+
+          // NOTE: Selector ini kemungkinan perlu kamu sesuaikan dengan UI duck.ai.
+          const SELECTORS = {
+            activateFeature: 'button:has-text("Buat gambar"), button:has-text("Gambar")',
+            promptInput: 'textarea, input[type="text"], [contenteditable="true"]',
+            enterHint: 'text=/Enter/i',
+            resultImage: 'img, canvas, [data-testid*="image"]'
+          };
+
+          function ensureDir(p: string) {
+            fs.mkdirSync(p, { recursive: true });
+          }
+
+          async function stepScreenshot(page: Page, artifactsDir: string, name: string) {
+            ensureDir(artifactsDir);
+            const file = path.join(artifactsDir, `${name}.png`);
+            await page.screenshot({ path: file, fullPage: true });
+          }
+
+          test('duck.ai generate image flow', async ({ page }) => {
+            const artifactsDir = path.join(process.cwd(), 'artifacts', `run-${Date.now()}`);
+            ensureDir(artifactsDir);
+
+            await test.step('01 open page', async () => {
+              await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
+              await page.waitForLoadState('networkidle').catch(() => {});
+              await stepScreenshot(page, artifactsDir, '01-open-page');
+            });
+
+            await test.step('02 activate image feature', async () => {
+              const btn = page.locator(SELECTORS.activateFeature).first();
+              await btn.waitFor({ state: 'visible', timeout: 30000 });
+              await btn.click();
+              await page.waitForTimeout(1000);
+              await stepScreenshot(page, artifactsDir, '02-activate-feature');
+            });
+
+            await test.step('03 enter prompt and press Enter', async () => {
+              const input = page.locator(SELECTORS.promptInput).first();
+              await input.waitFor({ state: 'visible', timeout: 30000 });
+              await input.click();
+              await page.keyboard.press('Control+A').catch(() => {});
+              await input.fill('');
+              await input.type(PROMPT, { delay: 10 });
+              await page.keyboard.press('Enter');
+
+              // screenshot tepat setelah enter
+              await stepScreenshot(page, artifactsDir, '03-prompt-enter');
+            });
+
+            await test.step('04 wait result image', async () => {
+              // Tunggu sampai elemen hasil muncul
+              await page.waitForSelector(SELECTORS.resultImage, { timeout: 180000 });
+              await stepScreenshot(page, artifactsDir, '04-result');
+            });
+
+            // Simpan HTML untuk debugging (jadi “log actions” punya jejak)
+            fs.writeFileSync(path.join(artifactsDir, 'page-content.html'), await page.content(), 'utf8');
+          });
+          EOF
+
+      - name: Run Playwright
+        if: always()
+        run: |
+          set -e
+          mkdir -p artifacts playwright-report
+          npx playwright test --reporter=list || exit 1
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckai-e2e-artifacts
+          path: |
+            artifacts
+            playwright-report
+            test-results
+
+      - name: Create Release (screenshots + report)
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: duckai-image-${{ github.run_id }}
+          name: duckai-image ${{ github.run_id }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.png
+            artifacts/**/*.html
+            playwright-report/**/*
+
