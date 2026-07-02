@@ -53,65 +53,88 @@ jobs:
           cap = cv2.VideoCapture(video_path)
           fps = cap.get(cv2.CAP_PROP_FPS)
       
-          # Ambil frame pada detik ke-2
-          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
+          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps*2))
           ret, frame = cap.read()
           cap.release()
       
           if not ret:
-              raise Exception("Tidak dapat membaca video.")
+              exit(1)
       
           full_h, full_w = frame.shape[:2]
       
-          # ==========================
-          # EDGE DETECTION
-          # ==========================
-      
           gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+          blur = cv2.GaussianBlur(gray,(5,5),0)
       
-          blur = cv2.GaussianBlur(gray, (5,5), 0)
+          edges = cv2.Canny(blur,50,150)
       
-          edges = cv2.Canny(blur, 50, 150)
-      
-          kernel = np.ones((9,9), np.uint8)
-      
-          edges = cv2.dilate(edges, kernel, iterations=2)
-          edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-      
-          contours, _ = cv2.findContours(
+          # Cari garis
+          lines = cv2.HoughLinesP(
               edges,
+              rho=1,
+              theta=np.pi/180,
+              threshold=100,
+              minLineLength=int(full_w*0.35),
+              maxLineGap=30
+          )
+      
+          line_mask = np.zeros_like(gray)
+      
+          if lines is not None:
+              for line in lines:
+                  x1,y1,x2,y2 = line[0]
+                  cv2.line(line_mask,(x1,y1),(x2,y2),255,3)
+      
+          kernel = np.ones((15,15),np.uint8)
+      
+          line_mask = cv2.dilate(line_mask,kernel,2)
+          line_mask = cv2.morphologyEx(
+              line_mask,
+              cv2.MORPH_CLOSE,
+              kernel
+          )
+      
+          contours,_ = cv2.findContours(
+              line_mask,
               cv2.RETR_EXTERNAL,
               cv2.CHAIN_APPROX_SIMPLE
           )
       
-          best = None
-          best_area = 0
+          best=None
+          best_area=0
       
           for cnt in contours:
       
-              x, y, w, h = cv2.boundingRect(cnt)
+              x,y,w,h=cv2.boundingRect(cnt)
       
-              area = w * h
+              area=w*h
       
-              # Abaikan contour kecil
-              if area < full_w * full_h * 0.10:
+              ratio=w/h
+      
+              if area < full_w*full_h*0.15:
                   continue
       
-              # Abaikan jika hampir seluruh frame
-              if area > full_w * full_h * 0.98:
+              # rasio video portrait
+              if ratio < 0.45 or ratio > 0.75:
                   continue
       
-              if area > best_area:
-                  best_area = area
-                  best = (x, y, w, h)
+              if area>best_area:
+                  best_area=area
+                  best=(x,y,w,h)
       
           if best:
-              x, y, w, h = best
+              x,y,w,h=best
           else:
-              x = 0
-              y = 0
-              w = full_w
-              h = full_h
+              x=0
+              y=0
+              w=full_w
+              h=full_h
+      
+          # Debug
+          debug=frame.copy()
+          cv2.rectangle(debug,(x,y),(x+w,y+h),(0,255,0),5)
+          cv2.imwrite("debug_crop.png",debug)
+          cv2.imwrite("debug_edges.png",edges)
+          cv2.imwrite("debug_lines.png",line_mask)
       
           with open("crop_params.txt","w") as f:
               f.write(f"CROP_W={w}\n")
@@ -119,37 +142,29 @@ jobs:
               f.write(f"CROP_X={x}\n")
               f.write(f"CROP_Y={y}\n")
       
-          # ==========================
-          # OCR
-          # ==========================
-      
-          if y > 10:
-              text_area = frame[0:y, :]
+          if y>10:
+              text_area=frame[0:y,:]
           else:
-              text_area = frame[0:int(full_h * 0.2), :]
+              text_area=frame[0:int(full_h*0.2),:]
       
           try:
-              reader = easyocr.Reader(['en'])
-              ocr = reader.readtext(text_area, detail=0)
-              detected_text = " ".join(ocr).replace("\n"," ").strip()
-          except Exception:
-              detected_text = ""
+              reader=easyocr.Reader(['en'])
+              result=reader.readtext(text_area,detail=0)
+              detected_text=" ".join(result).strip()
+          except:
+              detected_text=""
       
-          if len(detected_text) < 3:
-              detected_text = "Amazing video content highlights"
+          if len(detected_text)<3:
+              detected_text="Amazing video content highlights"
       
           with open("detected_text.txt","w",encoding="utf8") as f:
               f.write(detected_text)
       
-          print(f"Crop : x={x} y={y} w={w} h={h}")
-          print(f"OCR  : {detected_text}")
-      
           EOF
       
           python process.py
-      
           cat crop_params.txt >> $GITHUB_ENV
-
+          
       - name: Run Playwright ChatGPT Script
         run: |
           cat << 'EOF' > script.js
