@@ -29,13 +29,13 @@ jobs:
         mkdir -p output_subtitles
         
         # Mengunduh video langsung dari link Pinterest menggunakan curl
-        curl -L "https://v1.pinimg.com/videos/mc/720p/2f/42/16/2f42160e604fb128db5712d46e2a7a21.mp4" -o input_video/pinterest_video.mp4
+        curl -L "https://pinimg.com" -o input_video/pinterest_video.mp4
         
         # Menjalankan proses transkripsi teks otomatis (Model 'small' ideal untuk CPU)
         auto-subtitle input_video/pinterest_video.mp4 --model small --output_dir output_subtitles/
 
     - name: Upload SRT Subtitles Artifact
-      uses: actions/artifacts@v4
+      uses: actions/upload-artifact@v4
       with:
         name: pinterest-srt-subtitle
         path: output_subtitles/
