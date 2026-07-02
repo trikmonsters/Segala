@@ -58,7 +58,6 @@ jobs:
               print("Gagal membaca metadata video.")
               exit(1)
 
-          # Menentukan 4 titik deteksi frame (detik ke-2, 4, 6, 8)
           sample_seconds = [2, 4, 6, 8]
           frames_to_analyze = []
 
@@ -70,7 +69,6 @@ jobs:
                   if ret:
                       frames_to_analyze.append(frame)
           
-          # Jika video sangat pendek, ambil saja frame pertama sebagai cadangan terakhir
           if not frames_to_analyze:
               cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
               ret, frame = cap.read()
@@ -85,13 +83,11 @@ jobs:
 
           full_h, full_w = frames_to_analyze[0].shape[0], frames_to_analyze[0].shape[1]
 
-          # Satukan kecerahan dari semua frame yang dikumpulkan (menghindari jebakan frame hitam murni)
           combined_gray = np.zeros((full_h, full_w), dtype=np.uint8)
           for f in frames_to_analyze:
               gray_f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
               combined_gray = cv2.max(combined_gray, gray_f)
 
-          # Cari baris dan kolom aktif yang memiliki konten warna (bukan hitam pekat / nilai > 15)
           row_sums = np.sum(combined_gray > 15, axis=1)
           col_sums = np.sum(combined_gray > 15, axis=0)
           
@@ -109,15 +105,12 @@ jobs:
           else:
               crop_w, crop_h, crop_x, crop_y = full_w, full_h, 0, 0
 
-          # Tulis parameter untuk kebutuhan FFmpeg Crop
           with open('crop_params.txt', 'w') as f:
               f.write(f"CROP_W={crop_w}\n")
               f.write(f"CROP_H={crop_h}\n")
               f.write(f"CROP_X={crop_x}\n")
               f.write(f"CROP_Y={crop_y}\n")
 
-          # Untuk OCR area teks hitam atas, kita pakai data gabungan (combined_gray) 
-          # agar tulisan putihnya terkumpul sempurna meskipun di beberapa frame ada kedipan teks
           ocr_y_limit = crop_y if crop_y > 40 else int(full_h * 0.25)
           text_area = combined_gray[0:ocr_y_limit, 0:full_w]
 
@@ -244,9 +237,11 @@ jobs:
         run: |
           curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
 
+          # Memperbaiki logika scale dan pad menggunakan force_original_aspect_ratio=decrease
+          # Hal ini menjamin dimensi video setelah di-scale TIDAK AKAN PERNAH melebihi kanvas 1080x1920
           ffmpeg -i "video.mp4" \
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
-                             scale=1080:-1, \
+                             scale=1080:1920:force_original_aspect_ratio=decrease, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
                              drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=180:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
@@ -259,4 +254,4 @@ jobs:
           name: final-edited-video
           path: |
             video.mp4
-            hasil_ai.json
+            hasil_ai.txt
