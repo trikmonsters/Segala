@@ -2,6 +2,11 @@ name: Auto Crop, OCR, and Playwright ChatGPT JSON
 
 on:
   workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Masukkan URL Video Media / Instagram'
+        required: true
+        default: 'https://media.sssinstagram.com/get?__sig=pZS5-UegitrS35XLPhv0Tg&__expires=1783004335&uri=https%3A%2F%2Fscontent-iad6-1.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQP1758ku0l62_NnbkszMcwrmPvmI5KdG9GlSDOWq4tGUToaxArF5vtNTQMOZVrUnpKhHj2KrxdH_tQjhcBGG6fXZ0fyEBYYQDsZoWI.mp4%3F_nc_cat%3D102%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad6-1.cdninstagram.com%26_nc_ohc%3DOUirmCT5IFkQ7kNvwHVaJSe%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTQ5MzY2NjE0NDYxMjMsImFzc2V0%252F'
 
 jobs:
   process-video:
@@ -35,7 +40,7 @@ jobs:
 
       - name: Download Video
         run: |
-          curl -L -o "video.mp4" "https://media.sssinstagram.com/get?__sig=2NGBkq0swseabxXW5Gf9EQ&__expires=1783012894&uri=https%3A%2F%2Fscontent-iad3-2.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQNXHt4yz_2dyIaxSLF_aHe8CpgOK_-uC9qpsPF34ZvaPCeYSjOQ07-BWWEtE33MXep9S3QuxrONrg2GYYdzYs8W6_J0kDiltzgHOJ8.mp4%3F_nc_cat%3D103%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad3-2.cdninstagram.com%26_nc_ohc%3DG-96LEXOe4EQ7kNvwEw8NLy%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTA1ODUzMjA0NDYxMjMsImFzc2V0X2FnZV9kYXlzIjo5NywidmlfdXNlY2FzZV9pZCI6MTAwOTksImR1cmF0aW9uX3MiOjExNCwidXJsZ2VuX3NvdXJjZSI6Ind3dyJ9%26ccb%3D17-1%26vs%3D1c05e8b537062682%26_nc_vs%3DHBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC9FQzQzMzhGRjlFMURCQjE4RThGNjMwN0JFMjE3QUZBN192aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYUWlnX3hwdl9wbGFjZW1lbnRfcGVybWFuZW50X3YyLzI5NEE4NjJCNUVGQUI3Nzg4MkU5QkYwQTcyMzFBQjhBX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbW4srtj9nHPxUCKAJDMywXQFyO6XjU_fQYEmRhc2hfYmFzZWxpbmVfMV92MREAdf4HZeadAQA%26_nc_gid%3DstRiPfe5J1tYNk2Ys0ITXQ%26_nc_ss%3D7839b%26_nc_zt%3D28%26oh%3D00_AQChoHQyhnKPVo-SMUwi7R7ML4brXKRsxP2PIqstKw6eyg%26oe%3D6A4877F8%26dl%3D1&filename=In%202022%2C%20an%2011-year-old%20singer%20from%20the%20Czech%20Republic%20traveled%20to%20Germany%20for%20The%20Voice%20Kids%2C%20d.mp4&ua=-&referer=https%3A%2F%2Fwww.instagram.com%2F"
+          curl -L -o "video.mp4" "${{ github.event.inputs.video_url }}"
 
       - name: Run OpenCV Detection & EasyOCR
         run: |
@@ -172,7 +177,7 @@ jobs:
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:text='${{ env.FINAL_TEXT }}':x=(w-text_w)/2:y=200:fontsize=45:fontcolor=black" \
+                             drawtext=fontfile=Arial.ttf:text='${{ env.FINAL_TEXT }}':x=(w-text_w)/2:y=150:wrap_text=1:text_w=920:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
 
           mv output.mp4 video.mp4
