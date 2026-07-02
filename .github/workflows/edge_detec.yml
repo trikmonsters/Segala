@@ -81,8 +81,18 @@ jobs:
       
           if lines is not None:
               for line in lines:
-                  x1,y1,x2,y2 = line[0]
-                  cv2.line(line_mask,(x1,y1),(x2,y2),255,3)
+                  line = np.array(line).reshape(-1)
+              
+                  x1, y1, x2, y2 = line[:4]
+              
+                  cv2.line(
+                      line_mask,
+                      (int(x1), int(y1)),
+                      (int(x2), int(y2)),
+                      255,
+                      3
+                  )
+                  
       
           kernel = np.ones((15,15),np.uint8)
       
