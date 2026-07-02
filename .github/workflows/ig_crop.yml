@@ -1,0 +1,100 @@
+name: Auto Crop and Overlay Video
+
+on:
+  workflow_dispatch: # Memungkinkan Anda menjalankan ini secara manual dari tab Actions
+
+jobs:
+  process-video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-theme: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install opencv-python numpy requests
+
+      - name: Download Video
+        run: |
+          # Mengunduh video menggunakan URL yang diberikan
+          curl -L -o "video.mp4" "https://media.sssinstagram.com/get?__sig=pZS5-UegitrS35XLPhv0Tg&__expires=1783004335&uri=https%3A%2F%2Fscontent-iad6-1.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQP1758ku0l62_NnbkszMcwrmPvmI5KdG9GlSDOWq4tGUToaxArF5vtNTQMOZVrUnpKhHj2KrxdH_tQjhcBGG6fXZ0fyEBYYQDsZoWI.mp4%3F_nc_cat%3D102%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad6-1.cdninstagram.com%26_nc_ohc%3DOUirmCT5IFkQ7kNvwHVaJSe%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTQ5MzY2NjE0NDYxMjMsImFzc2V0X2FnZV9kYXlzIjo2NywidmlfdXNlY2FzZV9pZCI6MTAwOTksImR1cmF0aW9uX3MiOjQ3LCJ1cmxnZW5fc291cmNlIjoid3d3In0%253D%26ccb%3D17-1%26vs%3Da7f734514ef8ada4%26_nc_vs%3DHBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC82MTQzQkYzOURCMEU4Qjc0MEFFRjIxQUE4NTNCOUM5OV92aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYUWlnX3hwdl9wbGFjZW1lbnRfcGVybWFuZW50X3YyLzRFNEMxMDRDRjMyNEIzMEI5NjJBNkYyMDE4NTFGNEJDX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbWt97vs9bJPxUCKAJDMywXQEfAAAAAAAAYEmRhc2hfYmFzZWxpbmVfMV92MREAdf4HZeadAQA%26_nc_gid%3DXcanDN3GcCkTy9f-AaPwuA%26_nc_ss%3D7839b%26_nc_zt%3D28%26oh%3D00_AQCD4h0FIvbqRSrveo1YWjLYMGN_CFO2YJDBFNMRcXdxlA%26oe%3D6A484803%26dl%3D1&filename=The%20legendary%20energy%20of%20Jack%20Black%20captures%20the%20raw%20essence%20of%20a%20high-energy%20journey%20through%20mus.mp4&ua=-&referer=https%3A%2F%2Fwww.instagram.com%2F"
+
+      - name: Run OpenCV Detection Skrip
+        id: detect_crop
+        run: |
+          cat << 'EOF' > detect.py
+          import cv2
+          import numpy as np
+
+          video_path = "video.mp4"
+          cap = cv2.VideoCapture(video_path)
+
+          # Ambil frame pada detik ke-2 agar memastikan video utama sudah dirender penuh
+          fps = cap.get(cv2.CAP_PROP_FPS)
+          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
+          ret, frame = cap.read()
+          cap.release()
+
+          if not ret:
+              print("Gagal membaca video")
+              exit(1)
+
+          # Konversi ke Grayscale
+          gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+          # Karena background teks berwarna PUTIH (~255), kita cari area yang gelap (Treshold Inverse)
+          # Toleransi 240 ke atas dianggap warna putih background teks bawaan IG
+          _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+
+          # Cari kontur eksternal terbesar (yaitu area kotak video)
+          contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+          if contours:
+              # Ambil kontur dengan area permukaan terbesar
+              largest_contour = max(contours, key=cv2.contourArea)
+              x, y, w, h = cv2.boundingRect(largest_contour)
+              
+              # Kita hanya ingin memotong ATAS dan BAWAH, lebar (W) harus tetap penuh sesuai video asli
+              # Dan koordinat X dimulai dari 0 agar tidak memotong samping video
+              full_w = frame.shape[1]
+              
+              # Menulis output ke GitHub Environment agar bisa dibaca step berikutnya
+              with open('crop_params.txt', 'w') as f:
+                  f.write(f"CROP_W={full_w}\n")
+                  f.write(f"CROP_H={h}\n")
+                  f.write(f"CROP_X=0\n")
+                  f.write(f"CROP_Y={y}\n")
+              print(f"Detected: W={full_w}, H={h}, X=0, Y={y}")
+          else:
+              print("Kontur tidak ditemukan, menggunakan fallback")
+              exit(1)
+          EOF
+          python detect.py
+          cat crop_params.txt >> $GITHUB_ENV
+
+      - name: Process Video with FFmpeg
+        run: |
+          # Unduh font standar gratis jika belum ada di repo untuk rendering text FFmpeg
+          curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
+
+          # Menjalankan FFmpeg menggunakan variabel dinamis hasil deteksi OpenCV
+          # Video ditaruh di tengah kanvas hitam 1080x1920
+          ffmpeg -i "The legendary energy of Jack Black captures the raw essence of a high-energy journey through mus.mp4" \
+            -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
+                             pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black, \
+                             drawtext=fontfile=Arial.ttf:text='this is textarea text title':x=(w-text_w)/2:y=200:fontsize=45:fontcolor=white" \
+            -c:a copy output.mp4
+
+      - name: Upload Output Video
+        uses: actions/artifacts@v4
+        with:
+          name: final-edited-video
+          path: output.mp4
