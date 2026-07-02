@@ -16,15 +16,14 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install FFmpeg & Subtitle Generator
-      run: |
-        sudo apt update
-        sudo apt install -y ffmpeg
-        pip install "git+https://github.com"
+    - name: Update System & Install FFmpeg
+      run: sudo apt update && sudo apt install -y ffmpeg
+
+    - name: Install Subtitle Generator AI
+      run: pip install git+https://github.com/m1guelpf/auto-subtitle.git
 
     - name: Download Video and Process Subtitle
       run: |
-        # Membuat folder untuk menampung input dan output
         mkdir -p input_video
         mkdir -p output_subtitles
         
