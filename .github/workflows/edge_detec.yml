@@ -1,0 +1,282 @@
+name: Auto IG
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Masukkan URL Video Media / Instagram'
+        required: true
+        default: ''
+jobs:
+  process-video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Python Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libgomp1
+          pip install opencv-python-headless numpy torch torchvision easyocr
+
+      - name: Install Playwright Dependencies
+        run: |
+          npm init -y
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+          npx playwright install chromium --with-deps
+
+      - name: Download Video
+        run: |
+          curl -L -o "video.mp4" "${{ github.event.inputs.video_url }}"
+
+      - name: Run OpenCV Detection & EasyOCR
+        run: |
+          cat << 'EOF' > process.py
+          import cv2
+          import numpy as np
+          import easyocr
+      
+          video_path = "video.mp4"
+      
+          cap = cv2.VideoCapture(video_path)
+          fps = cap.get(cv2.CAP_PROP_FPS)
+      
+          # Ambil frame pada detik ke-2
+          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
+          ret, frame = cap.read()
+          cap.release()
+      
+          if not ret:
+              raise Exception("Tidak dapat membaca video.")
+      
+          full_h, full_w = frame.shape[:2]
+      
+          # ==========================
+          # EDGE DETECTION
+          # ==========================
+      
+          gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+      
+          blur = cv2.GaussianBlur(gray, (5,5), 0)
+      
+          edges = cv2.Canny(blur, 50, 150)
+      
+          kernel = np.ones((9,9), np.uint8)
+      
+          edges = cv2.dilate(edges, kernel, iterations=2)
+          edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+      
+          contours, _ = cv2.findContours(
+              edges,
+              cv2.RETR_EXTERNAL,
+              cv2.CHAIN_APPROX_SIMPLE
+          )
+      
+          best = None
+          best_area = 0
+      
+          for cnt in contours:
+      
+              x, y, w, h = cv2.boundingRect(cnt)
+      
+              area = w * h
+      
+              # Abaikan contour kecil
+              if area < full_w * full_h * 0.10:
+                  continue
+      
+              # Abaikan jika hampir seluruh frame
+              if area > full_w * full_h * 0.98:
+                  continue
+      
+              if area > best_area:
+                  best_area = area
+                  best = (x, y, w, h)
+      
+          if best:
+              x, y, w, h = best
+          else:
+              x = 0
+              y = 0
+              w = full_w
+              h = full_h
+      
+          with open("crop_params.txt","w") as f:
+              f.write(f"CROP_W={w}\n")
+              f.write(f"CROP_H={h}\n")
+              f.write(f"CROP_X={x}\n")
+              f.write(f"CROP_Y={y}\n")
+      
+          # ==========================
+          # OCR
+          # ==========================
+      
+          if y > 10:
+              text_area = frame[0:y, :]
+          else:
+              text_area = frame[0:int(full_h * 0.2), :]
+      
+          try:
+              reader = easyocr.Reader(['en'])
+              ocr = reader.readtext(text_area, detail=0)
+              detected_text = " ".join(ocr).replace("\n"," ").strip()
+          except Exception:
+              detected_text = ""
+      
+          if len(detected_text) < 3:
+              detected_text = "Amazing video content highlights"
+      
+          with open("detected_text.txt","w",encoding="utf8") as f:
+              f.write(detected_text)
+      
+          print(f"Crop : x={x} y={y} w={w} h={h}")
+          print(f"OCR  : {detected_text}")
+      
+          EOF
+      
+          python process.py
+      
+          cat crop_params.txt >> $GITHUB_ENV
+
+      - name: Run Playwright ChatGPT Script
+        run: |
+          cat << 'EOF' > script.js
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+          const fs = require('fs');
+
+          chromium.use(stealth);
+
+          function wrapText(text, maxChars = 40) {
+            const words = text.split(' ');
+            let lines = [];
+            let currentLine = '';
+
+            for (let word of words) {
+              if ((currentLine + word).length > maxChars) {
+                lines.push(currentLine.trim());
+                currentLine = word + ' ';
+              } else {
+                currentLine += word + ' ';
+              }
+            }
+            if (currentLine.trim()) {
+              lines.push(currentLine.trim());
+            }
+            return lines.join('\n');
+          }
+
+          (async () => {
+            let detectedText = "Amazing video content highlights";
+            if (fs.existsSync('detected_text.txt')) {
+                detectedText = fs.readFileSync('detected_text.txt', 'utf8').trim();
+            }
+
+            // Memaksa format output JSON yang sangat ketat di prompt
+            const prompt = `Convert the following text into a short video hook that is controversial or funny: "${detectedText}"
+            Respond ONLY with a raw JSON array containing exactly 2 strings, example: ["Hook 1", "Hook 2"]. Do not include markdown blocks, do not include "json" formatting text, just the raw array.`;
+
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              viewport: { width: 1280, height: 720 }
+            });
+            const page = await context.newPage();
+
+            try {
+              await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
+
+              // Selector Input Fleksibel
+              const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"], [contenteditable="true"]';
+              await page.waitForSelector(inputSelector, { timeout: 30000 });
+              
+              await page.fill(inputSelector, prompt);
+              await page.press(inputSelector, 'Enter');
+              
+              // Tunggu respon selesai di-generate secara natural
+              await page.waitForTimeout(15000);
+
+              // Selector Asisten Diperbarui agar Mendukung Struktur DOM Baru ChatGPT
+              const responseSelector = 'article [data-message-author-role="assistant"], main div.markdown, .agent-turn';
+              await page.waitForSelector(responseSelector, { timeout: 25000 });
+              
+              const responses = await page.locator(responseSelector).all();
+              if (responses.length > 0) {
+                let lastResponseText = await responses[responses.length - 1].innerText();
+                
+                // Membersihkan sisa-sisa blok kode jika ChatGPT melanggar aturan prompt
+                if (lastResponseText.includes('```')) {
+                    const parts = lastResponseText.split('```');
+                    lastResponseText = parts[1];
+                    if (lastResponseText.startsWith('json')) {
+                        lastResponseText = lastResponseText.substring(4);
+                    }
+                }
+                lastResponseText = lastResponseText.trim();
+
+                try {
+                    const parsedJson = JSON.parse(lastResponseText);
+                    fs.writeFileSync('hasil_ai.json', JSON.stringify(parsedJson, null, 2), 'utf8');
+                    
+                    let textOverlay = detectedText;
+                    if (Array.isArray(parsedJson)) {
+                        textOverlay = parsedJson[0] || detectedText;
+                    } else if (typeof parsedJson === 'object') {
+                        textOverlay = Object.values(parsedJson)[0] || detectedText;
+                    }
+                    
+                    fs.writeFileSync('text_overlay.txt', wrapText(textOverlay), 'utf8');
+                } catch (e) {
+                    // Jika parsing JSON gagal, buat format manual teratur dari teks mentah
+                    const cleanText = lastResponseText.replace(/[\[\]"]/g, '').split('\n')[0] || detectedText;
+                    fs.writeFileSync('hasil_ai.json', JSON.stringify([cleanText, cleanText], null, 2));
+                    fs.writeFileSync('text_overlay.txt', wrapText(cleanText), 'utf8');
+                }
+
+              } else {
+                throw new Error("Response element not found");
+              }
+
+            } catch (error) {
+              // Jika automation diblokir/gagal, gunakan teks deteksi asli (bukan teks default kaku)
+              fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText], null, 2));
+              fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
+            } finally {
+              await browser.close();
+            }
+          })();
+          EOF
+          node script.js
+
+      - name: Process Video with FFmpeg
+        run: |
+          curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
+
+          ffmpeg -i "video.mp4" \
+            -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
+                             scale=1080:-1, \
+                             pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
+                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=140:fontsize=45:fontcolor=black" \
+            -c:a copy output.mp4
+
+          mv output.mp4 video.mp4
+
+      - name: Upload Video & ChatGPT JSON Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-edited-video
+          path: |
+            video.mp4
+            hasil_ai.json
