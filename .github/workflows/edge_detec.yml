@@ -7,6 +7,7 @@ on:
         description: 'Masukkan URL Video Media / Instagram'
         required: true
         default: ''
+
 jobs:
   process-video:
     runs-on: ubuntu-latest
@@ -25,11 +26,14 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install Python Dependencies
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libgomp1
-          pip install opencv-python-headless numpy torch torchvision easyocr
+
+      - name: Install Python Dependencies
+        run: |
+          pip install opencv-python-headless numpy easyocr
 
       - name: Install Playwright Dependencies
         run: |
@@ -40,142 +44,149 @@ jobs:
       - name: Download Video
         run: |
           curl -L -o "video.mp4" "${{ github.event.inputs.video_url }}"
+          if [ ! -f video.mp4 ]; then
+            echo "Gagal mendownload video"
+            exit 1
+          fi
 
-      - name: Run OpenCV Detection & EasyOCR
+      - name: Process Video with Python
         run: |
-          cat << 'EOF' > process.py
+          python3 << 'PYTHON_SCRIPT'
           import cv2
           import numpy as np
           import easyocr
-      
+          import os
+
           video_path = "video.mp4"
-      
+
+          # Cek apakah video ada
+          if not os.path.exists(video_path):
+              raise Exception("File video tidak ditemukan!")
+
           cap = cv2.VideoCapture(video_path)
+          if not cap.isOpened():
+              raise Exception("Tidak dapat membuka video!")
+
           fps = cap.get(cv2.CAP_PROP_FPS)
-      
-          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps*2))
+          if fps <= 0:
+              fps = 30  # Default jika tidak terbaca
+
+          # Ambil frame pada detik ke-2
+          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
           ret, frame = cap.read()
           cap.release()
-      
+
           if not ret:
-              exit(1)
-      
+              # Coba ambil frame pertama
+              cap = cv2.VideoCapture(video_path)
+              ret, frame = cap.read()
+              cap.release()
+              if not ret:
+                  raise Exception("Tidak dapat membaca frame dari video.")
+
           full_h, full_w = frame.shape[:2]
-      
+
+          # ==========================================================
+          # METODE: PEMINDAIAN MASKER WARNA UNTUK BINGKAI VIDEO
+          # ==========================================================
+
+          # 1. Ubah ke Grayscale
           gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-          blur = cv2.GaussianBlur(gray,(5,5),0)
-      
-          edges = cv2.Canny(blur,50,150)
-      
-          # Cari garis
-          lines = cv2.HoughLinesP(
-              edges,
-              rho=1,
-              theta=np.pi/180,
-              threshold=100,
-              minLineLength=int(full_w*0.35),
-              maxLineGap=30
-          )
-      
-          line_mask = np.zeros_like(gray)
-      
-          if lines is not None:
-              for line in lines:
-                  line = np.array(line).reshape(-1)
-              
-                  x1, y1, x2, y2 = line[:4]
-              
-                  cv2.line(
-                      line_mask,
-                      (int(x1), int(y1)),
-                      (int(x2), int(y2)),
-                      255,
-                      3
-                  )
-                  
-      
-          kernel = np.ones((15,15),np.uint8)
-      
-          line_mask = cv2.dilate(line_mask,kernel,2)
-          line_mask = cv2.morphologyEx(
-              line_mask,
-              cv2.MORPH_CLOSE,
-              kernel
-          )
-      
-          contours,_ = cv2.findContours(
-              line_mask,
-              cv2.RETR_EXTERNAL,
-              cv2.CHAIN_APPROX_SIMPLE
-          )
-      
-          best=None
-          best_area=0
-      
-          for cnt in contours:
-      
-              x,y,w,h=cv2.boundingRect(cnt)
-      
-              area=w*h
-      
-              ratio=w/h
-      
-              if area < full_w*full_h*0.15:
-                  continue
-      
-              # rasio video portrait
-              if ratio < 0.45 or ratio > 0.75:
-                  continue
-      
-              if area>best_area:
-                  best_area=area
-                  best=(x,y,w,h)
-      
-          if best:
-              x,y,w,h=best
+
+          # 2. Cari semua piksel yang BUKAN hitam
+          non_black_pixels = np.where(gray > 15)
+
+          if len(non_black_pixels[0]) > 0 and len(non_black_pixels[1]) > 0:
+              y_min, y_max = np.min(non_black_pixels[0]), np.max(non_black_pixels[0])
+              x_min, x_max = np.min(non_black_pixels[1]), np.max(non_black_pixels[1])
+
+              # Scan untuk mencari batas video yang sebenarnya
+              mid_y = full_h // 2
+              mid_x = full_w // 2
+
+              # Cari batas atas
+              y_top = 0
+              for r in range(mid_y, max(0, mid_y - 200), -1):
+                  if np.mean(gray[r, max(0, x_min):min(full_w, x_max)]) < 15:
+                      y_top = r
+                      break
+
+              # Cari batas bawah
+              y_bottom = full_h
+              for r in range(mid_y, min(full_h, mid_y + 200)):
+                  if np.mean(gray[r, max(0, x_min):min(full_w, x_max)]) < 15:
+                      y_bottom = r
+                      break
+
+              # Gunakan batas yang ditemukan atau batas ekstrem
+              if y_top == 0: 
+                  y_top = max(0, y_min - 5)
+              if y_bottom == full_h: 
+                  y_bottom = min(full_h, y_max + 5)
+
+              # Beri margin aman
+              y = max(0, y_top + 5)
+              h = min(full_h, y_bottom - 5) - y
+              x = max(0, x_min - 5)
+              w = min(full_w, x_max + 5) - x
+
+              # Validasi dimensi
+              if w < 100 or h < 100:
+                  x, y, w, h = 0, 0, full_w, full_h
           else:
-              x=0
-              y=0
-              w=full_w
-              h=full_h
-      
-          # Debug
-          debug=frame.copy()
-          cv2.rectangle(debug,(x,y),(x+w,y+h),(0,255,0),5)
-          cv2.imwrite("debug_crop.png",debug)
-          cv2.imwrite("debug_edges.png",edges)
-          cv2.imwrite("debug_lines.png",line_mask)
-      
-          with open("crop_params.txt","w") as f:
+              x, y, w, h = 0, 0, full_w, full_h
+
+          # Pastikan ukuran rasio masuk akal
+          if w * h < (full_w * full_h * 0.10):
+              x, y, w, h = 0, 0, full_w, full_h
+
+          # Simpan parameter crop sebagai environment variables untuk FFmpeg
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write(f"CROP_W={w}\n")
               f.write(f"CROP_H={h}\n")
               f.write(f"CROP_X={x}\n")
               f.write(f"CROP_Y={y}\n")
-      
-          if y>10:
-              text_area=frame[0:y,:]
-          else:
-              text_area=frame[0:int(full_h*0.2),:]
-      
+
+          print(f"Crop Parameters: x={x}, y={y}, w={w}, h={h}")
+
+          # ==========================================================
+          # EASYOCR (Membaca Teks di Area Hitam Atas Video)
+          # ==========================================================
+
+          detected_text = ""
           try:
-              reader=easyocr.Reader(['en'])
-              result=reader.readtext(text_area,detail=0)
-              detected_text=" ".join(result).strip()
-          except:
-              detected_text=""
-      
-          if len(detected_text)<3:
-              detected_text="Amazing video content highlights"
-      
-          with open("detected_text.txt","w",encoding="utf8") as f:
+              # Ambil area untuk OCR
+              if y > 50:
+                  text_area = frame[0:min(y, 150), :]
+              else:
+                  text_area = frame[0:int(full_h * 0.15), :]
+
+              # Resize untuk OCR lebih baik
+              if text_area.shape[0] < 30:
+                  text_area = cv2.resize(text_area, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+              reader = easyocr.Reader(['en'], gpu=False)
+              ocr_result = reader.readtext(text_area, detail=0)
+              detected_text = " ".join(ocr_result).replace("\n", " ").strip()
+              
+              print(f"OCR Result: {detected_text}")
+
+          except Exception as e:
+              print(f"OCR Error: {e}")
+              detected_text = "Amazing video content"
+
+          if len(detected_text) < 3:
+              detected_text = "Amazing video content highlights"
+
+          # Simpan teks untuk JavaScript
+          with open("detected_text.txt", "w", encoding="utf8") as f:
               f.write(detected_text)
-      
-          EOF
-      
-          python process.py
-          cat crop_params.txt >> $GITHUB_ENV
-          
-      - name: Run Playwright ChatGPT Script
+
+          print(f"Final OCR Text: {detected_text}")
+
+          PYTHON_SCRIPT
+
+      - name: Generate Text Overlay with AI
         run: |
           cat << 'EOF' > script.js
           const { chromium } = require('playwright-extra');
@@ -185,6 +196,7 @@ jobs:
           chromium.use(stealth);
 
           function wrapText(text, maxChars = 40) {
+            if (!text) return "Amazing Content";
             const words = text.split(' ');
             let lines = [];
             let currentLine = '';
@@ -200,82 +212,89 @@ jobs:
             if (currentLine.trim()) {
               lines.push(currentLine.trim());
             }
-            return lines.join('\n');
+            return lines.join('\n') || "Amazing Content";
           }
 
           (async () => {
             let detectedText = "Amazing video content highlights";
             if (fs.existsSync('detected_text.txt')) {
                 detectedText = fs.readFileSync('detected_text.txt', 'utf8').trim();
+                if (!detectedText) detectedText = "Amazing video content highlights";
             }
 
-            // Memaksa format output JSON yang sangat ketat di prompt
-            const prompt = `Convert the following text into a short video hook that is controversial or funny: "${detectedText}"
-            Respond ONLY with a raw JSON array containing exactly 2 strings, example: ["Hook 1", "Hook 2"]. Do not include markdown blocks, do not include "json" formatting text, just the raw array.`;
+            const prompt = `Create 2 engaging, controversial or funny video hooks based on this text: "${detectedText}"
+            Respond ONLY with a JSON array containing exactly 2 strings. Example: ["Hook 1", "Hook 2"]
+            Do not include any other text or formatting.`;
 
-            const browser = await chromium.launch({ headless: true });
+            const browser = await chromium.launch({ 
+              headless: true,
+              args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            
             const context = await browser.newContext({
               userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
               viewport: { width: 1280, height: 720 }
             });
+            
             const page = await context.newPage();
 
             try {
-              await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
+              await page.goto('https://chatgpt.com/', { 
+                waitUntil: 'networkidle',
+                timeout: 30000 
+              });
 
-              // Selector Input Fleksibel
-              const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"], [contenteditable="true"]';
-              await page.waitForSelector(inputSelector, { timeout: 30000 });
+              // Wait for input and click to focus
+              await page.waitForSelector('div#prompt-textarea, textarea[placeholder*="Message"], [contenteditable="true"]', { 
+                timeout: 30000 
+              });
               
-              await page.fill(inputSelector, prompt);
-              await page.press(inputSelector, 'Enter');
+              // Type prompt
+              await page.click('div#prompt-textarea');
+              await page.type('div#prompt-textarea', prompt);
+              await page.keyboard.press('Enter');
               
-              // Tunggu respon selesai di-generate secara natural
-              await page.waitForTimeout(15000);
+              // Wait for response
+              await page.waitForTimeout(20000);
 
-              // Selector Asisten Diperbarui agar Mendukung Struktur DOM Baru ChatGPT
+              // Get response
               const responseSelector = 'article [data-message-author-role="assistant"], main div.markdown, .agent-turn';
-              await page.waitForSelector(responseSelector, { timeout: 25000 });
+              await page.waitForSelector(responseSelector, { timeout: 30000 });
               
               const responses = await page.locator(responseSelector).all();
+              let lastResponseText = "Amazing video content";
+              
               if (responses.length > 0) {
-                let lastResponseText = await responses[responses.length - 1].innerText();
+                lastResponseText = await responses[responses.length - 1].innerText();
                 
-                // Membersihkan sisa-sisa blok kode jika ChatGPT melanggar aturan prompt
-                if (lastResponseText.includes('```')) {
-                    const parts = lastResponseText.split('```');
-                    lastResponseText = parts[1];
-                    if (lastResponseText.startsWith('json')) {
-                        lastResponseText = lastResponseText.substring(4);
-                    }
-                }
-                lastResponseText = lastResponseText.trim();
-
+                // Clean up response
+                lastResponseText = lastResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
+                
                 try {
-                    const parsedJson = JSON.parse(lastResponseText);
-                    fs.writeFileSync('hasil_ai.json', JSON.stringify(parsedJson, null, 2), 'utf8');
-                    
-                    let textOverlay = detectedText;
-                    if (Array.isArray(parsedJson)) {
-                        textOverlay = parsedJson[0] || detectedText;
-                    } else if (typeof parsedJson === 'object') {
-                        textOverlay = Object.values(parsedJson)[0] || detectedText;
-                    }
-                    
-                    fs.writeFileSync('text_overlay.txt', wrapText(textOverlay), 'utf8');
+                  const parsedJson = JSON.parse(lastResponseText);
+                  fs.writeFileSync('hasil_ai.json', JSON.stringify(parsedJson, null, 2), 'utf8');
+                  
+                  let textOverlay = detectedText;
+                  if (Array.isArray(parsedJson) && parsedJson.length > 0) {
+                    textOverlay = parsedJson[0] || detectedText;
+                  } else if (typeof parsedJson === 'object' && parsedJson !== null) {
+                    textOverlay = Object.values(parsedJson)[0] || detectedText;
+                  }
+                  
+                  fs.writeFileSync('text_overlay.txt', wrapText(textOverlay), 'utf8');
+                  console.log('AI generated hooks successfully');
+                  
                 } catch (e) {
-                    // Jika parsing JSON gagal, buat format manual teratur dari teks mentah
-                    const cleanText = lastResponseText.replace(/[\[\]"]/g, '').split('\n')[0] || detectedText;
-                    fs.writeFileSync('hasil_ai.json', JSON.stringify([cleanText, cleanText], null, 2));
-                    fs.writeFileSync('text_overlay.txt', wrapText(cleanText), 'utf8');
+                  console.log('Failed to parse JSON, using default text');
+                  fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText], null, 2));
+                  fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
                 }
-
               } else {
-                throw new Error("Response element not found");
+                throw new Error("No response found");
               }
 
             } catch (error) {
-              // Jika automation diblokir/gagal, gunakan teks deteksi asli (bukan teks default kaku)
+              console.log('ChatGPT automation failed, using default text');
               fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText], null, 2));
               fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
             } finally {
@@ -287,21 +306,41 @@ jobs:
 
       - name: Process Video with FFmpeg
         run: |
-          curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
+          # Download font
+          curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf" || true
 
+          # Create font directory
+          mkdir -p ~/.fonts
+          if [ -f Arial.ttf ]; then
+            mv Arial.ttf ~/.fonts/
+          fi
+
+          # Get crop parameters
+          CROP_W=${CROP_W:-1080}
+          CROP_H=${CROP_H:-1920}
+          CROP_X=${CROP_X:-0}
+          CROP_Y=${CROP_Y:-0}
+
+          # Check if text overlay exists
+          if [ ! -f text_overlay.txt ]; then
+            echo "Amazing Content" > text_overlay.txt
+          fi
+
+          # Process video with FFmpeg
           ffmpeg -i "video.mp4" \
-            -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
+            -filter_complex "[0:v]crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y}, \
                              scale=1080:-1, \
-                             pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=140:fontsize=45:fontcolor=black" \
-            -c:a copy output.mp4
+                             pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black, \
+                             drawtext=fontfile=~/.fonts/Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=140:fontsize=45:fontcolor=white:shadowx=2:shadowy=2:shadowcolor=black" \
+            -c:a copy -y output.mp4
 
           mv output.mp4 video.mp4
 
-      - name: Upload Video & ChatGPT JSON Artifact
+      - name: Upload Final Video
         uses: actions/upload-artifact@v4
         with:
           name: final-edited-video
           path: |
             video.mp4
             hasil_ai.json
+            text_overlay.txt
