@@ -1,4 +1,4 @@
-name: Auto Crop, OCR, and Playwright ChatGPT JSON
+name: Auto IG
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
         run: |
           curl -L -o "video.mp4" "${{ github.event.inputs.video_url }}"
 
-      - name: Run OpenCV Multi-Frame Analysis & EasyOCR
+      - name: Run OpenCV Detection & EasyOCR
         run: |
           cat << 'EOF' > process.py
           import cv2
@@ -52,67 +52,40 @@ jobs:
           video_path = "video.mp4"
           cap = cv2.VideoCapture(video_path)
           fps = cap.get(cv2.CAP_PROP_FPS)
-          total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-          
-          if total_frames <= 0 or fps <= 0:
-              print("Gagal membaca metadata video.")
-              exit(1)
-
-          sample_seconds = [2, 4, 6, 8]
-          frames_to_analyze = []
-
-          for sec in sample_seconds:
-              frame_pos = int(fps * sec)
-              if frame_pos < total_frames:
-                  cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
-                  ret, frame = cap.read()
-                  if ret:
-                      frames_to_analyze.append(frame)
-          
-          if not frames_to_analyze:
-              cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-              ret, frame = cap.read()
-              if ret:
-                  frames_to_analyze.append(frame)
-
+          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
+          ret, frame = cap.read()
           cap.release()
 
-          if not frames_to_analyze:
-              print("Tidak ada frame yang bisa dianalisis.")
+          if not ret:
               exit(1)
 
-          full_h, full_w = frames_to_analyze[0].shape[0], frames_to_analyze[0].shape[1]
+          gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+          _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+          contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-          combined_gray = np.zeros((full_h, full_w), dtype=np.uint8)
-          for f in frames_to_analyze:
-              gray_f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-              combined_gray = cv2.max(combined_gray, gray_f)
+          full_h, full_w = frame.shape[0], frame.shape[1]
 
-          row_sums = np.sum(combined_gray > 15, axis=1)
-          col_sums = np.sum(combined_gray > 15, axis=0)
-          
-          nonzero_rows = np.where(row_sums > 0)[0]
-          nonzero_cols = np.where(col_sums > 0)[0]
-
-          if len(nonzero_rows) > 0 and len(nonzero_cols) > 0:
-              y_start, y_end = nonzero_rows[0], nonzero_rows[-1]
-              x_start, x_end = nonzero_cols[0], nonzero_cols[-1]
+          if contours:
+              largest_contour = max(contours, key=cv2.contourArea)
+              x, y, w, h = cv2.boundingRect(largest_contour)
               
-              crop_w = x_end - x_start
-              crop_h = y_end - y_start
-              crop_x = x_start
-              crop_y = y_start
+              with open('crop_params.txt', 'w') as f:
+                  f.write(f"CROP_W={w}\n")
+                  f.write(f"CROP_H={h}\n")
+                  f.write(f"CROP_X={x}\n")
+                  f.write(f"CROP_Y={y}\n")
+              
+              if y > 10:
+                  text_area = frame[0:y, 0:full_w]
+              else:
+                  text_area = frame[0:int(full_h*0.2), 0:full_w]
           else:
-              crop_w, crop_h, crop_x, crop_y = full_w, full_h, 0, 0
-
-          with open('crop_params.txt', 'w') as f:
-              f.write(f"CROP_W={crop_w}\n")
-              f.write(f"CROP_H={crop_h}\n")
-              f.write(f"CROP_X={crop_x}\n")
-              f.write(f"CROP_Y={crop_y}\n")
-
-          ocr_y_limit = crop_y if crop_y > 40 else int(full_h * 0.25)
-          text_area = combined_gray[0:ocr_y_limit, 0:full_w]
+              with open('crop_params.txt', 'w') as f:
+                  f.write(f"CROP_W={full_w}\n")
+                  f.write(f"CROP_H={full_h}\n")
+                  f.write(f"CROP_X=0\n")
+                  f.write(f"CROP_Y=0\n")
+              text_area = frame[0:int(full_h*0.2), 0:full_w]
 
           try:
               reader = easyocr.Reader(['en'])
@@ -121,8 +94,9 @@ jobs:
           except Exception:
               detected_text = ""
 
+          # Jika EasyOCR gagal total, pakai teks contoh pendeteksi alternatif agar tidak kosong
           if not detected_text or len(detected_text) < 3:
-              detected_text = "Life was good when this song came out"
+              detected_text = "Amazing video content highlights"
               
           with open('detected_text.txt', 'w', encoding='utf-8') as f:
               f.write(detected_text)
@@ -139,7 +113,7 @@ jobs:
 
           chromium.use(stealth);
 
-          function wrapText(text, maxChars = 32) {
+          function wrapText(text, maxChars = 35) {
             const words = text.split(' ');
             let lines = [];
             let currentLine = '';
@@ -159,11 +133,12 @@ jobs:
           }
 
           (async () => {
-            let detectedText = "Life was good when this song came out";
+            let detectedText = "Amazing video content highlights";
             if (fs.existsSync('detected_text.txt')) {
                 detectedText = fs.readFileSync('detected_text.txt', 'utf8').trim();
             }
 
+            // Memaksa format output JSON yang sangat ketat di prompt
             const prompt = `Convert the following text into a short video hook that is controversial or funny: "${detectedText}"
             Respond ONLY with a raw JSON array containing exactly 2 strings, example: ["Hook 1", "Hook 2"]. Do not include markdown blocks, do not include "json" formatting text, just the raw array.`;
 
@@ -177,14 +152,17 @@ jobs:
             try {
               await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
 
+              // Selector Input Fleksibel
               const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"], [contenteditable="true"]';
               await page.waitForSelector(inputSelector, { timeout: 30000 });
               
               await page.fill(inputSelector, prompt);
               await page.press(inputSelector, 'Enter');
               
+              // Tunggu respon selesai di-generate secara natural
               await page.waitForTimeout(15000);
 
+              // Selector Asisten Diperbarui agar Mendukung Struktur DOM Baru ChatGPT
               const responseSelector = 'article [data-message-author-role="assistant"], main div.markdown, .agent-turn';
               await page.waitForSelector(responseSelector, { timeout: 25000 });
               
@@ -192,6 +170,7 @@ jobs:
               if (responses.length > 0) {
                 let lastResponseText = await responses[responses.length - 1].innerText();
                 
+                // Membersihkan sisa-sisa blok kode jika ChatGPT melanggar aturan prompt
                 if (lastResponseText.includes('```')) {
                     const parts = lastResponseText.split('```');
                     lastResponseText = parts[1];
@@ -214,6 +193,7 @@ jobs:
                     
                     fs.writeFileSync('text_overlay.txt', wrapText(textOverlay), 'utf8');
                 } catch (e) {
+                    // Jika parsing JSON gagal, buat format manual teratur dari teks mentah
                     const cleanText = lastResponseText.replace(/[\[\]"]/g, '').split('\n')[0] || detectedText;
                     fs.writeFileSync('hasil_ai.json', JSON.stringify([cleanText, cleanText], null, 2));
                     fs.writeFileSync('text_overlay.txt', wrapText(cleanText), 'utf8');
@@ -224,6 +204,7 @@ jobs:
               }
 
             } catch (error) {
+              // Jika automation diblokir/gagal, gunakan teks deteksi asli (bukan teks default kaku)
               fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText], null, 2));
               fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
             } finally {
@@ -237,13 +218,11 @@ jobs:
         run: |
           curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
 
-          # Memperbaiki logika scale dan pad menggunakan force_original_aspect_ratio=decrease
-          # Hal ini menjamin dimensi video setelah di-scale TIDAK AKAN PERNAH melebihi kanvas 1080x1920
           ffmpeg -i "video.mp4" \
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
-                             scale=1080:1920:force_original_aspect_ratio=decrease, \
+                             scale=1080:-1, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=180:fontsize=45:fontcolor=black" \
+                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=150:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
 
           mv output.mp4 video.mp4
