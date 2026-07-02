@@ -6,8 +6,7 @@ on:
       video_url:
         description: 'Masukkan URL Video Media / Instagram'
         required: true
-        default: 'https://media.sssinstagram.com/get?__sig=pZS5-UegitrS35XLPhv0Tg&__expires=1783004335&uri=https%3A%2F%2Fscontent-iad6-1.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQP1758ku0l62_NnbkszMcwrmPvmI5KdG9GlSDOWq4tGUToaxArF5vtNTQMOZVrUnpKhHj2KrxdH_tQjhcBGG6fXZ0fyEBYYQDsZoWI.mp4%3F_nc_cat%3D102%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad6-1.cdninstagram.com%26_nc_ohc%3DOUirmCT5IFkQ7kNvwHVaJSe%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTQ5MzY2NjE0NDYxMjMsImFzc2V0%252F'
-
+        default: ''
 jobs:
   process-video:
     runs-on: ubuntu-latest
@@ -113,7 +112,7 @@ jobs:
 
           chromium.use(stealth);
 
-          function wrapText(text, maxChars = 35) {
+          function wrapText(text, maxChars = 40) {
             const words = text.split(' ');
             let lines = [];
             let currentLine = '';
@@ -222,7 +221,7 @@ jobs:
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=150:fontsize=45:fontcolor=black" \
+                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=120:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
 
           mv output.mp4 video.mp4
