@@ -42,7 +42,7 @@ jobs:
         run: |
           curl -L -o "video.mp4" "${{ github.event.inputs.video_url }}"
 
-      - name: Run OpenCV Detection & EasyOCR
+      - name: Run OpenCV Multi-Frame Analysis & EasyOCR
         run: |
           cat << 'EOF' > process.py
           import cv2
@@ -52,50 +52,84 @@ jobs:
           video_path = "video.mp4"
           cap = cv2.VideoCapture(video_path)
           fps = cap.get(cv2.CAP_PROP_FPS)
-          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
-          ret, frame = cap.read()
-          cap.release()
-
-          if not ret:
+          total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+          
+          if total_frames <= 0 or fps <= 0:
+              print("Gagal membaca metadata video.")
               exit(1)
 
-          gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-          _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
-          contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+          # Menentukan 4 titik deteksi frame (detik ke-2, 4, 6, 8)
+          sample_seconds = [2, 4, 6, 8]
+          frames_to_analyze = []
 
-          full_h, full_w = frame.shape[0], frame.shape[1]
+          for sec in sample_seconds:
+              frame_pos = int(fps * sec)
+              if frame_pos < total_frames:
+                  cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
+                  ret, frame = cap.read()
+                  if ret:
+                      frames_to_analyze.append(frame)
+          
+          # Jika video sangat pendek, ambil saja frame pertama sebagai cadangan terakhir
+          if not frames_to_analyze:
+              cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+              ret, frame = cap.read()
+              if ret:
+                  frames_to_analyze.append(frame)
 
-          if contours:
-              largest_contour = max(contours, key=cv2.contourArea)
-              x, y, w, h = cv2.boundingRect(largest_contour)
+          cap.release()
+
+          if not frames_to_analyze:
+              print("Tidak ada frame yang bisa dianalisis.")
+              exit(1)
+
+          full_h, full_w = frames_to_analyze[0].shape[0], frames_to_analyze[0].shape[1]
+
+          # Satukan kecerahan dari semua frame yang dikumpulkan (menghindari jebakan frame hitam murni)
+          combined_gray = np.zeros((full_h, full_w), dtype=np.uint8)
+          for f in frames_to_analyze:
+              gray_f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+              combined_gray = cv2.max(combined_gray, gray_f)
+
+          # Cari baris dan kolom aktif yang memiliki konten warna (bukan hitam pekat / nilai > 15)
+          row_sums = np.sum(combined_gray > 15, axis=1)
+          col_sums = np.sum(combined_gray > 15, axis=0)
+          
+          nonzero_rows = np.where(row_sums > 0)[0]
+          nonzero_cols = np.where(col_sums > 0)[0]
+
+          if len(nonzero_rows) > 0 and len(nonzero_cols) > 0:
+              y_start, y_end = nonzero_rows[0], nonzero_rows[-1]
+              x_start, x_end = nonzero_cols[0], nonzero_cols[-1]
               
-              with open('crop_params.txt', 'w') as f:
-                  f.write(f"CROP_W={w}\n")
-                  f.write(f"CROP_H={h}\n")
-                  f.write(f"CROP_X={x}\n")
-                  f.write(f"CROP_Y={y}\n")
-              
-              if y > 10:
-                  text_area = frame[0:y, 0:full_w]
-              else:
-                  text_area = frame[0:int(full_h*0.2), 0:full_w]
+              crop_w = x_end - x_start
+              crop_h = y_end - y_start
+              crop_x = x_start
+              crop_y = y_start
           else:
-              with open('crop_params.txt', 'w') as f:
-                  f.write(f"CROP_W={full_w}\n")
-                  f.write(f"CROP_H={full_h}\n")
-                  f.write(f"CROP_X=0\n")
-                  f.write(f"CROP_Y=0\n")
-              text_area = frame[0:int(full_h*0.2), 0:full_w]
+              crop_w, crop_h, crop_x, crop_y = full_w, full_h, 0, 0
+
+          # Tulis parameter untuk kebutuhan FFmpeg Crop
+          with open('crop_params.txt', 'w') as f:
+              f.write(f"CROP_W={crop_w}\n")
+              f.write(f"CROP_H={crop_h}\n")
+              f.write(f"CROP_X={crop_x}\n")
+              f.write(f"CROP_Y={crop_y}\n")
+
+          # Untuk OCR area teks hitam atas, kita pakai data gabungan (combined_gray) 
+          # agar tulisan putihnya terkumpul sempurna meskipun di beberapa frame ada kedipan teks
+          ocr_y_limit = crop_y if crop_y > 40 else int(full_h * 0.25)
+          text_area = combined_gray[0:ocr_y_limit, 0:full_w]
 
           try:
               reader = easyocr.Reader(['en'])
               ocr_results = reader.readtext(text_area, detail=0)
               detected_text = " ".join(ocr_results).replace("\n", " ").strip()
           except Exception:
-              detected_text = "This man is the literal living definition of vibing"
+              detected_text = ""
 
-          if not detected_text:
-              detected_text = "This man is the literal living definition of vibing"
+          if not detected_text or len(detected_text) < 3:
+              detected_text = "Life was good when this song came out"
               
           with open('detected_text.txt', 'w', encoding='utf-8') as f:
               f.write(detected_text)
@@ -112,7 +146,7 @@ jobs:
 
           chromium.use(stealth);
 
-          function wrapText(text, maxChars = 35) {
+          function wrapText(text, maxChars = 32) {
             const words = text.split(' ');
             let lines = [];
             let currentLine = '';
@@ -132,14 +166,13 @@ jobs:
           }
 
           (async () => {
-            let detectedText = "This man is the literal living definition of vibing";
+            let detectedText = "Life was good when this song came out";
             if (fs.existsSync('detected_text.txt')) {
                 detectedText = fs.readFileSync('detected_text.txt', 'utf8').trim();
             }
 
-            const prompt = `Convert the following text into a short video hook that is controversial or funny: ${detectedText}
-
-            give 2 versions only without any addition json response like ["version 1", "version 2"]`;
+            const prompt = `Convert the following text into a short video hook that is controversial or funny: "${detectedText}"
+            Respond ONLY with a raw JSON array containing exactly 2 strings, example: ["Hook 1", "Hook 2"]. Do not include markdown blocks, do not include "json" formatting text, just the raw array.`;
 
             const browser = await chromium.launch({ headless: true });
             const context = await browser.newContext({
@@ -151,23 +184,24 @@ jobs:
             try {
               await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
 
-              const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"]';
+              const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"], [contenteditable="true"]';
               await page.waitForSelector(inputSelector, { timeout: 30000 });
               
               await page.fill(inputSelector, prompt);
               await page.press(inputSelector, 'Enter');
               
-              await page.waitForTimeout(12000);
+              await page.waitForTimeout(15000);
 
-              const responseSelector = 'main div.markdown, div[data-message-author-role="assistant"]';
-              await page.waitForSelector(responseSelector, { timeout: 20000 });
+              const responseSelector = 'article [data-message-author-role="assistant"], main div.markdown, .agent-turn';
+              await page.waitForSelector(responseSelector, { timeout: 25000 });
               
               const responses = await page.locator(responseSelector).all();
               if (responses.length > 0) {
                 let lastResponseText = await responses[responses.length - 1].innerText();
                 
                 if (lastResponseText.includes('```')) {
-                    lastResponseText = lastResponseText.split('```')[1];
+                    const parts = lastResponseText.split('```');
+                    lastResponseText = parts[1];
                     if (lastResponseText.startsWith('json')) {
                         lastResponseText = lastResponseText.substring(4);
                     }
@@ -178,25 +212,27 @@ jobs:
                     const parsedJson = JSON.parse(lastResponseText);
                     fs.writeFileSync('hasil_ai.json', JSON.stringify(parsedJson, null, 2), 'utf8');
                     
-                    let textOverlay = "Default Hook";
+                    let textOverlay = detectedText;
                     if (Array.isArray(parsedJson)) {
-                        textOverlay = parsedJson[0] || "Default Hook";
+                        textOverlay = parsedJson[0] || detectedText;
                     } else if (typeof parsedJson === 'object') {
-                        textOverlay = Object.values(parsedJson)[0] || "Default Hook";
+                        textOverlay = Object.values(parsedJson)[0] || detectedText;
                     }
                     
                     fs.writeFileSync('text_overlay.txt', wrapText(textOverlay), 'utf8');
                 } catch (e) {
-                    fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText]));
-                    fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
+                    const cleanText = lastResponseText.replace(/[\[\]"]/g, '').split('\n')[0] || detectedText;
+                    fs.writeFileSync('hasil_ai.json', JSON.stringify([cleanText, cleanText], null, 2));
+                    fs.writeFileSync('text_overlay.txt', wrapText(cleanText), 'utf8');
                 }
 
               } else {
-                exit(1);
+                throw new Error("Response element not found");
               }
 
             } catch (error) {
-              exit(1);
+              fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText], null, 2));
+              fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
             } finally {
               await browser.close();
             }
@@ -212,7 +248,7 @@ jobs:
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=150:fontsize=45:fontcolor=black" \
+                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=180:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
 
           mv output.mp4 video.mp4
