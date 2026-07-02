@@ -232,4 +232,4 @@ jobs:
           name: final-edited-video
           path: |
             video.mp4
-            hasil_ai.txt
+            hasil_ai.json
