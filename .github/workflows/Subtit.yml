@@ -17,10 +17,12 @@ jobs:
         python-version: '3.10'
 
     - name: Update System & Install FFmpeg
-      run: sudo apt update && sudo apt install -y ffmpeg
+      run: |
+        sudo apt update
+        sudo apt install -y ffmpeg
 
-    - name: Install Subtitle Generator AI
-      run: pip install git+https://github.com
+    - name: Install Subtitle Generator Package
+      run: pip install auto-subtitle
 
     - name: Download Video and Process Subtitle
       run: |
@@ -30,7 +32,7 @@ jobs:
         # Mengunduh video langsung dari link Pinterest menggunakan curl
         curl -L "https://pinimg.com" -o input_video/pinterest_video.mp4
         
-        # Memanggil perintah menggunakan modul python secara langsung untuk menghindari eror PATH
+        # Eksekusi langsung melalui modul python terinstal untuk hasil yang stabil
         python -m auto_subtitle.main input_video/pinterest_video.mp4 --model small --output_dir output_subtitles/
 
     - name: Upload SRT Subtitles Artifact
