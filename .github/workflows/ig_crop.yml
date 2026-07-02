@@ -48,7 +48,6 @@ jobs:
               print("Gagal membaca video")
               exit(1)
 
-          # 1. Deteksi Batas Crop Menggunakan OpenCV
           gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
           _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
           contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -58,26 +57,23 @@ jobs:
               x, y, w, h = cv2.boundingRect(largest_contour)
               full_w = frame.shape[1]
               
-              # Simpan parameter crop untuk FFmpeg
+              # !!! DI SINI PERUBAHANNYA !!!
+              # Menggunakan nilai w dan x dinamis untuk memotong margin kanan-kiri
               with open('crop_params.txt', 'w') as f:
-                  f.write(f"CROP_W={full_w}\n")
+                  f.write(f"CROP_W={w}\n")
                   f.write(f"CROP_H={h}\n")
-                  f.write(f"CROP_X=0\n")
+                  f.write(f"CROP_X={x}\n")
                   f.write(f"CROP_Y={y}\n")
               
-              # 2. Ambil Bagian Teks Atas (dari koordinat 0 sampai titik Y video dimulai)
-              # Diberi sedikit padding agar teks tidak terpotong
+              # Ambil area teks bagian atas untuk dibaca EasyOCR
               text_area = frame[0:y, 0:full_w]
               
-              # 3. Jalankan EasyOCR untuk Membaca Teks
-              reader = easyocr.Reader(['en']) # Atur ke ['id','en'] jika ada teks bahasa Indonesia
+              reader = easyocr.Reader(['en'])
               ocr_results = reader.readtext(text_area, detail=0)
               
-              # Gabungkan hasil teks menjadi satu baris kalimat tunggal
               detected_text = " ".join(ocr_results).replace("\n", " ").strip()
               print(f"Detected Text: {detected_text}")
               
-              # Simpan teks ke file penampung agar bisa dioper ke GitHub Actions Env
               with open('detected_text.txt', 'w') as f:
                   f.write(f"DETECTED_TEXT={detected_text}\n")
           else:
@@ -86,7 +82,6 @@ jobs:
           EOF
           python process.py
           
-          # Masukkan semua variabel ke GitHub Environment
           cat crop_params.txt >> $GITHUB_ENV
           cat detected_text.txt >> $GITHUB_ENV
 
@@ -94,8 +89,7 @@ jobs:
         run: |
           curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
 
-          # Di sini teks 'this is textarea text title' bisa Anda ganti secara dinamis 
-          # menggunakan output teks baru dari AI Anda nanti.
+          # FFmpeg memotong 4 sisi secara pas -> ditarik melar memenuhi lebar 1080 -> sisa atas-bawah diberi warna putih
           ffmpeg -i "video.mp4" \
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
