@@ -1,0 +1,51 @@
+name: Auto Generate Subtitle from Video URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'URL video yang akan diproses'
+        required: true
+        default: 'https://v1.pinimg.com/videos/mc/720p/2f/42/16/2f42160e604fb128db5712d46e2a7a21.mp4'
+      whisper_model:
+        description: 'Model Whisper (tiny/base/small/medium)'
+        required: false
+        default: 'small'
+
+jobs:
+  generate-subtitle:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install OpenAI Whisper
+        run: |
+          pip install git+https://github.com/openai/whisper.git
+
+      - name: Download video
+        run: |
+          curl -L "${{ github.event.inputs.video_url }}" -o video.mp4
+
+      - name: Generate subtitle with Whisper
+        run: |
+          whisper video.mp4 \
+            --model ${{ github.event.inputs.whisper_model }} \
+            --language Indonesian \
+            --output_format srt \
+            --output_dir .
+
+      - name: Upload subtitle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-srt
+          path: "*.srt"
