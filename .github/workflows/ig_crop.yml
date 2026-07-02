@@ -1,4 +1,4 @@
-name: Auto Crop Full, Scale, and OCR Video
+name: Auto Crop, OCR, and Playwright ChatGPT JSON
 
 on:
   workflow_dispatch:
@@ -16,35 +16,42 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Python Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libgomp1
           pip install opencv-python-headless numpy torch torchvision easyocr
 
+      - name: Install Playwright Dependencies
+        run: |
+          npm init -y
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+          npx playwright install chromium --with-deps
+
       - name: Download Video
         run: |
-          curl -L -o "video.mp4" "https://media.sssinstagram.com/get?__sig=GL7sK7_ues-8JiohCfcXyg&__expires=1783008769&uri=https%3A%2F%2Fscontent-iad6-1.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQP1758ku0l62_NnbkszMcwrmPvmI5KdG9GlSDOWq4tGUToaxArF5vtNTQMOZVrUnpKhHj2KrxdH_tQjhcBGG6fXZ0fyEBYYQDsZoWI.mp4%3F_nc_cat%3D102%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad6-1.cdninstagram.com%26_nc_ohc%3DOUirmCT5IFkQ7kNvwHVaJSe%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTQ5MzY2NjE0NDYxMjMsImFzc2V0X2FnZV9kYXlzIjo2NywidmlfdXNlY2FzZV9pZCI6MTAwOTksImR1cmF0aW9uX3MiOjQ3LCJ1cmxnZW5fc291cmNlIjoid3d3In0%253D%26ccb%3D17-1%26vs%3Da7f734514ef8ada4%26_nc_vs%3DHBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC82MTQzQkYzOURCMEU4Qjc0MEFFRjIxQUE4NTNCOUM5OV92aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYUWlnX3hwdl9wbGFjZW1lbnRfcGVybWFuZW50X3YyLzRFNEMxMDRDRjMyNEIzMEI5NjJBNkYyMDE4NTFGNEJDX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbWt97vs9bJPxUCKAJDMywXQEfAAAAAAAAYEmRhc2hfYmFzZWxpbmVfMV92MREAdf4HZeadAQA%26_nc_gid%3DXcanDN3GcCkTy9f-AaPwuA%26_nc_ss%3D7839b%26_nc_zt%3D28%26oh%3D00_AQCD4h0FIvbqRSrveo1YWjLYMGN_CFO2YJDBFNMRcXdxlA%26oe%3D6A484803%26dl%3D1&filename=The%20legendary%20energy%20of%20Jack%20Black%20captures%20the%20raw%20essence%20of%20a%20high-energy%20journey%20through%20mus.mp4&ua=-&referer=https%3A%2F%2Fwww.instagram.com%2F"
-          
+          curl -L -o "video.mp4" "https://media.sssinstagram.com/get?__sig=2NGBkq0swseabxXW5Gf9EQ&__expires=1783012894&uri=https%3A%2F%2Fscontent-iad3-2.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQNXHt4yz_2dyIaxSLF_aHe8CpgOK_-uC9qpsPF34ZvaPCeYSjOQ07-BWWEtE33MXep9S3QuxrONrg2GYYdzYs8W6_J0kDiltzgHOJ8.mp4%3F_nc_cat%3D103%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad3-2.cdninstagram.com%26_nc_ohc%3DG-96LEXOe4EQ7kNvwEw8NLy%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTA1ODUzMjA0NDYxMjMsImFzc2V0X2FnZV9kYXlzIjo5NywidmlfdXNlY2FzZV9pZCI6MTAwOTksImR1cmF0aW9uX3MiOjExNCwidXJsZ2VuX3NvdXJjZSI6Ind3dyJ9%26ccb%3D17-1%26vs%3D1c05e8b537062682%26_nc_vs%3DHBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC9FQzQzMzhGRjlFMURCQjE4RThGNjMwN0JFMjE3QUZBN192aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYUWlnX3hwdl9wbGFjZW1lbnRfcGVybWFuZW50X3YyLzI5NEE4NjJCNUVGQUI3Nzg4MkU5QkYwQTcyMzFBQjhBX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbW4srtj9nHPxUCKAJDMywXQFyO6XjU_fQYEmRhc2hfYmFzZWxpbmVfMV92MREAdf4HZeadAQA%26_nc_gid%3DstRiPfe5J1tYNk2Ys0ITXQ%26_nc_ss%3D7839b%26_nc_zt%3D28%26oh%3D00_AQChoHQyhnKPVo-SMUwi7R7ML4brXKRsxP2PIqstKw6eyg%26oe%3D6A4877F8%26dl%3D1&filename=In%202022%2C%20an%2011-year-old%20singer%20from%20the%20Czech%20Republic%20traveled%20to%20Germany%20for%20The%20Voice%20Kids%2C%20d.mp4&ua=-&referer=https%3A%2F%2Fwww.instagram.com%2F"
+
       - name: Run OpenCV Detection & EasyOCR
-        id: process_media
         run: |
           cat << 'EOF' > process.py
           import cv2
           import numpy as np
           import easyocr
-          import os
 
           video_path = "video.mp4"
           cap = cv2.VideoCapture(video_path)
-
           fps = cap.get(cv2.CAP_PROP_FPS)
           cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
           ret, frame = cap.read()
           cap.release()
 
           if not ret:
-              print("Gagal membaca video")
               exit(1)
 
           gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -54,7 +61,6 @@ jobs:
           if contours:
               largest_contour = max(contours, key=cv2.contourArea)
               x, y, w, h = cv2.boundingRect(largest_contour)
-              full_w = frame.shape[1]
               
               with open('crop_params.txt', 'w') as f:
                   f.write(f"CROP_W={w}\n")
@@ -62,28 +68,101 @@ jobs:
                   f.write(f"CROP_X={x}\n")
                   f.write(f"CROP_Y={y}\n")
               
-              text_area = frame[0:y, 0:full_w]
-              
+              text_area = frame[0:y, 0:frame.shape[1]]
               reader = easyocr.Reader(['en'])
               ocr_results = reader.readtext(text_area, detail=0)
-              
               detected_text = " ".join(ocr_results).replace("\n", " ").strip()
-              print(f"Detected Text: {detected_text}")
               
-              with open('detected_text.txt', 'w') as f:
-                  f.write(f"DETECTED_TEXT={detected_text}\n")
-                  
-              # PERUBAHAN: Membuat file khusus hasil_ocr.txt murni teks untuk artifact
-              with open('hasil_ocr.txt', 'w') as f:
+              with open('detected_text.txt', 'w', encoding='utf-8') as f:
                   f.write(detected_text)
           else:
-              print("Kontur tidak ditemukan")
               exit(1)
           EOF
           python process.py
-          
           cat crop_params.txt >> $GITHUB_ENV
-          cat detected_text.txt >> $GITHUB_ENV
+
+      - name: Run Playwright ChatGPT Script
+        run: |
+          cat << 'EOF' > script.js
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+          const fs = require('fs');
+
+          chromium.use(stealth);
+
+          (async () => {
+            let detectedText = "This man is the literal living definition of vibing";
+            if (fs.existsSync('detected_text.txt')) {
+                detectedText = fs.readFileSync('detected_text.txt', 'utf8').trim();
+            }
+
+            const prompt = `Convert the following text into a short video hook that is controversial or funny: ${detectedText}
+
+            give 2 versions only without any addition json response like ["version 1", "version 2"]`;
+
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              viewport: { width: 1280, height: 720 }
+            });
+            const page = await context.newPage();
+
+            try {
+              await page.goto('https://chatgpt.com/', { waitUntil: 'networkidle' });
+
+              const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"]';
+              await page.waitForSelector(inputSelector, { timeout: 30000 });
+              
+              await page.fill(inputSelector, prompt);
+              await page.press(inputSelector, 'Enter');
+              
+              await page.waitForTimeout(12000);
+
+              const responseSelector = 'main div.markdown, div[data-message-author-role="assistant"]';
+              await page.waitForSelector(responseSelector, { timeout: 20000 });
+              
+              const responses = await page.locator(responseSelector).all();
+              if (responses.length > 0) {
+                let lastResponseText = await responses[responses.length - 1].innerText();
+                
+                if (lastResponseText.includes('```')) {
+                    lastResponseText = lastResponseText.split('```')[1];
+                    if (lastResponseText.startsWith('json')) {
+                        lastResponseText = lastResponseText.substring(4);
+                    }
+                }
+                lastResponseText = lastResponseText.trim();
+
+                try {
+                    const parsedJson = JSON.parse(lastResponseText);
+                    fs.writeFileSync('hasil_ai.json', JSON.stringify(parsedJson, null, 2), 'utf8');
+                    
+                    let textOverlay = "Default Hook";
+                    if (Array.isArray(parsedJson)) {
+                        textOverlay = parsedJson[0] || "Default Hook";
+                    } else if (typeof parsedJson === 'object') {
+                        textOverlay = Object.values(parsedJson)[0] || "Default Hook";
+                    }
+                    
+                    fs.writeFileSync('text_overlay.txt', textOverlay, 'utf8');
+                } catch (e) {
+                    fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText]));
+                    fs.writeFileSync('text_overlay.txt', detectedText, 'utf8');
+                }
+
+              } else {
+                exit(1);
+              }
+
+            } catch (error) {
+              exit(1);
+            } finally {
+              await browser.close();
+            }
+          })();
+          EOF
+          node script.js
+          echo "FINAL_TEXT=$(cat text_overlay.txt)" >> $GITHUB_ENV
 
       - name: Process Video with FFmpeg
         run: |
@@ -93,15 +172,15 @@ jobs:
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:text='this is textarea text title':x=(w-text_w)/2:y=200:fontsize=45:fontcolor=black" \
+                             drawtext=fontfile=Arial.ttf:text='${{ env.FINAL_TEXT }}':x=(w-text_w)/2:y=200:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
 
           mv output.mp4 video.mp4
 
-      - name: Upload Output Video & OCR Text Result
+      - name: Upload Video & ChatGPT JSON Artifact
         uses: actions/upload-artifact@v4
         with:
           name: final-edited-video
           path: |
             video.mp4
-            hasil_ocr.txt
+            hasil_ai.json
