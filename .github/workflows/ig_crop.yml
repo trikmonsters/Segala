@@ -112,6 +112,25 @@ jobs:
 
           chromium.use(stealth);
 
+          function wrapText(text, maxChars = 35) {
+            const words = text.split(' ');
+            let lines = [];
+            let currentLine = '';
+
+            for (let word of words) {
+              if ((currentLine + word).length > maxChars) {
+                lines.push(currentLine.trim());
+                currentLine = word + ' ';
+              } else {
+                currentLine += word + ' ';
+              }
+            }
+            if (currentLine.trim()) {
+              lines.push(currentLine.trim());
+            }
+            return lines.join('\n');
+          }
+
           (async () => {
             let detectedText = "This man is the literal living definition of vibing";
             if (fs.existsSync('detected_text.txt')) {
@@ -166,10 +185,10 @@ jobs:
                         textOverlay = Object.values(parsedJson)[0] || "Default Hook";
                     }
                     
-                    fs.writeFileSync('text_overlay.txt', textOverlay, 'utf8');
+                    fs.writeFileSync('text_overlay.txt', wrapText(textOverlay), 'utf8');
                 } catch (e) {
                     fs.writeFileSync('hasil_ai.json', JSON.stringify([detectedText, detectedText]));
-                    fs.writeFileSync('text_overlay.txt', detectedText, 'utf8');
+                    fs.writeFileSync('text_overlay.txt', wrapText(detectedText), 'utf8');
                 }
 
               } else {
@@ -184,7 +203,6 @@ jobs:
           })();
           EOF
           node script.js
-          echo "FINAL_TEXT=$(cat text_overlay.txt)" >> $GITHUB_ENV
 
       - name: Process Video with FFmpeg
         run: |
@@ -194,7 +212,7 @@ jobs:
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
                              pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                             drawtext=fontfile=Arial.ttf:text='${{ env.FINAL_TEXT }}':x=(w-text_w)/2:y=150:wrap_mode=word:text_w=920:fontsize=45:fontcolor=black" \
+                             drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=150:fontsize=45:fontcolor=black" \
             -c:a copy output.mp4
 
           mv output.mp4 video.mp4
