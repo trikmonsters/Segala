@@ -1,4 +1,4 @@
-name: Auto Generate Subtitle from Video URL
+name: Auto Generate Video with Subtitle and Create Release
 
 on:
   workflow_dispatch:
@@ -8,20 +8,36 @@ on:
         required: true
         default: 'https://v1.pinimg.com/videos/mc/720p/2f/42/16/2f42160e604fb128db5712d46e2a7a21.mp4'
       whisper_model:
-        description: 'Model Whisper (tiny/base/small/medium)'
+        description: 'Model Whisper (tiny/base/small/medium/large)'
         required: false
         default: 'small'
+      language:
+        description: 'Bahasa (auto/Indonesian/English/dll)'
+        required: false
+        default: 'Indonesian'
+      release_tag:
+        description: 'Tag release (contoh: v1.0.0)'
+        required: false
+        default: 'auto-subtitle-latest'
+      release_title:
+        description: 'Judul release'
+        required: false
+        default: 'Auto Subtitle Video'
 
 jobs:
-  generate-subtitle:
+  generate-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Penting: izin untuk membuat release
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg & dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-pip
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -32,20 +48,63 @@ jobs:
         run: |
           pip install git+https://github.com/openai/whisper.git
 
-      - name: Download video
+      - name: Download video from URL
         run: |
-          curl -L "${{ github.event.inputs.video_url }}" -o video.mp4
+          curl -L "${{ github.event.inputs.video_url }}" -o input_video.mp4
+          echo "Video downloaded successfully"
 
-      - name: Generate subtitle with Whisper
+      - name: Generate subtitle (SRT) with Whisper
         run: |
-          whisper video.mp4 \
+          whisper input_video.mp4 \
             --model ${{ github.event.inputs.whisper_model }} \
-            --language Indonesian \
+            --language ${{ github.event.inputs.language }} \
             --output_format srt \
             --output_dir .
 
-      - name: Upload subtitle artifact
-        uses: actions/upload-artifact@v4
+      - name: Burn subtitle into video with FFmpeg
+        run: |
+          # Cari file SRT yang dihasilkan
+          SRT_FILE=$(ls *.srt | head -n 1)
+          echo "Found subtitle file: $SRT_FILE"
+          
+          # Burn subtitle ke video (hardcoded)
+          ffmpeg -i input_video.mp4 \
+            -vf "subtitles=$SRT_FILE:force_style='Fontsize=24,OutlineColour=&H10000000,BorderStyle=4,Outline=2,Shadow=1'" \
+            -c:a copy \
+            output_video_with_subtitle.mp4
+          
+          echo "Video with subtitle created successfully"
+
+      - name: Get current date for release name
+        id: date
+        run: |
+          echo "date=$(date +'%Y-%m-%d_%H-%M-%S')" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
         with:
-          name: subtitle-srt
-          path: "*.srt"
+          tag_name: ${{ github.event.inputs.release_tag }}-${{ steps.date.outputs.date }}
+          name: "${{ github.event.inputs.release_title }} - ${{ steps.date.outputs.date }}"
+          body: |
+            ## 🎬 Auto Subtitle Video
+            
+            ### Detail:
+            - **Video URL**: ${{ github.event.inputs.video_url }}
+            - **Model Whisper**: ${{ github.event.inputs.whisper_model }}
+            - **Bahasa**: ${{ github.event.inputs.language }}
+            - **Tanggal**: ${{ steps.date.outputs.date }}
+            
+            ### File yang tersedia:
+            - 📹 `output_video_with_subtitle.mp4` - Video dengan subtitle terbakar
+            - 📝 `subtitle.srt` - File subtitle (opsional)
+            
+            ### Cara download:
+            Klik file di bawah ini untuk mengunduh.
+          draft: false
+          prerelease: false
+          files: |
+            output_video_with_subtitle.mp4
+            *.srt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
