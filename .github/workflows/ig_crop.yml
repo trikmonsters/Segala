@@ -1,4 +1,4 @@
-name: Auto Crop, Scale, and OCR Video
+name: Auto Crop Full, Scale, and OCR Video
 
 on:
   workflow_dispatch:
@@ -20,12 +20,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libgomp1
-          # Menginstal EasyOCR dan dependensinya
           pip install opencv-python-headless numpy torch torchvision easyocr
 
       - name: Download Video
         run: |
-          curl -L -o "video.mp4" "https://media.sssinstagram.com/get?__sig=rR3PPZq04LoaeIe8ickD4w&__expires=1783007696&uri=https%3A%2F%2Fscontent-iad6-1.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQP1758ku0l62_NnbkszMcwrmPvmI5KdG9GlSDOWq4tGUToaxArF5vtNTQMOZVrUnpKhHj2KrxdH_tQjhcBGG6fXZ0fyEBYYQDsZoWI.mp4%3F_nc_cat%3D102%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad6-1.cdninstagram.com%26_nc_ohc%3DOUirmCT5IFkQ7kNvwHVaJSe%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTQ5MzY2NjE0NDYxMjMsImFzc2V0X2FnZV9kYXlzIjo2NywidmlfdXNlY2FzZV9pZCI6MTAwOTksImR1cmF0aW9uX3MiOjQ3LCJ1cmxnZW5fc291cmNlIjoid3d3In0%253D%26ccb%3D17-1%26vs%3Da7f734514ef8ada4%26_nc_vs%3DHBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC82MTQzQkYzOURCMEU4Qjc0MEFFRjIxQUE4NTNCOUM5OV92aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYUWlnX3hwdl9wbGFjZW1lbnRfcGVybWFuZW50X3YyLzRFNEMxMDRDRjMyNEIzMEI5NjJBNkYyMDE4NTFGNEJDX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbWt97vs9bJPxUCKAJDMywXQEfAAAAAAAAYEmRhc2hfYmFzZWxpbmVfMV92MREAdf4HZeadAQA%26_nc_gid%3DXcanDN3GcCkTy9f-AaPwuA%26_nc_ss%3D7839b%26_nc_zt%3D28%26oh%3D00_AQCD4h0FIvbqRSrveo1YWjLYMGN_CFO2YJDBFNMRcXdxlA%26oe%3D6A484803%26dl%3D1&filename=The%20legendary%20energy%20of%20Jack%20Black%20captures%20the%20raw%20essence%20of%20a%20high-energy%20journey%20through%20mus.mp4&ua=-&referer=https%3A%2F%2Fwww.instagram.com%2F"
+          curl -L -o "video.mp4" "https://media.sssinstagram.com/get?__sig=GL7sK7_ues-8JiohCfcXyg&__expires=1783008769&uri=https%3A%2F%2Fscontent-iad6-1.cdninstagram.com%2Fo1%2Fv%2Ft2%2Ff2%2Fm86%2FAQP1758ku0l62_NnbkszMcwrmPvmI5KdG9GlSDOWq4tGUToaxArF5vtNTQMOZVrUnpKhHj2KrxdH_tQjhcBGG6fXZ0fyEBYYQDsZoWI.mp4%3F_nc_cat%3D102%26_nc_sid%3D5e9851%26_nc_ht%3Dscontent-iad6-1.cdninstagram.com%26_nc_ohc%3DOUirmCT5IFkQ7kNvwHVaJSe%26efg%3DeyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5JTlNUQUdSQU0uQ0xJUFMuQzMuNzIwLmRhc2hfYmFzZWxpbmVfMV92MSIsInhwdl9hc3NldF9pZCI6MTc4OTQ5MzY2NjE0NDYxMjMsImFzc2V0X2FnZV9kYXlzIjo2NywidmlfdXNlY2FzZV9pZCI6MTAwOTksImR1cmF0aW9uX3MiOjQ3LCJ1cmxnZW5fc291cmNlIjoid3d3In0%253D%26ccb%3D17-1%26vs%3Da7f734514ef8ada4%26_nc_vs%3DHBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC82MTQzQkYzOURCMEU4Qjc0MEFFRjIxQUE4NTNCOUM5OV92aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYUWlnX3hwdl9wbGFjZW1lbnRfcGVybWFuZW50X3YyLzRFNEMxMDRDRjMyNEIzMEI5NjJBNkYyMDE4NTFGNEJDX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbWt97vs9bJPxUCKAJDMywXQEfAAAAAAAAYEmRhc2hfYmFzZWxpbmVfMV92MREAdf4HZeadAQA%26_nc_gid%3DXcanDN3GcCkTy9f-AaPwuA%26_nc_ss%3D7839b%26_nc_zt%3D28%26oh%3D00_AQCD4h0FIvbqRSrveo1YWjLYMGN_CFO2YJDBFNMRcXdxlA%26oe%3D6A484803%26dl%3D1&filename=The%20legendary%20energy%20of%20Jack%20Black%20captures%20the%20raw%20essence%20of%20a%20high-energy%20journey%20through%20mus.mp4&ua=-&referer=https%3A%2F%2Fwww.instagram.com%2F"
           
       - name: Run OpenCV Detection & EasyOCR
         id: process_media
@@ -57,15 +56,12 @@ jobs:
               x, y, w, h = cv2.boundingRect(largest_contour)
               full_w = frame.shape[1]
               
-              # !!! DI SINI PERUBAHANNYA !!!
-              # Menggunakan nilai w dan x dinamis untuk memotong margin kanan-kiri
               with open('crop_params.txt', 'w') as f:
                   f.write(f"CROP_W={w}\n")
                   f.write(f"CROP_H={h}\n")
                   f.write(f"CROP_X={x}\n")
                   f.write(f"CROP_Y={y}\n")
               
-              # Ambil area teks bagian atas untuk dibaca EasyOCR
               text_area = frame[0:y, 0:full_w]
               
               reader = easyocr.Reader(['en'])
@@ -76,6 +72,10 @@ jobs:
               
               with open('detected_text.txt', 'w') as f:
                   f.write(f"DETECTED_TEXT={detected_text}\n")
+                  
+              # PERUBAHAN: Membuat file khusus hasil_ocr.txt murni teks untuk artifact
+              with open('hasil_ocr.txt', 'w') as f:
+                  f.write(detected_text)
           else:
               print("Kontur tidak ditemukan")
               exit(1)
@@ -89,7 +89,6 @@ jobs:
         run: |
           curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
 
-          # FFmpeg memotong 4 sisi secara pas -> ditarik melar memenuhi lebar 1080 -> sisa atas-bawah diberi warna putih
           ffmpeg -i "video.mp4" \
             -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
                              scale=1080:-1, \
@@ -99,8 +98,10 @@ jobs:
 
           mv output.mp4 video.mp4
 
-      - name: Upload Output Video
+      - name: Upload Output Video & OCR Text Result
         uses: actions/upload-artifact@v4
         with:
           name: final-edited-video
-          path: video.mp4
+          path: |
+            video.mp4
+            hasil_ocr.txt
