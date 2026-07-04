@@ -37,60 +37,91 @@ jobs:
 
           (async () => {
             const prompt = process.env.PROMPT;
+            
+            // 1. Naikkan level kamuflase browser
             const browser = await chromium.launch({
               headless: true,
-              args: ['--no-sandbox', '--disable-dev-shm-usage']
+              args: [
+                '--no-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled' // Sembunyikan status "navigator.webdriver"
+              ]
             });
 
-            // Samarkan browser & mobile device untuk menghindari deteksi bot & menangani UI
             const context = await browser.newContext({
               viewport: { width: 390, height: 844 },
               isMobile: true,
               hasTouch: true,
               deviceScaleFactor: 2,
+              locale: 'en-US',
+              timezoneId: 'America/New_York',
               userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
             });
 
-            const page = await context.newPage();
+            // Jalankan script inject untuk menghapus jejak otomatisasi di window object
+            await context.addInitScript(() => {
+              Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
 
+            const page = await context.newPage();
             fs.mkdirSync('screenshots', { recursive: true });
+            
             const shot = async (name) => {
               await page.screenshot({ path: `screenshots/${name}.png`, fullPage: true });
             };
 
             // Buka halaman utama
             await page.goto('https://duck.ai', { waitUntil: 'networkidle' });
+            await page.waitForTimeout(2000);
 
-            // Selesaikan/klik pop-up onboarding 'Got It!' jika muncul agar tidak mengganggu request
+            // 2. Bersihkan POP-UP ATAS ("Got It!")
             const gotItBtn = page.getByRole('button', { name: /Got It!/i });
             if (await gotItBtn.count() > 0) {
               await gotItBtn.click();
               await page.waitForTimeout(1000);
             }
 
-            // Buka sidebar menu
+            // 3. Bersihkan BANNER BAWAH ("Duck.ai works best...") agar tidak menutupi area input
+            const closeBannerBtn = page.locator('button:has-text("Get Browser") + button, button:has-text("Learn More")').locator('xpath=../button').first();
+            // Alternatif termudah mencari tombol "X" dekat banner bawah
+            const closeX = page.locator('button').all();
+            for (const btn of await closeX) {
+              const text = await btn.innerText();
+              if (text === '' || text.includes('×')) {
+                // Ambil tombol yang posisinya menutupi layar bawah jika memungkinkan
+                try { await btn.click(); } catch(e){}
+              }
+            }
+            await page.waitForTimeout(1000);
+
+            // Buka menu samping
             const menu = page.locator('button').first();
             await menu.click();
             await page.waitForTimeout(1500);
 
-            // Pilih opsi "New Image / Gambar Baru"
+            // Pilih "New Image"
             const newImage = page.getByText(/new image|gambar baru/i).first();
             await newImage.click();
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(3000); // Beri waktu loading halaman barunya agak lama
 
-            // Pilih input chat/prompt
+            // Target area input chat
             const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
             await input.click();
+            await page.waitForTimeout(500);
             await input.focus();
             
-            // Simulasi ketikan manusia agar state JS mendeteksi text & mengubah tombol submit jadi aktif (biru)
-            await page.keyboard.type(prompt, { delay: 100 });
-            await input.evaluate(el => el.dispatchEvent(new Event('input', { bubbles: true })));
+            // Ketik lambat dengan delay bervariasi agar lolos deteksi bot AI
+            for (const char of prompt) {
+              await page.keyboard.type(char);
+              await page.waitForTimeout(Math.floor(Math.random() * 50) + 50); // Jeda acak 50-100ms per huruf
+            }
             
+            // Trigger state javascript
+            await input.evaluate(el => el.dispatchEvent(new Event('input', { bubbles: true })));
             await page.waitForTimeout(1500);
-            await shot('01-prompt-filled'); // Ambil screenshot setelah di-fill
+            await shot('01-prompt-filled'); 
 
-            // Cari tombol submit/kirim yang sudah aktif
+            // Cari tombol submit
             const submit = page.locator('button[type="submit"], button:has-text("Submit"), button:has-text("Kirim"), button:has-text("Buat")').first();
             if (await submit.count() && await submit.isEnabled()) {
               await submit.click();
@@ -98,9 +129,9 @@ jobs:
               await page.keyboard.press('Enter');
             }
 
-            // Tunggu AI memproses gambar
+            // Tunggu proses generate gambar
             await page.waitForTimeout(45000); 
-            await shot('02-after-submit'); // Ambil screenshot setelah submit/generate selesai
+            await shot('02-after-submit'); 
 
             await browser.close();
           })().catch(err => {
