@@ -1,0 +1,150 @@
+# .github/workflows/duckai-image.yml
+name: Duck.ai New Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt image"
+        required: true
+        default: "A cute duck astronaut in space"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm i -D playwright
+          npx playwright install --with-deps chromium
+
+      - name: Create script
+        run: |
+          cat > duckai.js <<'EOF'
+          const { chromium } = require('playwright');
+          const fs = require('fs');
+
+          (async () => {
+            const prompt = process.env.PROMPT || 'A cute duck astronaut in space';
+            const browser = await chromium.launch({
+              headless: true,
+              args: ['--no-sandbox', '--disable-dev-shm-usage']
+            });
+
+            const page = await browser.newPage({
+              viewport: { width: 390, height: 844 },
+              isMobile: true,
+              hasTouch: true,
+              deviceScaleFactor: 2
+            });
+
+            const shots = [];
+            const shot = async (name) => {
+              const file = `screenshots/${name}.png`;
+              await page.screenshot({ path: file, fullPage: true });
+              shots.push(file);
+            };
+
+            fs.mkdirSync('screenshots', { recursive: true });
+
+            await page.goto('https://duck.ai', { waitUntil: 'networkidle' });
+            await shot('01-home');
+
+            // Open sidebar
+            const menuButtons = [
+              '[aria-label="Open sidebar"]',
+              '[aria-label="Menu"]',
+              'button'
+            ];
+
+            let clicked = false;
+            for (const sel of menuButtons) {
+              const btn = page.locator(sel).first();
+              if (await btn.count()) {
+                try {
+                  await btn.click({ timeout: 5000 });
+                  clicked = true;
+                  break;
+                } catch {}
+              }
+            }
+
+            if (!clicked) throw new Error('Sidebar button not found');
+            await page.waitForTimeout(1500);
+            await shot('02-sidebar-open');
+
+            // Click New Image / Gambar Baru
+            const newImage = page.getByText(/new image|gambar baru/i).first();
+            await newImage.click();
+            await page.waitForTimeout(1500);
+            await shot('03-new-image-open');
+
+            // Fill prompt
+            const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
+            await input.click();
+            await input.fill(prompt);
+            await shot('04-prompt-filled');
+
+            // Submit
+            const submitCandidates = [
+              'button[type="submit"]',
+              'button:has-text("Submit")',
+              'button:has-text("Kirim")',
+              'button:has-text("Buat")'
+            ];
+
+            let submitted = false;
+            for (const sel of submitCandidates) {
+              const el = page.locator(sel).first();
+              if (await el.count()) {
+                try {
+                  await el.click({ timeout: 3000 });
+                  submitted = true;
+                  break;
+                } catch {}
+              }
+            }
+
+            if (!submitted) {
+              await page.keyboard.press('Enter');
+            }
+
+            await page.waitForTimeout(60000);
+            await shot('05-after-60s');
+
+            await browser.close();
+            fs.writeFileSync('screenshots/index.json', JSON.stringify(shots, null, 2));
+          })().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: Run automation
+        env:
+          PROMPT: ${{ inputs.prompt }}
+        run: node duckai.js
+
+      - name: Pack screenshots
+        run: |
+          zip -r duckai-screenshots.zip screenshots
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: duckai-${{ github.run_number }}
+          name: Duck.ai run ${{ github.run_number }}
+          files: duckai-screenshots.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
