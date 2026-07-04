@@ -42,41 +42,55 @@ jobs:
               args: ['--no-sandbox', '--disable-dev-shm-usage']
             });
 
-            const page = await browser.newPage({
+            // Samarkan browser & mobile device untuk menghindari deteksi bot & menangani UI
+            const context = await browser.newContext({
               viewport: { width: 390, height: 844 },
               isMobile: true,
               hasTouch: true,
-              deviceScaleFactor: 2
+              deviceScaleFactor: 2,
+              userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
             });
+
+            const page = await context.newPage();
 
             fs.mkdirSync('screenshots', { recursive: true });
             const shot = async (name) => {
               await page.screenshot({ path: `screenshots/${name}.png`, fullPage: true });
             };
 
+            // Buka halaman utama
             await page.goto('https://duck.ai', { waitUntil: 'networkidle' });
 
+            // Selesaikan/klik pop-up onboarding 'Got It!' jika muncul agar tidak mengganggu request
+            const gotItBtn = page.getByRole('button', { name: /Got It!/i });
+            if (await gotItBtn.count() > 0) {
+              await gotItBtn.click();
+              await page.waitForTimeout(1000);
+            }
+
+            // Buka sidebar menu
             const menu = page.locator('button').first();
             await menu.click();
             await page.waitForTimeout(1500);
 
+            // Pilih opsi "New Image / Gambar Baru"
             const newImage = page.getByText(/new image|gambar baru/i).first();
             await newImage.click();
-            await page.waitForTimeout(1500);
+            await page.waitForTimeout(2000);
 
-            // 1. Solusi agar JS mendeteksi teks: Klik, Focus, lalu Type (Ketik lambat)
+            // Pilih input chat/prompt
             const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
             await input.click();
             await input.focus();
-            await page.keyboard.type(prompt, { delay: 100 }); // Simulasi mengetik dengan jeda 100ms per karakter
             
-            // Trigger event input tambahan agar state JS benar-benar berubah
+            // Simulasi ketikan manusia agar state JS mendeteksi text & mengubah tombol submit jadi aktif (biru)
+            await page.keyboard.type(prompt, { delay: 100 });
             await input.evaluate(el => el.dispatchEvent(new Event('input', { bubbles: true })));
             
-            await page.waitForTimeout(1000);
-            await shot('01-prompt-filled'); // Screenshot pertama setelah di-fill
+            await page.waitForTimeout(1500);
+            await shot('01-prompt-filled'); // Ambil screenshot setelah di-fill
 
-            // 2. Klik tombol submit
+            // Cari tombol submit/kirim yang sudah aktif
             const submit = page.locator('button[type="submit"], button:has-text("Submit"), button:has-text("Kirim"), button:has-text("Buat")').first();
             if (await submit.count() && await submit.isEnabled()) {
               await submit.click();
@@ -84,9 +98,9 @@ jobs:
               await page.keyboard.press('Enter');
             }
 
-            // Tunggu proses generate (bisa disesuaikan total waktunya)
-            await page.waitForTimeout(30000); 
-            await shot('02-after-submit'); // Screenshot kedua setelah submit
+            // Tunggu AI memproses gambar
+            await page.waitForTimeout(45000); 
+            await shot('02-after-submit'); // Ambil screenshot setelah submit/generate selesai
 
             await browser.close();
           })().catch(err => {
@@ -105,7 +119,6 @@ jobs:
         with:
           tag_name: duckai-${{ github.run_number }}
           name: Duck.ai run ${{ github.run_number }}
-          # Mengunggah semua file .png langsung dari folder screenshots tanpa di-zip
           files: |
             screenshots/01-prompt-filled.png
             screenshots/02-after-submit.png
