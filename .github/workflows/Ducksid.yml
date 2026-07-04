@@ -74,25 +74,25 @@ jobs:
             await page.goto('https://duck.ai', { waitUntil: 'networkidle' });
             await page.waitForTimeout(2000);
 
-            // 2. Bersihkan POP-UP ATAS ("Got It!")
-            const gotItBtn = page.getByRole('button', { name: /Got It!/i });
-            if (await gotItBtn.count() > 0) {
-              await gotItBtn.click();
-              await page.waitForTimeout(1000);
-            }
+            # // 2. Bersihkan POP-UP ATAS ("Got It!")
+            # const gotItBtn = page.getByRole('button', { name: /Got It!/i });
+            # if (await gotItBtn.count() > 0) {
+            #   await gotItBtn.click();
+            #   await page.waitForTimeout(1000);
+            # }
 
-            // 3. Bersihkan BANNER BAWAH ("Duck.ai works best...") agar tidak menutupi area input
-            const closeBannerBtn = page.locator('button:has-text("Get Browser") + button, button:has-text("Learn More")').locator('xpath=../button').first();
-            // Alternatif termudah mencari tombol "X" dekat banner bawah
-            const closeX = page.locator('button').all();
-            for (const btn of await closeX) {
-              const text = await btn.innerText();
-              if (text === '' || text.includes('×')) {
-                // Ambil tombol yang posisinya menutupi layar bawah jika memungkinkan
-                try { await btn.click(); } catch(e){}
-              }
-            }
-            await page.waitForTimeout(1000);
+            # // 3. Bersihkan BANNER BAWAH ("Duck.ai works best...") agar tidak menutupi area input
+            # const closeBannerBtn = page.locator('button:has-text("Get Browser") + button, button:has-text("Learn More")').locator('xpath=../button').first();
+            # // Alternatif termudah mencari tombol "X" dekat banner bawah
+            # const closeX = page.locator('button').all();
+            # for (const btn of await closeX) {
+            #   const text = await btn.innerText();
+            #   if (text === '' || text.includes('×')) {
+            #     // Ambil tombol yang posisinya menutupi layar bawah jika memungkinkan
+            #     try { await btn.click(); } catch(e){}
+            #   }
+            # }
+            # await page.waitForTimeout(1000);
 
             // Buka menu samping
             const menu = page.locator('button').first();
