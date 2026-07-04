@@ -12,31 +12,54 @@ permissions:
   contents: write
 
 jobs:
-  generate:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Install Playwright
+      - name: Install deps
         run: |
           npm init -y
           npm i -D playwright
           npx playwright install --with-deps chromium
 
-      - name: Write script
+      - name: Create automation script
         run: |
           cat > duckai.js <<'EOF'
           const { chromium } = require('playwright');
           const fs = require('fs');
 
-          (async () => {
-            const prompt = process.env.PROMPT;
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+          async function snap(page, name, log) {
+            const file = `screenshots/${name}.png`;
+            await page.screenshot({ path: file, fullPage: true });
+            log.push({ step: name, screenshot: file, time: new Date().toISOString() });
+          }
+
+          async function tryClick(locator) {
+            try {
+              if (await locator.count()) {
+                await locator.click({ timeout: 5000 });
+                return true;
+              }
+            } catch {}
+            return false;
+          }
+
+          async function main() {
+            const prompt = process.env.PROMPT || 'A cute duck astronaut in space';
+            fs.mkdirSync('screenshots', { recursive: true });
+            const log = [];
+
             const browser = await chromium.launch({
               headless: true,
               args: ['--no-sandbox', '--disable-dev-shm-usage']
@@ -49,75 +72,125 @@ jobs:
               deviceScaleFactor: 2
             });
 
-            fs.mkdirSync('screenshots', { recursive: true });
-            const shots = [];
-            const shot = async (name) => {
-              const file = `screenshots/${name}.png`;
-              await page.screenshot({ path: file, fullPage: true });
-              shots.push(file);
-            };
-
             await page.goto('https://duck.ai', { waitUntil: 'networkidle' });
-            await shot('01-home');
+            await snap(page, '01-home', log);
 
-            const menu = page.locator('button').first();
-            await menu.click();
-            await page.waitForTimeout(1500);
-            await shot('02-sidebar-open');
+            const menuCandidates = [
+              'button[aria-label*="menu" i]',
+              'button[aria-label*="sidebar" i]',
+              'button'
+            ];
 
-            const newImage = page.getByText(/new image|gambar baru/i).first();
-            await newImage.click();
-            await page.waitForTimeout(1500);
-            await shot('03-new-image-open');
+            let opened = false;
+            for (const sel of menuCandidates) {
+              const btn = page.locator(sel).first();
+              try {
+                await btn.click({ timeout: 3000 });
+                opened = true;
+                break;
+              } catch {}
+            }
+            await sleep(1500);
+            await snap(page, '02-sidebar-open', log);
 
-            const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
-            await input.click();
-            await input.fill(prompt);
-            await shot('04-prompt-filled');
+            const newImage = page.getByText(/new image|gambar baru|create & edit images|buat & edit gambar/i).first();
+            await tryClick(newImage);
+            await sleep(1500);
+            await snap(page, '03-new-image-open', log);
 
-            const submit = page.locator('button[type="submit"], button:has-text("Submit"), button:has-text("Kirim"), button:has-text("Buat")').first();
-            if (await submit.count()) await submit.click();
-            else await page.keyboard.press('Enter');
+            const field = page.locator('textarea, [contenteditable="true"], input[type="text"], input').first();
+            await field.click({ timeout: 5000 }).catch(() => {});
+            await sleep(300);
 
-            await page.waitForTimeout(10000);
-            await shot('05-after-submit');
+            await field.evaluate((el, value) => {
+              const setValue = (node, v) => {
+                const proto = Object.getPrototypeOf(node);
+                const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (desc && desc.set) desc.set.call(node, v);
+                else node.value = v;
+              };
 
-            await page.waitForTimeout(60000);
-            await shot('06-after-60s');
+              if (el.isContentEditable) {
+                el.textContent = value;
+              } else {
+                setValue(el, value);
+              }
 
-            fs.writeFileSync('screenshots/index.json', JSON.stringify(shots, null, 2));
+              el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: value }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'a' }));
+            }, prompt);
+
+            await sleep(1200);
+            await snap(page, '04-prompt-filled', log);
+
+            // Make sure UI state updates; sometimes needs blur/focus cycle
+            await field.press('Tab').catch(() => {});
+            await sleep(700);
+
+            // Wait until a submit/create button becomes enabled, if present
+            const candidates = [
+              'button:has-text("Submit")',
+              'button:has-text("Create")',
+              'button:has-text("Buat")',
+              'button:has-text("Kirim")',
+              'button[type="submit"]'
+            ];
+
+            let clicked = false;
+            for (const sel of candidates) {
+              const btn = page.locator(sel).first();
+              try {
+                await page.waitForFunction((selector) => {
+                  const b = document.querySelector(selector);
+                  return b && !b.disabled && getComputedStyle(b).pointerEvents !== 'none';
+                }, sel, { timeout: 8000 });
+                await btn.click({ force: true });
+                clicked = true;
+                break;
+              } catch {}
+            }
+
+            if (!clicked) {
+              await page.keyboard.press('Enter').catch(() => {});
+              await sleep(1500);
+            }
+
+            await snap(page, '05-after-submit-attempt', log);
+
+            // Wait 60s and capture status
+            await sleep(30000);
+            await snap(page, '06-after-30s', log);
+            await sleep(30000);
+            await snap(page, '07-after-60s', log);
+
+            fs.writeFileSync('screenshots/report.json', JSON.stringify(log, null, 2));
+            fs.writeFileSync('screenshots/report.txt', log.map(x => `${x.step} -> ${x.screenshot}`).join('\n'));
+
             await browser.close();
-          })().catch(err => {
+          }
+
+          main().catch(err => {
             console.error(err);
             process.exit(1);
           });
           EOF
 
-      - name: Run
+      - name: Run automation
         env:
           PROMPT: ${{ inputs.prompt }}
         run: node duckai.js
 
-      - name: Build report
+      - name: Pack release files
         run: |
-          cat > report.md <<'EOF'
-          # Duck.ai run report
+          zip -r duckai-screenshots.zip screenshots
 
-          ## Screenshots
-          - 01-home.png
-          - 02-sidebar-open.png
-          - 03-new-image-open.png
-          - 04-prompt-filled.png
-          - 05-after-submit.png
-          - 06-after-60s.png
-          EOF
-          zip -r duckai-screenshots.zip screenshots report.md
-
-      - name: Create release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: duckai-${{ github.run_number }}
           name: Duck.ai run ${{ github.run_number }}
+          body_path: screenshots/report.txt
           files: duckai-screenshots.zip
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
