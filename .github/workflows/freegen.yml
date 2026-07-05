@@ -10,11 +10,13 @@ on:
       ratio:
         description: 'Aspect Ratio'
         required: true
-        default: '4:3'
+        default: '16:9'
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
