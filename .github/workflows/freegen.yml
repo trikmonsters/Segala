@@ -1,0 +1,100 @@
+name: Generate FreeGen Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'AI Prompt'
+        required: true
+        default: 'A futuristic city in cyberpunk style'
+      ratio:
+        description: 'Aspect Ratio'
+        required: true
+        default: '4:3'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Generator Script
+        id: freegen
+        shell: bash
+        run: |
+          PROMPT="${{ github.event.inputs.prompt }}"
+          RATIO="${{ github.event.inputs.ratio }}"
+
+          SIGNER_RES=$(curl -s -X POST "https://prompt-signer.freegen.app" \
+            -H "Content-Type: application/json" \
+            -d "{\"prompt\": \"$PROMPT\"}")
+
+          TS=$(echo "$SIGNER_RES" | jq -r '.ts')
+          SIG=$(echo "$SIGNER_RES" | jq -r '.sig')
+
+          GENERATOR_RES=$(curl -s -X POST "https://image-generator.freegen.app" \
+            -H "Content-Type: application/json" \
+            -d "{\"prompt\": \"$PROMPT\", \"ts\": $TS, \"sig\": \"$SIG\", \"ratio_id\": \"$RATIO\"}")
+
+          JOB_ID=$(echo "$GENERATOR_RES" | jq -r '.job_id // empty')
+          IMAGE_URL=$(echo "$GENERATOR_RES" | jq -r '.image_data_url // empty')
+
+          if [ -n "$JOB_ID" ]; then
+            NODE_CODE="
+            const WebSocket = require('ws');
+            const crypto = require('crypto');
+            const fs = require('fs');
+
+            const message = '$JOB_ID' + '$TS';
+            const hashHex = crypto.createHash('sha256').update(message).digest('hex');
+            const auth = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + '$TS';
+
+            const ws = new WebSocket('wss://websocket-bridge.freegen.app/ws');
+            
+            const timer = setTimeout(() => {
+              ws.close();
+              process.exit(1);
+            }, 300000);
+
+            ws.on('open', () => {
+              ws.send(JSON.stringify({ type: 'subscribe', job_id: '$JOB_ID', auth: auth }));
+            });
+
+            ws.on('message', (data) => {
+              const msg = JSON.parse(data.toString());
+              if (msg.type === 'result') {
+                clearTimeout(timer);
+                fs.writeFileSync('url.txt', msg.image_data);
+                ws.close();
+                process.exit(0);
+              } else if (msg.type === 'error') {
+                clearTimeout(timer);
+                ws.close();
+                process.exit(1);
+              }
+            });
+            "
+            npm install ws
+            node -e "$NODE_CODE"
+            IMAGE_URL=$(cat url.txt)
+          fi
+
+          if [ -z "$IMAGE_URL" ]; then
+            exit 1
+          fi
+
+          curl -s -o output.jpg "$IMAGE_URL"
+          echo "TAG_NAME=v$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: AI Image Release - ${{ env.TAG_NAME }}
+          body: |
+            Prompt: ${{ github.event.inputs.prompt }}
+            Ratio: ${{ github.event.inputs.ratio }}
+          files: output.jpg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
