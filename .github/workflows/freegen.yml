@@ -1,4 +1,4 @@
-name: Generate FreeGen Image
+name: Generate and Release FreeGen Image
 
 on:
   workflow_dispatch:
@@ -41,14 +41,19 @@ jobs:
           IMAGE_URL=$(echo "$GENERATOR_RES" | jq -r '.image_data_url // empty')
 
           if [ -n "$JOB_ID" ]; then
-            NODE_CODE="
+            npm install ws
+
+            cat << 'EOF' > ws_client.js
             const WebSocket = require('ws');
             const crypto = require('crypto');
             const fs = require('fs');
 
-            const message = '$JOB_ID' + '$TS';
+            const jobId = process.env.JOB_ID;
+            const ts = process.env.TS;
+
+            const message = jobId + ts;
             const hashHex = crypto.createHash('sha256').update(message).digest('hex');
-            const auth = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + '$TS';
+            const auth = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + ts;
 
             const ws = new WebSocket('wss://websocket-bridge.freegen.app/ws');
             
@@ -58,7 +63,7 @@ jobs:
             }, 300000);
 
             ws.on('open', () => {
-              ws.send(JSON.stringify({ type: 'subscribe', job_id: '$JOB_ID', auth: auth }));
+              ws.send(JSON.stringify({ type: 'subscribe', job_id: jobId, auth: auth }));
             });
 
             ws.on('message', (data) => {
@@ -74,9 +79,9 @@ jobs:
                 process.exit(1);
               }
             });
-            "
-            npm install ws
-            node -e "$NODE_CODE"
+          EOF
+
+            JOB_ID="$JOB_ID" TS="$TS" node ws_client.js
             IMAGE_URL=$(cat url.txt)
           fi
 
