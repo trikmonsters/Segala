@@ -1,4 +1,4 @@
-name: Duck.ai New Image
+name: Duck.ai New Image with Mullvad VPN
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -23,28 +23,70 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install Mullvad VPN
+        run: |
+          echo "Installing Mullvad VPN..."
+          curl -fsSL https://repository.mullvad.net/deb/mullvad-keyring.asc | sudo apt-key add -
+          echo "deb [arch=amd64] https://repository.mullvad.net/deb/mullvad focal main" | sudo tee /etc/apt/sources.list.d/mullvad.list
+          sudo apt-get update -qq
+          sudo apt-get install -y mullvad-vpn 2>&1 | grep -v "warning"
+          echo "Mullvad installed"
+
+      - name: Start Mullvad VPN
+        run: |
+          echo "Starting Mullvad daemon..."
+          sudo systemctl start mullvad-daemon
+          sleep 3
+          
+          echo "Checking Mullvad status..."
+          mullvad status || echo "Status check done"
+          
+          echo "Connecting to VPN (random server)..."
+          mullvad relay set location any
+          mullvad connect
+          sleep 8
+          
+          echo "VPN Connection status:"
+          mullvad status
+          
+          echo "Getting IP address..."
+          curl -s https://ipinfo.io/ip || echo "IP check skipped"
+
       - name: Install Playwright
         run: |
           npm init -y
           npm i -D playwright
           npx playwright install --with-deps chromium
 
-      - name: Write script
+      - name: Write Playwright Script
         run: |
-          cat > duckai.js <<'EOF'
+          cat > duckai.js <<'SCRIPT'
           const { chromium } = require('playwright');
           const fs = require('fs');
 
+          // Helper functions
+          const randomDelay = (min = 1000, max = 3000) => 
+            new Promise(r => setTimeout(r, Math.random() * (max - min) + min));
+
+          const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+
           (async () => {
             const prompt = process.env.PROMPT;
-            
-            // 1. Naikkan level kamuflase browser
+            log(`Starting with prompt: "${prompt}"`);
+
+            // Create output directory
+            fs.mkdirSync('screenshots', { recursive: true });
+
             const browser = await chromium.launch({
               headless: true,
               args: [
-                '--no-sandbox', 
+                '--no-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled' // Sembunyikan status "navigator.webdriver"
+                '--disable-blink-features=AutomationControlled',
+                '--disable-extensions',
+                '--disable-sync',
+                '--disable-default-apps',
+                '--disable-component-extensions-with-background-pages',
               ]
             });
 
@@ -55,82 +97,231 @@ jobs:
               deviceScaleFactor: 2,
               locale: 'en-US',
               timezoneId: 'America/New_York',
-              userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
+              userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+              extraHTTPHeaders: {
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+              }
             });
 
-            // Jalankan script inject untuk menghapus jejak otomatisasi di window object
+            // Inject script to hide automation markers
             await context.addInitScript(() => {
-              Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+              Object.defineProperty(navigator, 'webdriver', { 
+                get: () => undefined 
+              });
+              Object.defineProperty(navigator, 'plugins', { 
+                get: () => [1, 2, 3] 
+              });
+              Object.defineProperty(navigator, 'languages', { 
+                get: () => ['en-US', 'en'] 
+              });
+              
+              // Override chrome detection
+              window.chrome = {
+                runtime: {}
+              };
             });
 
             const page = await context.newPage();
-            fs.mkdirSync('screenshots', { recursive: true });
-            
-            const shot = async (name) => {
-              await page.screenshot({ path: `screenshots/${name}.png`, fullPage: true });
-            };
 
-            // Buka halaman utama
-            await page.goto('https://duck.ai', { waitUntil: 'networkidle' });
-            await page.waitForTimeout(2000);
+            // Log errors
+            page.on('console', msg => log(`Browser console: ${msg.type()} ${msg.text()}`));
+            page.on('pageerror', err => log(`Page error: ${err.message}`));
 
-            const menu = page.locator('button').first();
-            await menu.click();
-            await page.waitForTimeout(1500);
+            try {
+              // Step 1: Open Duck.ai homepage
+              log('Step 1: Opening duck.ai...');
+              await page.goto('https://duck.ai', { 
+                waitUntil: 'domcontentloaded', 
+                timeout: 35000 
+              });
+              await randomDelay(3000, 5000);
+              
+              // Check for blocking
+              const isBlocked = await page.locator('text=/Oops|unavailable|anonymous|block/i').count();
+              if (isBlocked > 0) {
+                log('⚠️  Warning: May be detected as anonymous');
+                await page.screenshot({ path: 'screenshots/00-blocked-warning.png' });
+              }
 
-            // Pilih "New Image"
-            const newImage = page.getByText(/new image|gambar baru/i).first();
-            await newImage.click();
-            await page.waitForTimeout(3000); // Beri waktu loading halaman barunya agak lama
+              await page.screenshot({ path: 'screenshots/01-homepage.png' });
+              log('✓ Homepage loaded');
 
-            // Target area input chat
-            const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
-            await input.click();
-            await page.waitForTimeout(500);
-            await input.focus();
-            
-            // Ketik lambat dengan delay bervariasi agar lolos deteksi bot AI
-            for (const char of prompt) {
-              await page.keyboard.type(char);
-              await page.waitForTimeout(Math.floor(Math.random() * 50) + 50); // Jeda acak 50-100ms per huruf
+              // Step 2: Click menu button
+              log('Step 2: Opening menu...');
+              const menuButton = page.locator('button').first();
+              await menuButton.click();
+              await randomDelay(1500, 2500);
+              await page.screenshot({ path: 'screenshots/02-menu-opened.png' });
+              log('✓ Menu clicked');
+
+              // Step 3: Select "New Image"
+              log('Step 3: Selecting "New Image"...');
+              const newImageBtn = page.getByText(/new image|gambar baru|create image/i).first();
+              
+              if (await newImageBtn.count() === 0) {
+                throw new Error('Could not find "New Image" button');
+              }
+
+              await newImageBtn.click();
+              await randomDelay(4000, 6000);
+              await page.screenshot({ path: 'screenshots/03-new-image-page.png' });
+              log('✓ New Image page opened');
+
+              // Step 4: Fill prompt input
+              log('Step 4: Filling prompt...');
+              const input = page.locator('textarea, input[type="text"], [contenteditable="true"]').first();
+              
+              if (await input.count() === 0) {
+                throw new Error('Could not find input field');
+              }
+
+              await input.click();
+              await randomDelay(500, 1000);
+              await input.focus();
+              await page.waitForTimeout(300);
+
+              // Type prompt with human-like speed
+              for (const char of prompt) {
+                await page.keyboard.press(char);
+                const delay = Math.random() * 100 + 30;
+                await page.waitForTimeout(delay);
+              }
+
+              await randomDelay(2000, 3500);
+              await page.screenshot({ path: 'screenshots/04-prompt-filled.png' });
+              log(`✓ Prompt entered: "${prompt}"`);
+
+              // Step 5: Submit prompt
+              log('Step 5: Submitting prompt...');
+              
+              // Try to find and click submit button
+              const submitBtn = page.locator(
+                'button[type="submit"], button:has-text("Send"), button:has-text("Submit"), button:has-text("Kirim"), button:has-text("Generate"), button:has-text("Create")'
+              ).first();
+
+              let submitted = false;
+
+              if (await submitBtn.count() > 0 && await submitBtn.isEnabled()) {
+                log('Found submit button, clicking...');
+                await submitBtn.click();
+                submitted = true;
+              } else {
+                log('No submit button found, pressing Enter...');
+                await page.keyboard.press('Enter');
+                submitted = true;
+              }
+
+              if (!submitted) {
+                throw new Error('Could not submit prompt');
+              }
+
+              await randomDelay(2000, 3000);
+              await page.screenshot({ path: 'screenshots/05-after-submit.png' });
+              log('✓ Prompt submitted');
+
+              // Step 6: Wait for image generation
+              log('Step 6: Waiting for image generation (this may take 30-60 seconds)...');
+              
+              // Wait with progress checks
+              let generationAttempt = 0;
+              const maxWait = 120000; // 2 minutes max
+              const checkInterval = 10000; // Check every 10 seconds
+              const startTime = Date.now();
+
+              while (Date.now() - startTime < maxWait) {
+                await randomDelay(checkInterval - 2000, checkInterval);
+                generationAttempt++;
+                
+                const loadingIndicators = await page.locator(
+                  '[class*="loading"], [class*="spinner"], [aria-busy="true"]'
+                ).count();
+
+                log(`Check ${generationAttempt}: ${loadingIndicators} loading indicators`);
+
+                if (loadingIndicators === 0) {
+                  log('Generation appears complete!');
+                  break;
+                }
+
+                if (generationAttempt % 3 === 0) {
+                  await page.screenshot({ path: `screenshots/06-generating-${generationAttempt}.png` });
+                }
+              }
+
+              // Final screenshot
+              await randomDelay(2000, 3000);
+              await page.screenshot({ path: 'screenshots/07-final-result.png', fullPage: true });
+              log('✓ Generation complete');
+
+              // Step 7: Try to download/save image info
+              log('Step 7: Checking for generated image...');
+              const images = await page.locator('img[src*="blob:"], img[src*="data:"], picture img').count();
+              log(`Found ${images} image elements`);
+
+              log('✅ SUCCESS! Image generation completed');
+
+            } catch (err) {
+              log(`❌ ERROR: ${err.message}`);
+              await page.screenshot({ path: 'screenshots/error-final.png' }).catch(() => {});
+              process.exit(1);
+            } finally {
+              await browser.close();
             }
-            
-            // Trigger state javascript
-            await input.evaluate(el => el.dispatchEvent(new Event('input', { bubbles: true })));
-            await page.waitForTimeout(1500);
-            await shot('01-prompt-filled'); 
-
-            // Cari tombol submit
-            const submit = page.locator('button[type="submit"], button:has-text("Submit"), button:has-text("Kirim"), button:has-text("Buat")').first();
-            if (await submit.count() && await submit.isEnabled()) {
-              await submit.click();
-            } else {
-              await page.keyboard.press('Enter');
-            }
-
-            // Tunggu proses generate gambar
-            await page.waitForTimeout(45000); 
-            await shot('02-after-submit'); 
-
-            await browser.close();
           })().catch(err => {
-            console.error(err);
+            console.error('Fatal error:', err);
             process.exit(1);
           });
-          EOF
+          SCRIPT
 
-      - name: Run
+      - name: Run Playwright Script
         env:
           PROMPT: ${{ inputs.prompt }}
-        run: node duckai.js
+        run: |
+          echo "Current VPN status:"
+          mullvad status || echo "VPN status unavailable"
+          
+          echo ""
+          echo "Running Playwright script..."
+          node duckai.js
+          
+          echo ""
+          echo "Script completed"
 
-      - name: Create release
+      - name: Disconnect VPN
+        if: always()
+        run: |
+          echo "Disconnecting VPN..."
+          mullvad disconnect || true
+          sudo systemctl stop mullvad-daemon || true
+
+      - name: Create Release with Screenshots
+        if: always()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: duckai-${{ github.run_number }}
-          name: Duck.ai run ${{ github.run_number }}
+          tag_name: duckai-${{ github.run_number }}-${{ github.run_attempt }}
+          name: "Duck.ai Generation #${{ github.run_number }}"
+          body: |
+            **Prompt:** ${{ inputs.prompt }}
+            **Date:** ${{ github.event.head_commit.timestamp }}
+            **Status:** ✅ Completed
           files: |
-            screenshots/01-prompt-filled.png
-            screenshots/02-after-submit.png
+            screenshots/01-homepage.png
+            screenshots/02-menu-opened.png
+            screenshots/03-new-image-page.png
+            screenshots/04-prompt-filled.png
+            screenshots/05-after-submit.png
+            screenshots/06-generating-*.png
+            screenshots/07-final-result.png
+            screenshots/error-final.png
+            screenshots/00-blocked-warning.png
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: duck-ai-screenshots-${{ github.run_number }}
+          path: screenshots/
+          retention-days: 7
