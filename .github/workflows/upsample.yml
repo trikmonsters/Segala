@@ -1,3 +1,4 @@
+
 name: Upsampler Free Image Generator
 
 on:
@@ -28,24 +29,18 @@ jobs:
           npm init -y
           npm i -D playwright
           npx playwright install --with-deps chromium
-
       - name: Write Playwright Script
         run: |
           cat > upsampler.js <<'SCRIPT'
           const { chromium } = require('playwright');
           const fs = require('fs');
-
           const randomDelay = (min = 800, max = 2000) => 
             new Promise(r => setTimeout(r, Math.random() * (max - min) + min));
-
           const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
-
           (async () => {
             const prompt = process.env.PROMPT;
             log(`Starting with prompt: "${prompt}"`);
-
             fs.mkdirSync('screenshots', { recursive: true });
-
             const browser = await chromium.launch({
               headless: true,
               args: [
@@ -54,24 +49,19 @@ jobs:
                 '--disable-blink-features=AutomationControlled',
               ]
             });
-
             const context = await browser.newContext({
               viewport: { width: 1280, height: 800 },
               locale: 'en-US',
               timezoneId: 'America/New_York',
               userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             });
-
             await context.addInitScript(() => {
               Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
               window.chrome = { runtime: {} };
             });
-
             const page = await context.newPage();
-
             page.on('console', msg => log(`Browser: ${msg.type()} ${msg.text()}`));
             page.on('pageerror', err => log(`Error: ${err.message}`));
-
             try {
               // Step 1: Load page
               log('Step 1: Loading upsampler.com...');
@@ -82,54 +72,46 @@ jobs:
               await randomDelay(2000, 3000);
               await page.screenshot({ path: 'screenshots/01-page-loaded.png' });
               log('✓ Page loaded');
-
               // Step 2: Find and click Aspect Ratio dropdown
               log('Step 2: Opening Aspect Ratio dropdown...');
-              const aspectRatioBtn = page.locator('button#aspect-ratio');
+              const aspectRatioBtn = page.locator('button[id="aspect-ratio"]');
               
               if (await aspectRatioBtn.count() === 0) {
                 throw new Error('Aspect Ratio button not found');
               }
-
               await aspectRatioBtn.click();
               await randomDelay(800, 1200);
               await page.screenshot({ path: 'screenshots/02-dropdown-opened.png' });
               log('✓ Dropdown opened');
-
               // Step 3: Select Landscape (16:9)
               log('Step 3: Selecting Landscape (16:9)...');
+              
+              // Wait for dropdown menu to appear
               await page.waitForTimeout(500);
               
-              // Find option by role
-              const landscapeOption = page.getByRole('option').filter({ hasText: /Landscape|16:9/ }).first();
+              // Find the option containing "Landscape" or "16:9"
+              const landscapeOption = page.locator('text=/Landscape|16:9/i').first();
               
               if (await landscapeOption.count() === 0) {
-                // Fallback: find by text content
-                log('Trying alternative selector for Landscape option');
+                // Try alternative selector for radix dropdown
                 const allOptions = page.locator('[role="option"]');
-                const count = await allOptions.count();
-                let found = false;
+                const optionCount = await allOptions.count();
+                log(`Found ${optionCount} options in dropdown`);
                 
-                for (let i = 0; i < count; i++) {
+                for (let i = 0; i < optionCount; i++) {
                   const text = await allOptions.nth(i).textContent();
-                  if (text && (text.includes('Landscape') || text.includes('16:9'))) {
+                  log(`Option ${i}: ${text}`);
+                  if (text.includes('Landscape') || text.includes('16:9')) {
                     await allOptions.nth(i).click();
-                    found = true;
                     break;
                   }
-                }
-                
-                if (!found) {
-                  throw new Error('Landscape option not found in dropdown');
                 }
               } else {
                 await landscapeOption.click();
               }
-
               await randomDelay(1000, 1500);
               await page.screenshot({ path: 'screenshots/03-aspect-ratio-changed.png' });
               log('✓ Aspect Ratio changed to Landscape (16:9)');
-
               // Step 4: Fill prompt input
               log('Step 4: Filling prompt input...');
               const promptInput = page.locator('textarea#prompt-input');
@@ -137,95 +119,72 @@ jobs:
               if (await promptInput.count() === 0) {
                 throw new Error('Prompt input not found');
               }
-
               await promptInput.click();
               await randomDelay(300, 600);
               await promptInput.focus();
               await page.waitForTimeout(200);
-
-              // Clear and type with human-like speed
-              await promptInput.clear();
+              // Type with human-like speed
               for (const char of prompt) {
                 await page.keyboard.type(char, { delay: 50 });
               }
-
               await randomDelay(1000, 1500);
               await page.screenshot({ path: 'screenshots/04-prompt-filled.png' });
               log(`✓ Prompt filled: "${prompt}"`);
-
-              // Step 5: Find and click Generate button with better selector
+              // Step 5: Click Generate button
               log('Step 5: Clicking Generate Image button...');
               
-              // Try multiple selector strategies
-              let generateBtn = page.getByRole('button', { name: /Generate Image/i });
+              // Wait for button to be enabled
+              const generateBtn = page.locator('button:has-text("Generate Image")').first();
               
               if (await generateBtn.count() === 0) {
-                log('getByRole failed, trying locator with text');
-                generateBtn = page.locator('button').filter({ hasText: /Generate Image/i }).first();
-              }
-              
-              if (await generateBtn.count() === 0) {
-                log('Still no button found, listing all buttons');
-                const allBtns = page.locator('button');
-                const btnCount = await allBtns.count();
-                for (let i = 0; i < Math.min(5, btnCount); i++) {
-                  const text = await allBtns.nth(i).textContent();
-                  log(`Button ${i}: ${text}`);
-                }
                 throw new Error('Generate button not found');
               }
-
-              // Wait a bit and click
+              // Wait for button to be enabled (not disabled)
+              await page.waitForFunction(() => {
+                const btn = document.querySelector('button:has-text("Generate Image")');
+                return btn && !btn.hasAttribute('disabled') && btn.offsetParent !== null;
+              }, { timeout: 5000 }).catch(() => log('Button wait timeout, continuing...'));
               await randomDelay(500, 800);
               await generateBtn.click();
               await randomDelay(1500, 2000);
               await page.screenshot({ path: 'screenshots/05-generation-started.png' });
               log('✓ Generate button clicked');
-
               // Step 6: Wait for image generation
               log('Step 6: Waiting for image generation (this may take 30-60 seconds)...');
               
               let imageFound = false;
               let checkCount = 0;
-              const maxChecks = 60;
-              const checkInterval = 5000;
-
+              const maxChecks = 60; // Check up to 5 minutes
+              const checkInterval = 5000; // Check every 5 seconds
               while (checkCount < maxChecks && !imageFound) {
                 await randomDelay(checkInterval - 1000, checkInterval + 1000);
                 checkCount++;
-
-                // Look for generated images
-                const images = await page.locator('img').count();
-                const loadingText = await page.getByText(/generating|loading|processing/i).count();
-                
-                log(`Check ${checkCount}: ${images} images, ${loadingText} loading indicators`);
-
-                // Check if generation is complete (loading text disappeared)
-                if (loadingText === 0 && images > 0) {
+                // Check for generated image
+                const images = await page.locator('img[src*="blob:"], img[alt*="generated"], [role="img"] img, .image-result img').count();
+                const loadingIndicators = await page.locator(
+                  '[class*="loading"], [class*="spinner"], [class*="progress"], svg[class*="animate"]'
+                ).count();
+                log(`Check ${checkCount}: ${images} images found, ${loadingIndicators} loading indicators`);
+                if (images > 0 && loadingIndicators === 0) {
                   imageFound = true;
                   log('✓ Image generation complete!');
                   break;
                 }
-
+                // Screenshot every 3 checks to track progress
                 if (checkCount % 3 === 0) {
                   await page.screenshot({ path: `screenshots/06-generating-check-${checkCount}.png` });
                 }
               }
-
               if (!imageFound) {
-                log('⚠️  Timeout waiting for image, but continuing to final screenshot');
+                log('⚠️  Image not found after waiting, taking final screenshot anyway');
               }
-
               // Step 7: Final screenshot
               await randomDelay(1500, 2500);
               await page.screenshot({ path: 'screenshots/07-final-result.png', fullPage: true });
               log('✓ Final screenshot taken');
-
               log('✅ SUCCESS! All steps completed');
-
             } catch (err) {
               log(`❌ ERROR: ${err.message}`);
-              log('Stack: ' + err.stack);
               await page.screenshot({ path: 'screenshots/error-screenshot.png' }).catch(() => {});
               process.exit(1);
             } finally {
@@ -236,7 +195,6 @@ jobs:
             process.exit(1);
           });
           SCRIPT
-
       - name: Run Playwright Script
         env:
           PROMPT: ${{ inputs.prompt }}
@@ -244,13 +202,12 @@ jobs:
           echo "Starting image generation automation..."
           node upsampler.js
           echo "Script completed successfully"
-
       - name: List Generated Screenshots
         if: always()
         run: |
           echo "Generated screenshots:"
           ls -lah screenshots/ || echo "No screenshots found"
-
+          find screenshots -type f -name "*.png" | sort
       - name: Create GitHub Release with Screenshots
         if: always()
         uses: softprops/action-gh-release@v2
@@ -264,12 +221,20 @@ jobs:
             **Date:** $(date)
             **Status:** ✅ Completed
             
-            ### Generated Screenshots
-          files: screenshots/*.png
+            ### Screenshots:
+            - `01-page-loaded.png` - Initial page load
+            - `02-dropdown-opened.png` - Aspect Ratio dropdown opened
+            - `03-aspect-ratio-changed.png` - Changed to Landscape (16:9)
+            - `04-prompt-filled.png` - Prompt text filled
+            - `05-generation-started.png` - After clicking Generate
+            - `06-generating-check-*.png` - Generation progress
+            - `07-final-result.png` - Final result with generated image
+          files: |
+            screenshots/*.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Artifacts
+      - name: Upload All Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
