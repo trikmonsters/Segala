@@ -26,16 +26,12 @@ jobs:
           PROMPT="${{ github.event.inputs.prompt }}"
           RATIO="${{ github.event.inputs.ratio }}"
 
-          SIGNER_RES=$(curl -s -X POST "https://prompt-signer.freegen.app" \
-            -H "Content-Type: application/json" \
-            -d "{\"prompt\": \"$PROMPT\"}")
+          SIGNER_RES=$(jq -n --arg p "$PROMPT" '{prompt: $p}' | curl -s -X POST "https://prompt-signer.freegen.app" -H "Content-Type: application/json" -d @-)
 
           TS=$(echo "$SIGNER_RES" | jq -r '.ts')
           SIG=$(echo "$SIGNER_RES" | jq -r '.sig')
 
-          GENERATOR_RES=$(curl -s -X POST "https://image-generator.freegen.app" \
-            -H "Content-Type: application/json" \
-            -d "{\"prompt\": \"$PROMPT\", \"ts\": $TS, \"sig\": \"$SIG\", \"ratio_id\": \"$RATIO\"}")
+          GENERATOR_RES=$(jq -n --arg p "$PROMPT" --argjson t "$TS" --arg s "$SIG" --arg r "$RATIO" '{prompt: $p, ts: $t, sig: $s, ratio_id: $r}' | curl -s -X POST "https://image-generator.freegen.app" -H "Content-Type: application/json" -d @-)
 
           JOB_ID=$(echo "$GENERATOR_RES" | jq -r '.job_id // empty')
           IMAGE_URL=$(echo "$GENERATOR_RES" | jq -r '.image_data_url // empty')
