@@ -85,7 +85,7 @@ jobs:
 
               // Step 2: Find and click Aspect Ratio dropdown
               log('Step 2: Opening Aspect Ratio dropdown...');
-              const aspectRatioBtn = page.locator('button[id="aspect-ratio"]');
+              const aspectRatioBtn = page.locator('button#aspect-ratio');
               
               if (await aspectRatioBtn.count() === 0) {
                 throw new Error('Aspect Ratio button not found');
@@ -98,26 +98,29 @@ jobs:
 
               // Step 3: Select Landscape (16:9)
               log('Step 3: Selecting Landscape (16:9)...');
-              
-              // Wait for dropdown menu to appear
               await page.waitForTimeout(500);
               
-              // Find the option containing "Landscape" or "16:9"
-              const landscapeOption = page.locator('text=/Landscape|16:9/i').first();
+              // Find option by role
+              const landscapeOption = page.getByRole('option').filter({ hasText: /Landscape|16:9/ }).first();
               
               if (await landscapeOption.count() === 0) {
-                // Try alternative selector for radix dropdown
+                // Fallback: find by text content
+                log('Trying alternative selector for Landscape option');
                 const allOptions = page.locator('[role="option"]');
-                const optionCount = await allOptions.count();
-                log(`Found ${optionCount} options in dropdown`);
+                const count = await allOptions.count();
+                let found = false;
                 
-                for (let i = 0; i < optionCount; i++) {
+                for (let i = 0; i < count; i++) {
                   const text = await allOptions.nth(i).textContent();
-                  log(`Option ${i}: ${text}`);
-                  if (text.includes('Landscape') || text.includes('16:9')) {
+                  if (text && (text.includes('Landscape') || text.includes('16:9'))) {
                     await allOptions.nth(i).click();
+                    found = true;
                     break;
                   }
+                }
+                
+                if (!found) {
+                  throw new Error('Landscape option not found in dropdown');
                 }
               } else {
                 await landscapeOption.click();
@@ -140,7 +143,8 @@ jobs:
               await promptInput.focus();
               await page.waitForTimeout(200);
 
-              // Type with human-like speed
+              // Clear and type with human-like speed
+              await promptInput.clear();
               for (const char of prompt) {
                 await page.keyboard.type(char, { delay: 50 });
               }
@@ -149,22 +153,29 @@ jobs:
               await page.screenshot({ path: 'screenshots/04-prompt-filled.png' });
               log(`✓ Prompt filled: "${prompt}"`);
 
-              // Step 5: Click Generate button
+              // Step 5: Find and click Generate button with better selector
               log('Step 5: Clicking Generate Image button...');
               
-              // Wait for button to be enabled
-              const generateBtn = page.locator('button:has-text("Generate Image")').first();
+              // Try multiple selector strategies
+              let generateBtn = page.getByRole('button', { name: /Generate Image/i });
               
               if (await generateBtn.count() === 0) {
+                log('getByRole failed, trying locator with text');
+                generateBtn = page.locator('button').filter({ hasText: /Generate Image/i }).first();
+              }
+              
+              if (await generateBtn.count() === 0) {
+                log('Still no button found, listing all buttons');
+                const allBtns = page.locator('button');
+                const btnCount = await allBtns.count();
+                for (let i = 0; i < Math.min(5, btnCount); i++) {
+                  const text = await allBtns.nth(i).textContent();
+                  log(`Button ${i}: ${text}`);
+                }
                 throw new Error('Generate button not found');
               }
 
-              // Wait for button to be enabled (not disabled)
-              await page.waitForFunction(() => {
-                const btn = document.querySelector('button:has-text("Generate Image")');
-                return btn && !btn.hasAttribute('disabled') && btn.offsetParent !== null;
-              }, { timeout: 5000 }).catch(() => log('Button wait timeout, continuing...'));
-
+              // Wait a bit and click
               await randomDelay(500, 800);
               await generateBtn.click();
               await randomDelay(1500, 2000);
@@ -176,35 +187,33 @@ jobs:
               
               let imageFound = false;
               let checkCount = 0;
-              const maxChecks = 60; // Check up to 5 minutes
-              const checkInterval = 5000; // Check every 5 seconds
+              const maxChecks = 60;
+              const checkInterval = 5000;
 
               while (checkCount < maxChecks && !imageFound) {
                 await randomDelay(checkInterval - 1000, checkInterval + 1000);
                 checkCount++;
 
-                // Check for generated image
-                const images = await page.locator('img[src*="blob:"], img[alt*="generated"], [role="img"] img, .image-result img').count();
-                const loadingIndicators = await page.locator(
-                  '[class*="loading"], [class*="spinner"], [class*="progress"], svg[class*="animate"]'
-                ).count();
+                // Look for generated images
+                const images = await page.locator('img').count();
+                const loadingText = await page.getByText(/generating|loading|processing/i).count();
+                
+                log(`Check ${checkCount}: ${images} images, ${loadingText} loading indicators`);
 
-                log(`Check ${checkCount}: ${images} images found, ${loadingIndicators} loading indicators`);
-
-                if (images > 0 && loadingIndicators === 0) {
+                // Check if generation is complete (loading text disappeared)
+                if (loadingText === 0 && images > 0) {
                   imageFound = true;
                   log('✓ Image generation complete!');
                   break;
                 }
 
-                // Screenshot every 3 checks to track progress
                 if (checkCount % 3 === 0) {
                   await page.screenshot({ path: `screenshots/06-generating-check-${checkCount}.png` });
                 }
               }
 
               if (!imageFound) {
-                log('⚠️  Image not found after waiting, taking final screenshot anyway');
+                log('⚠️  Timeout waiting for image, but continuing to final screenshot');
               }
 
               // Step 7: Final screenshot
@@ -216,6 +225,7 @@ jobs:
 
             } catch (err) {
               log(`❌ ERROR: ${err.message}`);
+              log('Stack: ' + err.stack);
               await page.screenshot({ path: 'screenshots/error-screenshot.png' }).catch(() => {});
               process.exit(1);
             } finally {
@@ -240,7 +250,6 @@ jobs:
         run: |
           echo "Generated screenshots:"
           ls -lah screenshots/ || echo "No screenshots found"
-          find screenshots -type f -name "*.png" | sort
 
       - name: Create GitHub Release with Screenshots
         if: always()
@@ -255,20 +264,12 @@ jobs:
             **Date:** $(date)
             **Status:** ✅ Completed
             
-            ### Screenshots:
-            - `01-page-loaded.png` - Initial page load
-            - `02-dropdown-opened.png` - Aspect Ratio dropdown opened
-            - `03-aspect-ratio-changed.png` - Changed to Landscape (16:9)
-            - `04-prompt-filled.png` - Prompt text filled
-            - `05-generation-started.png` - After clicking Generate
-            - `06-generating-check-*.png` - Generation progress
-            - `07-final-result.png` - Final result with generated image
-          files: |
-            screenshots/*.png
+            ### Generated Screenshots
+          files: screenshots/*.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload All Artifacts
+      - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
