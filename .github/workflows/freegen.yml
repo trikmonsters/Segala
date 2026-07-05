@@ -10,7 +10,7 @@ on:
       ratio:
         description: 'Aspect Ratio'
         required: true
-        default: '4:3'
+        default: '16:9'
 
 jobs:
   generate:
@@ -18,6 +18,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
       - name: Run Generator Script
         id: freegen
@@ -66,7 +71,8 @@ jobs:
               const msg = JSON.parse(data.toString());
               if (msg.type === 'result') {
                 clearTimeout(timer);
-                fs.writeFileSync('url.txt', msg.image_data);
+                // Simpan base64 data URL ke file
+                fs.writeFileSync('image_data.txt', msg.image_data);
                 ws.close();
                 process.exit(0);
               } else if (msg.type === 'error') {
@@ -75,17 +81,39 @@ jobs:
                 process.exit(1);
               }
             });
-          EOF
+            EOF
 
             JOB_ID="$JOB_ID" TS="$TS" node ws_client.js
-            IMAGE_URL=$(cat url.txt)
           fi
 
-          if [ -z "$IMAGE_URL" ]; then
+          # Decode base64 image dari file dan save ke output.jpg
+          cat << 'EOF' > decode_image.js
+          const fs = require('fs');
+          
+          const imageData = fs.readFileSync('image_data.txt', 'utf-8').trim();
+          
+          // Extract base64 dari data URL: data:image/jpeg;base64,xxxxx
+          const base64Match = imageData.match(/^data:[^;]+;base64,(.+)$/);
+          
+          if (!base64Match) {
+            console.error('Invalid base64 data URL format');
+            process.exit(1);
+          }
+          
+          const base64Data = base64Match[1];
+          const buffer = Buffer.from(base64Data, 'base64');
+          
+          fs.writeFileSync('output.jpg', buffer);
+          console.log('Image saved to output.jpg');
+          EOF
+
+          node decode_image.js
+
+          if [ ! -f output.jpg ] || [ ! -s output.jpg ]; then
+            echo "Error: Failed to decode image"
             exit 1
           fi
 
-          curl -s -o output.jpg "$IMAGE_URL"
           echo "TAG_NAME=v$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
       - name: Create Release
