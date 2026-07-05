@@ -10,7 +10,7 @@ on:
       ratio:
         description: 'Aspect Ratio'
         required: true
-        default: '16:9'
+        default: '4:3'
 
 jobs:
   generate:
@@ -19,24 +19,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
       - name: Run Generator Script
         id: freegen
         shell: bash
+        env:
+          INPUT_PROMPT: ${{ github.event.inputs.prompt }}
+          INPUT_RATIO: ${{ github.event.inputs.ratio }}
         run: |
-          PROMPT="${{ github.event.inputs.prompt }}"
-          RATIO="${{ github.event.inputs.ratio }}"
-
-          SIGNER_RES=$(jq -n --arg p "$PROMPT" '{prompt: $p}' | curl -s -X POST "https://prompt-signer.freegen.app" -H "Content-Type: application/json" -d @-)
+          SIGNER_RES=$(jq -n --arg p "$INPUT_PROMPT" '{prompt: $p}' | curl -s -X POST "https://prompt-signer.freegen.app" -H "Content-Type: application/json" -d @-)
 
           TS=$(echo "$SIGNER_RES" | jq -r '.ts')
           SIG=$(echo "$SIGNER_RES" | jq -r '.sig')
 
-          GENERATOR_RES=$(jq -n --arg p "$PROMPT" --argjson t "$TS" --arg s "$SIG" --arg r "$RATIO" '{prompt: $p, ts: $t, sig: $s, ratio_id: $r}' | curl -s -X POST "https://image-generator.freegen.app" -H "Content-Type: application/json" -d @-)
+          GENERATOR_RES=$(jq -n --arg p "$INPUT_PROMPT" --argjson t "$TS" --arg s "$SIG" --arg r "$INPUT_RATIO" '{prompt: $p, ts: $t, sig: $s, ratio_id: $r}' | curl -s -X POST "https://image-generator.freegen.app" -H "Content-Type: application/json" -d @-)
 
           JOB_ID=$(echo "$GENERATOR_RES" | jq -r '.job_id // empty')
           IMAGE_URL=$(echo "$GENERATOR_RES" | jq -r '.image_data_url // empty')
@@ -71,8 +66,15 @@ jobs:
               const msg = JSON.parse(data.toString());
               if (msg.type === 'result') {
                 clearTimeout(timer);
-                // Simpan base64 data URL ke file
-                fs.writeFileSync('image_data.txt', msg.image_data);
+                
+                let base64Data = msg.image_data;
+                if (base64Data.includes(',')) {
+                  base64Data = base64Data.split(',')[1];
+                }
+                
+                const buffer = Buffer.from(base64Data, 'base64');
+                fs.writeFileSync('output.jpg', buffer);
+                
                 ws.close();
                 process.exit(0);
               } else if (msg.type === 'error') {
@@ -81,36 +83,18 @@ jobs:
                 process.exit(1);
               }
             });
-            EOF
-
-            JOB_ID="$JOB_ID" TS="$TS" node ws_client.js
-          fi
-
-          # Decode base64 image dari file dan save ke output.jpg
-          cat << 'EOF' > decode_image.js
-          const fs = require('fs');
-          
-          const imageData = fs.readFileSync('image_data.txt', 'utf-8').trim();
-          
-          // Extract base64 dari data URL: data:image/jpeg;base64,xxxxx
-          const base64Match = imageData.match(/^data:[^;]+;base64,(.+)$/);
-          
-          if (!base64Match) {
-            console.error('Invalid base64 data URL format');
-            process.exit(1);
-          }
-          
-          const base64Data = base64Match[1];
-          const buffer = Buffer.from(base64Data, 'base64');
-          
-          fs.writeFileSync('output.jpg', buffer);
-          console.log('Image saved to output.jpg');
           EOF
 
-          node decode_image.js
+            JOB_ID="$JOB_ID" TS="$TS" node ws_client.js
+          else
+            if [ -n "$IMAGE_URL" ]; then
+              curl -s -o output.jpg "$IMAGE_URL"
+            else
+              exit 1
+            fi
+          fi
 
-          if [ ! -f output.jpg ] || [ ! -s output.jpg ]; then
-            echo "Error: Failed to decode image"
+          if [ ! -f "output.jpg" ]; then
             exit 1
           fi
 
