@@ -103,7 +103,11 @@ jobs:
           # Menarik Base64 dan men-decodenya menjadi file biner mentah (.raw / pcm)
           jq -r '.candidates[0].content.parts[0].inlineData.data' response.json | base64 --decode > raw_audio.pcm
 
-      # Langkah 4: PERBAIKAN UTAMA - Menggunakan FFmpeg untuk mengubah PCM mentah menjadi MP3 matang
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Convert Raw PCM to Playable MP3 via FFmpeg
         run: |
           # Konfigurasi audio keluaran Gemini TTS: s16le (16-bit Little Endian), 24000 Hz, 1 Channel (Mono)
