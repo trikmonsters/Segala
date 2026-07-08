@@ -1,0 +1,80 @@
+name: Generate Psychology Audio to Release
+
+on:
+  push:
+    branches:
+      - main  # Berjalan otomatis saat ada push ke branch main
+  workflow_dispatch: # Memunculkan tombol "Run workflow" agar bisa dijalankan manual
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Diperlukan agar GitHub Actions punya izin membuat Release
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Date Tag
+        id: vars
+        run: |
+          echo "tag=audio-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
+      - name: Create Gemini Request Payload
+        run: |
+          cat << 'EOF' > request.json
+          {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "# ROLE & VOICE CHARACTER\nAct as an elite, cold, and deeply intellectual narrator for a YouTube Dark Psychology channel. Your voice must sound authoritative, analytical, and gripping—like a clinical psychologist revealing an uncomfortable truth. Speak directly to a single listener, cutting through their illusions.\n\n# AUDIO CONTEXT & ATMOSPHERE\n- Scene: A quiet, minimalist study room at midnight. The mood is serious, reflective, and raw.\n- Tone: Cold logic, unsympathetic truth, deeply immersive, and psychologically piercing.\n\n# DELIVERY DIRECTIVES (YOUTUBE RETENTION OPTIMIZED)\n- Cadence: Deliver with a professional broadcast cadence. Use strategic, lingering pauses immediately after punctuation (. , :) to let the controversial facts \"sink in\" and build tension.\n- Pace & Volume: Relaxed, unhurried, and perfectly steady volume. Do not rush the heavy words.\n- Articulation: Crystal clear, neutral accent. Every syllable must be sharp and distinct.\n- RESTRICTIONS (STRICT): No theatrical acting, no dramatic whispering, and no robotic flatness. Avoid sudden spikes in energy or artificial warmth. Maintain a hauntingly consistent, calm, and steady vocal tone from the first word to the last.\n\n## Transcript:\nPicture This. You are standing in the middle of a room packed with people you know. They are laughing, sharing stories, and suddenly fall dead silent the exact moment you walk toward them. Their eyes shift, and the conversation resumes as if you were nothing but thin air.\nThe pain you feel in that exact moment is visceral, sharp, and physically crushing. Yet, here is the most controversial truth modern psychology refuses to sugarcoat: the agony of being ostracized is not actually created by the cruelty of others, but by your own fragile ego and an evolutionary brain refusing to grow up.\n\nModern humans love to view themselves as fiercely independent. We proudly echo the cliché phrase, \"I don’t care what people think.\" However, that is the single biggest lie we tell ourselves. When social exclusion hits, our immediate knee-jerk reaction is to blame the environment. We label the group as toxic, malicious, or completely devoid of empathy.\nBut let us dissect this with cold, clinical logic: why should the opinion of an external group dictate the destruction of your day?\nThe answer lies in an evolutionary glitch. Your brain is still operating on a primitive system designed hundreds of thousands of years ago. During the Stone Age, being exiled from the tribe meant starving to death or being eaten by predators. Your prehistoric brain fundamentally equates \"not being invited to lunch\" with \"literal physical death.\"\nHere is the controversy: the people excluding you are not trying to kill you. They are simply living their own lives, driven by their own narcissistic self-interests. The pain you experience is the result of your brain failing to separate an actual survival threat from a minor social rejection. You suffer not because they are evil, but because you allow a caveman’s survival instinct to dictate your self-worth in the modern world.\n\nThere is a bizarre, destructive satisfaction that comes with feeling cast out. Psychology identifies this as a full-blown victim mentality. As you sit alone in the corner of the room staring blankly at your phone, a quiet, sinister voice in your head whispers: \"Look at how cruel they are, and look at how pure and innocent I am for enduring this.\"\nPlaying the victim is comfortable. Why? Because being a victim absolves you of all personal responsibility.\n\n* If you have no friends, it is because they are too exclusive and cliquey.\n* If your career stalls, it is because office politics are actively sabotaging you.\n* If you are lonely, it is because the world is too harsh for your deeply sensitive soul."
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "responseModalities": ["audio"],
+              "temperature": 0.85,
+              "speechConfig": {
+                "voiceConfig": {
+                  "prebuiltVoiceConfig": {
+                    "voiceName": "Aoede"
+                  }
+                }
+              }
+            }
+          }
+          EOF
+
+      - name: Fetch Audio from Gemini API
+        run: |
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=AQ.Ab8RN6IDkr9QYvXlzwGEOz9YzXQ3zOzmMXYUCs0GbOyfNFR2Mw" \
+            -d @request.json > response.json
+
+          if grep -q '"error"' response.json; then
+            cat response.json
+            echo "Error detected from Gemini API response."
+            exit 1
+          fi
+
+          jq -r '.candidates[0].content.parts[0].inlineData.data' response.json | base64 --decode > yt_psychology_narration.mp3
+
+      - name: Create GitHub Release and Upload Audio
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: Psychology Audio Narration (${{ steps.vars.outputs.date }})
+          body: |
+            Automated Voice Generation using Gemini 2.5 Pro Preview TTS.
+            
+            **Vibe:** Cold Psychology, Analytical, YouTube Optimized
+            **Voice Model:** Aoede
+          draft: false
+          prerelease: false
+          files: yt_psychology_narration.mp3
