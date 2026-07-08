@@ -91,7 +91,7 @@ jobs:
           # SILAHKAN GANTI "MASUKKAN_API_KEY_DI_SINI" di bawah ini dengan API key Anda
           curl -X POST \
             -H "Content-Type: application/json" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-preview-tts:generateContent?key=MASUKKAN_API_KEY_DI_SINI" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=AQ.Ab8RN6IDkr9QYvXlzwGEOz9YzXQ3zOzmMXYUCs0GbOyfNFR2Mw" \
             -d @request.json > response.json
 
           if grep -q '"error"' response.json || ! grep -q '"inlineData"' response.json; then
