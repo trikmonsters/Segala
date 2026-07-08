@@ -26,6 +26,15 @@ jobs:
       - name: Create Raw Prompt Text File
         run: |
           cat << 'EOF' > prompt.txt
+          Read the following transcript based on the audio profile and director's note.
+
+          # Audio Profile
+          A deep, resonant narrator of mysteries.
+
+          # Director's note
+          Style: Professional, authoritative, clear articulation with standard broadcast cadence. Pace: Natural conversational pace. Accent: Neutral.
+
+          ## Scene:
           # ROLE & VOICE CHARACTER
           Act as an elite, cold, and deeply intellectual narrator for a YouTube Dark Psychology channel. Your voice must sound authoritative, analytical, and gripping—like a clinical psychologist revealing an uncomfortable truth. Speak directly to a single listener, cutting through their illusions.
 
@@ -37,8 +46,8 @@ jobs:
           - Cadence: Deliver with a professional broadcast cadence. Use strategic, lingering pauses immediately after punctuation (. , :) to let the controversial facts "sink in" and build tension.
           - Pace & Volume: Relaxed, unhurried, and perfectly steady volume. Do not rush the heavy words.
           - Articulation: Crystal clear, neutral accent. Every syllable must be sharp and distinct.
-          - RESTRICTIONS (STRICT): No theatrical acting, no dramatic whispering, and no robotic flatness. Avoid sudden spikes in energy or artificial warmth. Maintain a hauntingly consistent, calm, and steady vocal tone from the first word to the last.
-
+          - RESTRICTIONS (STRICT): No theatrical acting, no dramatic whispering, and no robotic flatness. Avoid sudden spikes in energy or artificial warmth. Maintain a hauntingly consistent, calm, and steady vocal tone from the first word to the last
+    
           ## Transcript:
           Picture This. You are standing in the middle of a room packed with people you know. They are laughing, sharing stories, and suddenly fall dead silent the exact moment you walk toward them. Their eyes shift, and the conversation resumes as if you were nothing but thin air.
           The pain you feel in that exact moment is visceral, sharp, and physically crushing. Yet, here is the most controversial truth modern psychology refuses to sugarcoat: the agony of being ostracized is not actually created by the cruelty of others, but by your own fragile ego and an evolutionary brain refusing to grow up.
