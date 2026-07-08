@@ -22,7 +22,7 @@ jobs:
           echo "tag=audio-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
-      # Langkah 1: Menyimpan teks mentah ke file terpisah agar aman dari error tanda baca
+      # Langkah 1: Menyimpan teks mentah ke file terpisah agar aman
       - name: Create Raw Prompt Text File
         run: |
           cat << 'EOF' > prompt.txt
@@ -56,7 +56,7 @@ jobs:
           * If you are lonely, it is because the world is too harsh for your deeply sensitive soul.
           EOF
 
-      # Langkah 2: Menggunakan Python bawaan Ubuntu untuk menyusun JSON yang 100% valid secara aman
+      # Langkah 2: Mengompilasi payload JSON secara aman lewat Python
       - name: Safe Compile Request JSON
         run: |
           python3 -c '
@@ -85,27 +85,32 @@ jobs:
               json.dump(payload, f)
           '
 
-      # Langkah 3: Eksekusi Request dan Proteksi Kegagalan
-      - name: Fetch Audio from Gemini API
+      # Langkah 3: Ambil data Base64 PCM dari Gemini API
+      - name: Fetch Audio Data from Gemini API
         run: |
-          # GANTI "MASUKKAN_API_KEY_DI_SINI" dengan API Key asli Anda di bawah ini
+          # SILAHKAN GANTI "MASUKKAN_API_KEY_DI_SINI" di bawah ini dengan API key Anda
           curl -X POST \
             -H "Content-Type: application/json" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=AQ.Ab8RN6IDkr9QYvXlzwGEOz9YzXQ3zOzmMXYUCs0GbOyfNFR2Mw" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-preview-tts:generateContent?key=MASUKKAN_API_KEY_DI_SINI" \
             -d @request.json > response.json
 
-          # Sistem Proteksi: Validasi apakah response.json mengandung data audio asli atau error teks
           if grep -q '"error"' response.json || ! grep -q '"inlineData"' response.json; then
-            echo "❌ ERROR: Respons dari Gemini API tidak valid atau kuota habis!"
+            echo "❌ ERROR: Respons tidak valid!"
             cat response.json
             exit 1
           fi
 
-          # Ekstrak string Base64 murni dan konversi ke file audio MP3 yang utuh
-          jq -r '.candidates[0].content.parts[0].inlineData.data' response.json | base64 --decode > yt_psychology_narration.mp3
-          echo "✅ Sukses mengonversi audio secara aman."
+          # Menarik Base64 dan men-decodenya menjadi file biner mentah (.raw / pcm)
+          jq -r '.candidates[0].content.parts[0].inlineData.data' response.json | base64 --decode > raw_audio.pcm
 
-      # Langkah 4: Publikasi ke GitHub Release
+      # Langkah 4: PERBAIKAN UTAMA - Menggunakan FFmpeg untuk mengubah PCM mentah menjadi MP3 matang
+      - name: Convert Raw PCM to Playable MP3 via FFmpeg
+        run: |
+          # Konfigurasi audio keluaran Gemini TTS: s16le (16-bit Little Endian), 24000 Hz, 1 Channel (Mono)
+          ffmpeg -f s16le -ar 24000 -ac 1 -i raw_audio.pcm -b:a 128k yt_psychology_narration.mp3
+          echo "✅ Sukses mengonversi audio mentah menjadi MP3 yang valid."
+
+      # Langkah 5: Publikasi ke GitHub Release
       - name: Create GitHub Release and Upload Audio
         uses: softprops/action-gh-release@v2
         with:
@@ -113,7 +118,7 @@ jobs:
           name: Psychology Audio Narration (${{ steps.vars.outputs.date }})
           body: |
             Automated Voice Generation using Gemini 2.5 Pro Preview TTS.
-            **Voice Character:** Aoede (YouTube Psychology Theme Optimized)
+            **Format:** MP3 (Stereo Compatible 128kbps) via FFmpeg container fix.
           draft: false
           prerelease: false
           files: yt_psychology_narration.mp3
