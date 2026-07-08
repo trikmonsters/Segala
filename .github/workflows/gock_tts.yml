@@ -75,7 +75,7 @@ jobs:
       - name: Fetch Audio Data via Official SDK
         env:
           # SILAHKAN GANTI "MASUKKAN_API_KEY_DI_SINI" di bawah ini dengan API key Anda yang berawalan AQ.
-          GEMINI_API_KEY: "AIzaSyDtlS2TE2B7cXnL-jG7z8frKBwPbNfFjkM"
+          GEMINI_API_KEY: "AQ.Ab8RN6JCueVCY246XtXgGm8VaM7Uxoblu6X0zdYistmXDeKJ4A"
         run: |
           python3 -c '
           import os
