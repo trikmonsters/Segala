@@ -22,7 +22,7 @@ jobs:
           echo "tag=audio-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
-      # Langkah 1: Menyimpan teks mentah sesuai format baru Anda secara presisi
+      # Langkah 1: Menyimpan teks mentah sesuai format presisi Anda
       - name: Create Raw Prompt Text File
         run: |
           cat << 'EOF' > prompt.txt
@@ -66,65 +66,71 @@ jobs:
           [strong tone, fixed volume] If you have no friends, it is because they are too exclusive and cliquey. If your career stalls, it is because office politics are actively sabotaging you. If you are lonely, it is because the world is too harsh for your deeply sensitive soul.
           EOF
 
-      # Langkah 2: Mengompilasi payload JSON secara aman lewat Python
-      - name: Safe Compile Request JSON
+      # Langkah 2: Instalasi SDK Resmi Google GenAI untuk Python
+      - name: Install Google GenAI SDK
+        run: |
+          pip install google-genai
+
+      # Langkah 3: Ambil Data Audio Menggunakan SDK Resmi (Solusi bypass error 401 token AQ.)
+      - name: Fetch Audio Data via Official SDK
+        env:
+          # SILAHKAN GANTI "MASUKKAN_API_KEY_DI_SINI" di bawah ini dengan API key Anda yang berawalan AQ.
+          GEMINI_API_KEY: "AQ.Ab8RN6Jy8E9UvhHKZ7RSx2s1zEnWGwRh1FQn10s5qXR-bZuj2g"
         run: |
           python3 -c '
-          import json
+          import os
+          from google import genai
+          from google.genai import types
+
+          # Membaca file transkrip yang telah dibuat
           with open("prompt.txt", "r") as f:
               text_content = f.read()
-          
-          payload = {
-              "contents": [{
-                  "role": "user",
-                  "parts": [{"text": text_content}]
-              }],
-              "generationConfig": {
-                  "responseModalities": ["audio"],
-                  "temperature": 0.9,  # Dikunci sangat rendah untuk memaksa kepatuhan instruksi volume
-                  "speechConfig": {
-                      "voiceConfig": {
-                          "prebuiltVoiceConfig": {
-                              "voiceName": "Aoede"
-                          }
-                      }
-                  }
-              }
-          }
-          with open("request.json", "w") as f:
-              json.dump(payload, f)
+
+          # Inisialisasi client resmi dengan deteksi token otomatis
+          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+          print("Mengirim data aman ke model gemini-2.5-pro-preview-tts...")
+          response = client.models.generate_content(
+              model="gemini-2.5-pro-preview-tts",
+              contents=text_content,
+              config=types.GenerateContentConfig(
+                  response_modalities=["audio"],
+                  temperature=0.1,
+                  speech_config=types.SpeechConfig(
+                      voice_config=types.VoiceConfig(
+                          prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                              voice_name="Aoede"
+                          )
+                      )
+                  )
+              )
+          )
+
+          # Mendapatkan data biner audio langsung melalui objek bagian part SDK
+          try:
+              audio_bytes = response.candidates[0].content.parts[0].inline_data.data
+              with open("raw_audio.pcm", "wb") as output_file:
+                  output_file.write(audio_bytes)
+              print("✅ Sukses mengambil data audio via SDK.")
+          except Exception as e:
+              print("❌ ERROR: Format data respons tidak sesuai harapan.")
+              print(e)
+              exit(1)
           '
 
-      # Langkah 3: Eksekusi Request Tunggal (Aman RPM/RPD)
-      - name: Fetch Audio Data from Gemini API
-        run: |
-          # SILAHKAN GANTI "MASUKKAN_API_KEY_DI_SINI" di bawah ini dengan API key Anda
-          curl -X POST \
-            -H "Content-Type: application/json" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=AQ.Ab8RN6Jy8E9UvhHKZ7RSx2s1zEnWGwRh1FQn10s5qXR-bZuj2g" \
-            -d @request.json > response.json
-
-          if grep -q '"error"' response.json || ! grep -q '"inlineData"' response.json; then
-            echo "❌ ERROR: Respons tidak valid!"
-            cat response.json
-            exit 1
-          fi
-
-          jq -r '.candidates[0].content.parts[0].inlineData.data' response.json | base64 --decode > raw_audio.pcm
-
-      # Instalasi Dependensi FFmpeg
+      # Langkah 4: Instalasi Dependensi FFmpeg
       - name: Install FFmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      # Langkah 4: Finalisasi Kontainer Wadah Audio menjadi MP3 Normal
+      # Langkah 5: Mengonversi PCM mentah menjadi file MP3 siap saji
       - name: Convert Raw PCM to Playable MP3 via FFmpeg
         run: |
           ffmpeg -f s16le -ar 24000 -ac 1 -i raw_audio.pcm -b:a 128k yt_psychology_narration.mp3
           echo "✅ Sukses mengonversi audio mentah menjadi MP3 yang valid."
 
-      # Langkah 5: Publikasi ke GitHub Release
+      # Langkah 6: Publikasi Otomatis ke GitHub Release
       - name: Create GitHub Release and Upload Audio
         uses: softprops/action-gh-release@v2
         with:
@@ -132,7 +138,7 @@ jobs:
           name: Psychology Audio Narration (${{ steps.vars.outputs.date }})
           body: |
             Automated Voice Generation using Gemini 2.5 Pro Preview TTS.
-            **Prompt Optimization:** High Stability Amplitude Custom.
+            **Othentication Method:** Google GenAI SDK (AQ Key Safe Mode).
             **Voice Character:** Aoede
           draft: false
           prerelease: false
