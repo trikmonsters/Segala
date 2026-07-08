@@ -26,43 +26,45 @@ jobs:
       - name: Create Raw Prompt Text File
         run: |
           cat << 'EOF' > prompt.txt
-          Read the following transcript based on the audio profile and director's note.
+          Read the following transcript based on the audio profile and director's note. Maintain full, robust, and 100% stable output volume from the first word to the very last word. Do not let the volume fade out.
 
           # Audio Profile
-          A deep, resonant narrator of mysteries.
-
+          A deep, resonant narrator of mysteries. Fixed consistent volume amplitude.
+          
           # Director's note
-          Style: Professional, authoritative, clear articulation with standard broadcast cadence. Pace: Natural conversational pace. Accent: Neutral.
-
+          Style: Professional, authoritative, clear articulation with standard broadcast cadence. Pace: Natural conversational pace. Accent: Neutral. Volume: Fixed loud and stable.
+          
           ## Scene:
           # ROLE & VOICE CHARACTER
-          Act as an elite, cold, and deeply intellectual narrator for a YouTube Dark Psychology channel. Your voice must sound authoritative, analytical, and gripping—like a clinical psychologist revealing an uncomfortable truth. Speak directly to a single listener, cutting through their illusions.
-
+          Act as an elite, cold, and deeply intellectual narrator for a YouTube Dark Psychology channel. Your voice must sound authoritative, analytical, and gripping. Speak directly to a single listener.
+          
           # AUDIO CONTEXT & ATMOSPHERE
-          - Scene: A quiet, minimalist study room at midnight. The mood is serious, reflective, and raw.
-          - Tone: Cold logic, unsympathetic truth, deeply immersive, and psychologically piercing.
-
-          # DELIVERY DIRECTIVES (YOUTUBE RETENTION OPTIMIZED)
-          - Cadence: Deliver with a professional broadcast cadence. Use strategic, lingering pauses immediately after punctuation (. , :) to let the controversial facts "sink in" and build tension.
-          - Pace & Volume: Relaxed, unhurried, and perfectly steady volume. Do not rush the heavy words.
-          - Articulation: Crystal clear, neutral accent. Every syllable must be sharp and distinct.
-          - RESTRICTIONS (STRICT): No theatrical acting, no dramatic whispering, and no robotic flatness. Avoid sudden spikes in energy or artificial warmth. Maintain a hauntingly consistent, calm, and steady vocal tone from the first word to the last
-    
+          - Tone: Cold logic, unsympathetic truth, perfectly steady audio amplitude.
+          
+          # DELIVERY DIRECTIVES (AUDIO GLITCH PREVENTION OPTIMIZED)
+          - [IMPORTANT] Volume Stability: Keep a 100% steady, unyielding vocal volume. Do not allow the energy or decibel level to drop at the end of paragraphs.
+          - Cadence & Pauses: Use clear, brief pauses after punctuation, but maintain the vocal presence so the system doesn't trigger an automatic fade-out.
+          - RESTRICTIONS (STRICT): No whispering, no fading out, and no robotic flatness. Keep the tone hauntingly consistent and full-bodied from start to finish.
+          
           ## Transcript:
-          Picture This. You are standing in the middle of a room packed with people you know. They are laughing, sharing stories, and suddenly fall dead silent the exact moment you walk toward them. Their eyes shift, and the conversation resumes as if you were nothing but thin air.
-          The pain you feel in that exact moment is visceral, sharp, and physically crushing. Yet, here is the most controversial truth modern psychology refuses to sugarcoat: the agony of being ostracized is not actually created by the cruelty of others, but by your own fragile ego and an evolutionary brain refusing to grow up.
+          [strong tone, fixed volume] Picture This. You are standing in the middle of a room packed with people you know. They are laughing, sharing stories, and suddenly fall dead silent the exact moment you walk toward them. Their eyes shift, and the conversation resumes as if you were nothing but thin air.
+          
+          [strong tone, fixed volume] The pain you feel in that exact moment is visceral, sharp, and physically crushing. Yet, here is the most controversial truth modern psychology refuses to sugarcoat: the agony of being ostracized is not actually created by the cruelty of others, but by your own fragile ego and an evolutionary brain refusing to grow up.
+          
+          [strong tone, fixed volume] Modern humans love to view themselves as fiercely independent. We proudly echo the cliché phrase, "I don't care what people think." However, that is the single biggest lie we tell ourselves. When social exclusion hits, our immediate knee-jerk reaction is to blame the environment. We label the group as toxic, malicious, or completely devoid of empathy.
+          
+          [strong tone, fixed volume] But let us dissect this with cold, clinical logic: why should the opinion of an external group dictate the destruction of your day?
+          
+          [strong tone, fixed volume] The answer lies in an evolutionary glitch. Your brain is still operating on a primitive system designed hundreds of thousands of years ago. During the Stone Age, being exiled from the tribe meant starving to death or being eaten by predators. Your prehistoric brain fundamentally equates "not being invited to lunch" with "literal physical death."
+          
+          [strong tone, fixed volume] Here is the controversy: the people excluding you are not trying to kill you. They are simply living their own lives, driven by their own narcissistic self-interests. The pain you experience is the result of your brain failing to separate an actual survival threat from a minor social rejection. You suffer not because they are evil, but because you allow a caveman's survival instinct to dictate your self-worth in the modern world.
+          
+          [strong tone, fixed volume] There is a bizarre, destructive satisfaction that comes with feeling cast out. Psychology identifies this as a full-blown victim mentality. As you sit alone in the corner of the room staring blankly at your phone, a quiet, sinister voice in your head whispers: "Look at how cruel they are, and look at how pure and innocent I am for enduring this."
+          
+          [strong tone, fixed volume] Playing the victim is comfortable. Why? Because being a victim absolves you of all personal responsibility.
+          
+          [strong tone, fixed volume] If you have no friends, it is because they are too exclusive and cliquey. If your career stalls, it is because office politics are actively sabotaging you. If you are lonely, it is because the world is too harsh for your deeply sensitive soul.
 
-          Modern humans love to view themselves as fiercely independent. We proudly echo the cliché phrase, "I don't care what people think." However, that is the single biggest lie we tell ourselves. When social exclusion hits, our immediate knee-jerk reaction is to blame the environment. We label the group as toxic, malicious, or completely devoid of empathy.
-          But let us dissect this with cold, clinical logic: why should the opinion of an external group dictate the destruction of your day?
-          The answer lies in an evolutionary glitch. Your brain is still operating on a primitive system designed hundreds of thousands of years ago. During the Stone Age, being exiled from the tribe meant starving to death or being eaten by predators. Your prehistoric brain fundamentally equates "not being invited to lunch" with "literal physical death."
-          Here is the controversy: the people excluding you are not trying to kill you. They are simply living their own lives, driven by their own narcissistic self-interests. The pain you experience is the result of your brain failing to separate an actual survival threat from a minor social rejection. You suffer not because they are evil, but because you allow a caveman's survival instinct to dictate your self-worth in the modern world.
-
-          There is a bizarre, destructive satisfaction that comes with feeling cast out. Psychology identifies this as a full-blown victim mentality. As you sit alone in the corner of the room staring blankly at your phone, a quiet, sinister voice in your head whispers: "Look at how cruel they are, and look at how pure and innocent I am for enduring this."
-          Playing the victim is comfortable. Why? Because being a victim absolves you of all personal responsibility.
-
-          * If you have no friends, it is because they are too exclusive and cliquey.
-          * If your career stalls, it is because office politics are actively sabotaging you.
-          * If you are lonely, it is because the world is too harsh for your deeply sensitive soul.
           EOF
 
       # Langkah 2: Mengompilasi payload JSON secara aman lewat Python
