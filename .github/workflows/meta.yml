@@ -1,10 +1,10 @@
-name: Generate Image with Meta AI
+name: Generate Images with MetaAI
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: 'Image prompt'
+        description: 'Image generation prompt'
         required: true
         type: string
       image_count:
@@ -14,7 +14,7 @@ on:
         type: string
 
 jobs:
-  generate-image:
+  generate-images:
     runs-on: ubuntu-latest
     
     steps:
@@ -28,26 +28,28 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install git+https://github.com/mir-ashiq/metaai-api.git
+          python -m pip install --upgrade pip setuptools wheel
+          pip install git+https://github.com/mir-ashiq/metaai-api.git -v
+          pip list | grep -i metaai
       
-      - name: Save Cookie to File
+      - name: Load cookies from secret
         run: |
-          cat > cookies.json << 'COOKIE_EOF'
+          cat > cookies.json << 'EOF'
           ${{ secrets.Cookie }}
-          COOKIE_EOF
+          EOF
+          echo "✅ Cookies file created"
       
-      - name: Generate Image
+      - name: Generate images
         run: |
-          python << 'EOF'
+          python << 'PYTHON_EOF'
           import json
           from metaai import MetaAI
           
-          # Load cookie dari file
+          # Load cookies from file
           with open('cookies.json', 'r') as f:
               cookies_array = json.load(f)
           
-          # Convert array format ke dictionary
+          # Convert array to dictionary
           cookies_dict = {}
           for cookie in cookies_array:
               cookies_dict[cookie['name']] = cookie['value']
@@ -59,13 +61,14 @@ jobs:
               # Initialize MetaAI
               ai = MetaAI(cookies=cookies_dict)
               
-              # Generate image
+              # Get inputs from workflow
               prompt = "${{ github.event.inputs.prompt }}"
               image_count = int("${{ github.event.inputs.image_count }}")
               
               print(f"Generating {image_count} image(s)...")
               print(f"Prompt: {prompt}\n")
               
+              # Generate image
               response = ai.generate_image(
                   prompt=prompt,
                   num_images=image_count
@@ -83,22 +86,22 @@ jobs:
               import traceback
               traceback.print_exc()
               raise
-          EOF
+          PYTHON_EOF
       
-      - name: Upload results
-        if: always()
+      - name: Upload artifacts
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: generated-images
-          path: image_response.json
+          path: |
+            image_response.json
+            cookies.json
           retention-days: 30
       
-      - name: Display results
+      - name: Print summary
         if: always()
         run: |
-          if [ -f image_response.json ]; then
-            echo "=== Generation Results ==="
-            cat image_response.json
-          else
-            echo "⚠️  No results file generated"
-          fi
+          echo "## 📊 Image Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Prompt**: ${{ github.event.inputs.prompt }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Count**: ${{ github.event.inputs.image_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: $([ -f image_response.json ] && echo '✅ Success' || echo '❌ Failed')" >> $GITHUB_STEP_SUMMARY
