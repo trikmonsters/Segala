@@ -17,7 +17,6 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     
-    # Menambahkan permission write agar token GITHUB_TOKEN bisa membuat Release
     permissions:
       contents: write
 
@@ -32,13 +31,14 @@ jobs:
 
     - name: Create Project Files (package.json & bot.js)
       run: |
-        # 1. Generate package.json
+        # 1. Generate package.json (Sudah ditambahkan core playwright)
         cat << 'EOF' > package.json
         {
           "name": "meta-ai-bot",
           "version": "1.0.0",
           "main": "bot.js",
           "dependencies": {
+            "playwright": "^1.49.0",
             "playwright-extra": "^4.3.6",
             "puppeteer-extra-plugin-stealth": "^2.11.2"
           }
