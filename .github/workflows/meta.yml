@@ -1,0 +1,137 @@
+name: Meta AI Image Generator (Single File)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cookies_json:
+        description: 'Paste Cookies JSON String here'
+        required: true
+        type: string
+      prompt_text:
+        description: 'AI Image Prompt'
+        required: true
+        default: 'cat address'
+        type: string
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    
+    # Menambahkan permission write agar token GITHUB_TOKEN bisa membuat Release
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Create Project Files (package.json & bot.js)
+      run: |
+        # 1. Generate package.json
+        cat << 'EOF' > package.json
+        {
+          "name": "meta-ai-bot",
+          "version": "1.0.0",
+          "main": "bot.js",
+          "dependencies": {
+            "playwright-extra": "^4.3.6",
+            "puppeteer-extra-plugin-stealth": "^2.11.2"
+          }
+        }
+        EOF
+
+        # 2. Generate bot.js
+        cat << 'EOF' > bot.js
+        const { chromium } = require('playwright-extra');
+        const stealth = require('puppeteer-extra-plugin-stealth')();
+
+        chromium.use(stealth);
+
+        (async () => {
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext({
+            viewport: { width: 1280, height: 800 },
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+          });
+
+          const page = await context.newPage();
+          const cookiesInput = process.env.COOKIES_JSON;
+          const promptText = process.env.PROMPT_TEXT;
+
+          const fs = require('fs');
+          if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots');
+
+          try {
+            // Langkah 1: Inject Cookies
+            console.log("Injecting cookies...");
+            const cookies = JSON.parse(cookiesInput);
+            await context.addCookies(cookies);
+            
+            // Langkah 2: Buka target url
+            console.log("Navigating to Meta AI...");
+            await page.goto('https://www.meta.ai/create', { waitUntil: 'networkidle' });
+            await page.screenshot({ path: 'screenshots/01_initial_load.png', fullPage: true });
+
+            // Langkah 3: Refresh halaman sesuai instruksi
+            console.log("Refreshing page to trigger session...");
+            await page.reload({ waitUntil: 'networkidle' });
+            await page.screenshot({ path: 'screenshots/02_after_refresh.png', fullPage: true });
+
+            // Langkah 4: Ketik prompt
+            console.log(`Filling prompt: "${promptText}"`);
+            const inputSelector = 'textarea, [placeholder*="Ask Meta AI"], [role="textbox"]';
+            await page.waitForSelector(inputSelector, { timeout: 15000 });
+            await page.fill(inputSelector, promptText);
+            await page.screenshot({ path: 'screenshots/03_prompt_filled.png' });
+
+            // Langkah 5: Submit prompt (Enter)
+            console.log("Submitting prompt...");
+            await page.press(inputSelector, 'Enter');
+            await page.waitForTimeout(5000); 
+            await page.screenshot({ path: 'screenshots/04_after_submit.png', fullPage: true });
+
+            // Langkah 6: Tunggu proses generate gambar selesai (150 detik)
+            console.log("Waiting for image generation (150 seconds)...");
+            await page.waitForTimeout(150000); 
+
+            // Hasil Akhir
+            await page.screenshot({ path: 'screenshots/05_final_result.png', fullPage: true });
+            console.log("Automation finished successfully.");
+
+          } catch (error) {
+            console.error("An error occurred:", error);
+            await page.screenshot({ path: 'screenshots/99_error_state.png', fullPage: true });
+            process.exit(1);
+          } finally {
+            await browser.close();
+          }
+        })();
+        EOF
+
+    - name: Install Dependencies & Playwright
+      run: |
+        npm install
+        npx playwright install chromium --with-deps
+
+    - name: Run Playwright Bot
+      env:
+        COOKIES_JSON: ${{ github.event.inputs.cookies_json }}
+        PROMPT_TEXT: ${{ github.event.inputs.prompt_text }}
+      run: node bot.js
+
+    - name: Upload Report Screenshots to Github Release
+      uses: softprops/action-gh-release@v2
+      if: always()
+      with:
+        tag_name: run-${{ github.run_id }}
+        name: "Bot Execution Report #${{ github.run_number }}"
+        files: screenshots/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
