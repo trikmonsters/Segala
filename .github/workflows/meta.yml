@@ -29,8 +29,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install git+https://github.com/mir-ashiq/metaai-api.git -v
-          pip list | grep -i metaai
+          echo "=== Installing metaai-api ==="
+          pip install git+https://github.com/mir-ashiq/metaai-api.git -v 2>&1 | tee install.log
+          echo ""
+          echo "=== Verifying installation ==="
+          python -c "import metaai; print(f'✅ metaai installed at: {metaai.__file__}')"
+          echo ""
+          echo "=== All installed packages ==="
+          pip list
       
       - name: Load cookies from secret
         run: |
@@ -43,6 +49,10 @@ jobs:
         run: |
           python << 'PYTHON_EOF'
           import json
+          import sys
+          print(f"Python: {sys.executable}")
+          print(f"Version: {sys.version}")
+          
           from metaai import MetaAI
           
           # Load cookies from file
@@ -95,13 +105,12 @@ jobs:
           name: generated-images
           path: |
             image_response.json
-            cookies.json
           retention-days: 30
       
-      - name: Print summary
+      - name: Upload install log for debugging
         if: always()
-        run: |
-          echo "## 📊 Image Generation Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Prompt**: ${{ github.event.inputs.prompt }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Count**: ${{ github.event.inputs.image_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: $([ -f image_response.json ] && echo '✅ Success' || echo '❌ Failed')" >> $GITHUB_STEP_SUMMARY
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-log
+          path: install.log
+          retention-days: 7
