@@ -1,110 +1,94 @@
-name: Meta AI Image Generator (Using API & Secret)
+name: Generate Image with Meta AI
 
 on:
   workflow_dispatch:
     inputs:
-      prompt_text:
-        description: 'AI Image Prompt'
+      prompt:
+        description: 'Image prompt'
         required: true
-        default: 'cat address'
+        type: string
+      image_count:
+        description: 'Number of images to generate'
+        required: false
+        default: '1'
         type: string
 
 jobs:
-  run-bot:
+  generate-image:
     runs-on: ubuntu-latest
     
-    permissions:
-      contents: write
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Install Dependencies
-      run: |
-        pip install metaai-api requests
-
-    - name: Run Meta AI Script
-      env:
-        FB_COOKIE: ${{ secrets.Cookie }}
-        PROMPT_TEXT: ${{ github.event.inputs.prompt_text }}
-      run: |
-        python - << 'EOF'
-        import os
-        import json
-        import requests
-        from metaai import MetaAI
-
-        # Buat folder untuk menampung gambar laporan
-        os.makedirs('output_images', exist_ok=True)
-
-        prompt = os.environ.get('PROMPT_TEXT', 'cat address')
-        fb_cookie = os.environ.get('FB_COOKIE', '')
-
-        print(f"Menginisialisasi Meta AI API dengan prompt: {prompt}")
-
-        try:
-            # Jika cookie di Github Secret berbentuk JSON String hasil export, 
-            # kita satukan kembali menjadi format cookie string biasa.
-            try:
-                cookie_json = json.loads(fb_cookie)
-                cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookie_json])
-                print("Berhasil mendeteksi dan memproses format JSON Cookie.")
-            except Exception:
-                # Jika inputnya sudah teks mentah (name=value;), gunakan langsung
-                cookie_string = fb_cookie
-                print("Menggunakan cookie format teks mentah.")
-
-            if not cookie_string.strip():
-                raise ValueError("Cookie kosong! Pastikan Anda sudah mengisi GitHub Secret bernama 'Cookie'.")
-
-            # Inisialisasi API menggunakan FB Cookie agar bisa generate Image
-            ai = MetaAI(fb_cookie=cookie_string)
-            
-            print("Mengirim prompt ke Meta AI...")
-            response = ai.prompt(message=prompt)
-            
-            print("Respon diterima dari API.")
-
-            # Cari URL gambar di dalam respon API
-            image_url = None
-            if isinstance(response, dict):
-                image_url = response.get('image') or response.get('image_url')
-            
-            if image_url:
-                print(f"Gambar ditemukan! Mengunduh dari: {image_url}")
-                img_data = requests.get(image_url).content
-                
-                # Simpan gambar fisik ke folder agar bisa dikirim ke release
-                output_path = 'output_images/01_final_result.jpg'
-                with open(output_path, 'wb') as handler:
-                    handler.write(img_data)
-                print(f"Gambar berhasil disimpan di {output_path}")
-            else:
-                print("Gagal mendeteksi URL gambar dari respon API. Menyimpan teks respon sebagai laporan.")
-                with open('output_images/api_response.txt', 'w') as f:
-                    f.write(str(response))
-
-        except Exception as e:
-            print(f"Terjadi error: {e}")
-            with open('output_images/error_log.txt', 'w') as f:
-                f.write(f"Error terjadi saat eksekusi: {str(e)}")
-            exit(1)
-        EOF
-
-    - name: Upload Report Images to Github Release
-      uses: softprops/action-gh-release@v2
-      if: always()
-      with:
-        tag_name: run-${{ github.run_id }}
-        name: "Meta AI API Report #${{ github.run_number }}"
-        files: output_images/*
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install git+https://github.com/mir-ashiq/metaai-api.git
+      
+      - name: Convert and Generate Image
+        run: |
+          python << 'EOF'
+          import json
+          from metaai import MetaAI
+          
+          # Load cookie dari secret (format array)
+          cookies_array = json.loads('${{ secrets.Cookie }}')
+          
+          # Convert array format ke dictionary
+          cookies_dict = {}
+          for cookie in cookies_array:
+              cookies_dict[cookie['name']] = cookie['value']
+          
+          print("Cookies loaded successfully")
+          print(f"Available cookies: {list(cookies_dict.keys())}")
+          
+          try:
+              # Initialize MetaAI
+              ai = MetaAI(cookies=cookies_dict)
+              
+              # Generate image
+              prompt = "${{ github.event.inputs.prompt }}"
+              image_count = int("${{ github.event.inputs.image_count }}")
+              
+              print(f"\nGenerating {image_count} image(s)...")
+              print(f"Prompt: {prompt}\n")
+              
+              response = ai.generate_image(
+                  prompt=prompt,
+                  num_images=image_count
+              )
+              
+              print("✅ Image generation successful!")
+              print(json.dumps(response, indent=2))
+              
+              # Save response to file
+              with open('image_response.json', 'w') as f:
+                  json.dump(response, f, indent=2)
+              
+          except Exception as e:
+              print(f"❌ Error: {str(e)}")
+              raise
+          EOF
+      
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: generated-images
+          path: image_response.json
+      
+      - name: Display results
+        if: always()
+        run: |
+          if [ -f image_response.json ]; then
+            echo "=== Generation Results ==="
+            cat image_response.json
+          else
+            echo "No results file generated"
+          fi
