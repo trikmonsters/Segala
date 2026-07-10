@@ -1,12 +1,8 @@
-name: Meta AI Image Generator (Single File)
+name: Meta AI Image Generator (Using Secret)
 
 on:
   workflow_dispatch:
     inputs:
-      cookies_json:
-        description: 'Paste Cookies JSON String here'
-        required: true
-        type: string
       prompt_text:
         description: 'AI Image Prompt'
         required: true
@@ -49,6 +45,7 @@ jobs:
         cat << 'EOF' > bot.js
         const { chromium } = require('playwright-extra');
         const stealth = require('puppeteer-extra-plugin-stealth')();
+        const fs = require('fs');
 
         chromium.use(stealth);
 
@@ -60,59 +57,52 @@ jobs:
           });
 
           const page = await context.newPage();
-          const cookiesInput = process.env.COOKIES_JSON;
           const promptText = process.env.PROMPT_TEXT;
 
-          const fs = require('fs');
           if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots');
 
           try {
-            // Langkah 1: Inject Cookies + Sanitizer SameSite
-            console.log("Injecting cookies...");
-            let cookies = JSON.parse(cookiesInput);
+            // Membaca Cookies aman dari file lokal yang di-generate dari GitHub Secret
+            console.log("Reading and injecting cookies from secret file...");
+            const cookiesRaw = fs.readFileSync('cookies.json', 'utf8');
+            let cookies = JSON.parse(cookiesRaw);
             
-            // Perbaikan otomatis untuk format sameSite agar sesuai standar Playwright
+            // Sanitizer SameSite
             cookies = cookies.map(cookie => {
               if (cookie.sameSite) {
                 const lower = cookie.sameSite.toLowerCase();
                 if (lower === 'lax') cookie.sameSite = 'Lax';
                 else if (lower === 'strict') cookie.sameSite = 'Strict';
                 else if (lower === 'none') cookie.sameSite = 'None';
-                else delete cookie.sameSite; // Hapus jika nilainya tidak valid/kosong
+                else delete cookie.sameSite;
               }
               return cookie;
             });
 
             await context.addCookies(cookies);
             
-            // Langkah 2: Buka target url
             console.log("Navigating to Meta AI...");
             await page.goto('https://www.meta.ai/create', { waitUntil: 'networkidle' });
             await page.screenshot({ path: 'screenshots/01_initial_load.png', fullPage: true });
 
-            // Langkah 3: Refresh halaman sesuai instruksi
             console.log("Refreshing page to trigger session...");
             await page.reload({ waitUntil: 'networkidle' });
             await page.screenshot({ path: 'screenshots/02_after_refresh.png', fullPage: true });
 
-            // Langkah 4: Ketik prompt
             console.log(`Filling prompt: "${promptText}"`);
             const inputSelector = 'textarea, [placeholder*="Ask Meta AI"], [role="textbox"]';
             await page.waitForSelector(inputSelector, { timeout: 15000 });
             await page.fill(inputSelector, promptText);
             await page.screenshot({ path: 'screenshots/03_prompt_filled.png' });
 
-            // Langkah 5: Submit prompt (Enter)
             console.log("Submitting prompt...");
             await page.press(inputSelector, 'Enter');
             await page.waitForTimeout(5000); 
             await page.screenshot({ path: 'screenshots/04_after_submit.png', fullPage: true });
 
-            // Langkah 6: Tunggu proses generate gambar selesai (150 detik)
             console.log("Waiting for image generation (150 seconds)...");
             await page.waitForTimeout(150000); 
 
-            // Hasil Akhir
             await page.screenshot({ path: 'screenshots/05_final_result.png', fullPage: true });
             console.log("Automation finished successfully.");
 
@@ -131,9 +121,17 @@ jobs:
         npm install
         npx playwright install chromium --with-deps
 
+    - name: Save Cookies Secret to File
+      env:
+        COOKIE_SECRET: ${{ secrets.Cookie }}
+      run: |
+        # Membaca data aman dari env variable yang mengambil nilai dari GitHub Secrets
+        cat << 'EOF' > cookies.json
+        $COOKIE_SECRET
+        EOF
+
     - name: Run Playwright Bot
       env:
-        COOKIES_JSON: ${{ github.event.inputs.cookies_json }}
         PROMPT_TEXT: ${{ github.event.inputs.prompt_text }}
       run: node bot.js
 
