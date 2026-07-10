@@ -19,7 +19,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -73,15 +73,18 @@ jobs:
               
           except Exception as e:
               print(f"❌ Error: {str(e)}")
+              import traceback
+              traceback.print_exc()
               raise
           EOF
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: generated-images
           path: image_response.json
+          retention-days: 30
       
       - name: Display results
         if: always()
