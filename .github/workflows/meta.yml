@@ -1,4 +1,4 @@
-name: Meta AI Image Generator (Using Secret)
+name: Meta AI Image Generator (Using API & Secret)
 
 on:
   workflow_dispatch:
@@ -20,131 +20,90 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
-        node-version: '20'
+        python-version: '3.10'
 
-    - name: Create Project Files (package.json & bot.js)
+    - name: Install Dependencies
       run: |
-        # 1. Generate package.json
-        cat << 'EOF' > package.json
-        {
-          "name": "meta-ai-bot",
-          "version": "1.0.0",
-          "main": "bot.js",
-          "dependencies": {
-            "playwright": "^1.49.0",
-            "playwright-extra": "^4.3.6",
-            "puppeteer-extra-plugin-stealth": "^2.11.2"
-          }
-        }
-        EOF
+        pip install metaai-api requests
 
-        # 2. Generate bot.js
-        cat << 'EOF' > bot.js
-        const { chromium } = require('playwright-extra');
-        const stealth = require('puppeteer-extra-plugin-stealth')();
-        const fs = require('fs');
-
-        chromium.use(stealth);
-
-        (async () => {
-          const browser = await chromium.launch({ headless: true });
-          const context = await browser.newContext({
-            viewport: { width: 1280, height: 800 },
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-          });
-
-          const page = await context.newPage();
-          const promptText = process.env.PROMPT_TEXT;
-
-          if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots');
-
-          try {
-            console.log("Reading and injecting cookies from secret file...");
-            const cookiesRaw = fs.readFileSync('cookies.json', 'utf8');
-            let cookies = JSON.parse(cookiesRaw);
-            
-            // Sanitizer & Cleaner Cookie untuk Playwright
-            cookies = cookies.map(cookie => {
-              // Perbaikan SameSite
-              if (cookie.sameSite) {
-                const lower = cookie.sameSite.toLowerCase();
-                if (lower === 'lax') cookie.sameSite = 'Lax';
-                else if (lower === 'strict') cookie.sameSite = 'Strict';
-                else if (lower === 'none') cookie.sameSite = 'None';
-                else delete cookie.sameSite;
-              }
-
-              // FIX: Hapus partitionKey jika berbentuk object karena Playwright tidak mendukungnya
-              if (cookie.partitionKey && typeof cookie.partitionKey === 'object') {
-                delete cookie.partitionKey;
-              }
-              
-              return cookie;
-            });
-
-            await context.addCookies(cookies);
-            
-            console.log("Navigating to Meta AI...");
-            await page.goto('https://www.meta.ai/create', { waitUntil: 'networkidle' });
-            await page.screenshot({ path: 'screenshots/01_initial_load.png', fullPage: true });
-
-            console.log("Refreshing page to trigger session...");
-            await page.reload({ waitUntil: 'networkidle' });
-            await page.screenshot({ path: 'screenshots/02_after_refresh.png', fullPage: true });
-
-            console.log(`Filling prompt: "${promptText}"`);
-            const inputSelector = 'textarea, [placeholder*="Ask Meta AI"], [role="textbox"]';
-            await page.waitForSelector(inputSelector, { timeout: 15000 });
-            await page.fill(inputSelector, promptText);
-            await page.screenshot({ path: 'screenshots/03_prompt_filled.png' });
-
-            console.log("Submitting prompt...");
-            await page.press(inputSelector, 'Enter');
-            await page.waitForTimeout(5000); 
-            await page.screenshot({ path: 'screenshots/04_after_submit.png', fullPage: true });
-
-            console.log("Waiting for image generation (150 seconds)...");
-            await page.waitForTimeout(150000); 
-
-            await page.screenshot({ path: 'screenshots/05_final_result.png', fullPage: true });
-            console.log("Automation finished successfully.");
-
-          } catch (error) {
-            console.error("An error occurred:", error);
-            await page.screenshot({ path: 'screenshots/99_error_state.png', fullPage: true });
-            process.exit(1);
-          } finally {
-            await browser.close();
-          }
-        })();
-        EOF
-
-    - name: Install Dependencies & Playwright
-      run: |
-        npm install
-        npx playwright install chromium --with-deps
-
-    - name: Save Cookies Secret to File
+    - name: Run Meta AI Script
       env:
-        COOKIE_SECRET: ${{ secrets.Cookie }}
-      run: |
-        node -e "require('fs').writeFileSync('cookies.json', process.env.COOKIE_SECRET)"
-
-    - name: Run Playwright Bot
-      env:
+        FB_COOKIE: ${{ secrets.Cookie }}
         PROMPT_TEXT: ${{ github.event.inputs.prompt_text }}
-      run: node bot.js
+      run: |
+        python - << 'EOF'
+        import os
+        import json
+        import requests
+        from metaai import MetaAI
 
-    - name: Upload Report Screenshots to Github Release
+        # Buat folder untuk menampung gambar laporan
+        os.makedirs('output_images', exist_ok=True)
+
+        prompt = os.environ.get('PROMPT_TEXT', 'cat address')
+        fb_cookie = os.environ.get('FB_COOKIE', '')
+
+        print(f"Menginisialisasi Meta AI API dengan prompt: {prompt}")
+
+        try:
+            # Jika cookie di Github Secret berbentuk JSON String hasil export, 
+            # kita satukan kembali menjadi format cookie string biasa.
+            try:
+                cookie_json = json.loads(fb_cookie)
+                cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookie_json])
+                print("Berhasil mendeteksi dan memproses format JSON Cookie.")
+            except Exception:
+                # Jika inputnya sudah teks mentah (name=value;), gunakan langsung
+                cookie_string = fb_cookie
+                print("Menggunakan cookie format teks mentah.")
+
+            if not cookie_string.strip():
+                raise ValueError("Cookie kosong! Pastikan Anda sudah mengisi GitHub Secret bernama 'Cookie'.")
+
+            # Inisialisasi API menggunakan FB Cookie agar bisa generate Image
+            ai = MetaAI(fb_cookie=cookie_string)
+            
+            print("Mengirim prompt ke Meta AI...")
+            response = ai.prompt(message=prompt)
+            
+            print("Respon diterima dari API.")
+
+            # Cari URL gambar di dalam respon API
+            image_url = None
+            if isinstance(response, dict):
+                image_url = response.get('image') or response.get('image_url')
+            
+            if image_url:
+                print(f"Gambar ditemukan! Mengunduh dari: {image_url}")
+                img_data = requests.get(image_url).content
+                
+                # Simpan gambar fisik ke folder agar bisa dikirim ke release
+                output_path = 'output_images/01_final_result.jpg'
+                with open(output_path, 'wb') as handler:
+                    handler.write(img_data)
+                print(f"Gambar berhasil disimpan di {output_path}")
+            else:
+                print("Gagal mendeteksi URL gambar dari respon API. Menyimpan teks respon sebagai laporan.")
+                with open('output_images/api_response.txt', 'w') as f:
+                    f.write(str(response))
+
+        except Exception as e:
+            print(f"Terjadi error: {e}")
+            with open('output_images/error_log.txt', 'w') as f:
+                f.write(f"Error terjadi saat eksekusi: {str(e)}")
+            exit(1)
+        EOF
+
+    - name: Upload Report Images to Github Release
       uses: softprops/action-gh-release@v2
       if: always()
       with:
         tag_name: run-${{ github.run_id }}
-        name: "Bot Execution Report #${{ github.run_number }}"
-        files: screenshots/*
+        name: "Meta AI API Report #${{ github.run_number }}"
+        files: output_images/*
         draft: false
         prerelease: false
       env:
