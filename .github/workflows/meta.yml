@@ -31,22 +31,29 @@ jobs:
           pip install --upgrade pip
           pip install git+https://github.com/mir-ashiq/metaai-api.git
       
-      - name: Convert and Generate Image
+      - name: Save Cookie to File
+        run: |
+          cat > cookies.json << 'COOKIE_EOF'
+          ${{ secrets.Cookie }}
+          COOKIE_EOF
+      
+      - name: Generate Image
         run: |
           python << 'EOF'
           import json
           from metaai import MetaAI
           
-          # Load cookie dari secret (format array)
-          cookies_array = json.loads('${{ secrets.Cookie }}')
+          # Load cookie dari file
+          with open('cookies.json', 'r') as f:
+              cookies_array = json.load(f)
           
           # Convert array format ke dictionary
           cookies_dict = {}
           for cookie in cookies_array:
               cookies_dict[cookie['name']] = cookie['value']
           
-          print("Cookies loaded successfully")
-          print(f"Available cookies: {list(cookies_dict.keys())}")
+          print("✅ Cookies loaded successfully")
+          print(f"Available cookies: {list(cookies_dict.keys())}\n")
           
           try:
               # Initialize MetaAI
@@ -56,7 +63,7 @@ jobs:
               prompt = "${{ github.event.inputs.prompt }}"
               image_count = int("${{ github.event.inputs.image_count }}")
               
-              print(f"\nGenerating {image_count} image(s)...")
+              print(f"Generating {image_count} image(s)...")
               print(f"Prompt: {prompt}\n")
               
               response = ai.generate_image(
@@ -93,5 +100,5 @@ jobs:
             echo "=== Generation Results ==="
             cat image_response.json
           else
-            echo "No results file generated"
+            echo "⚠️  No results file generated"
           fi
