@@ -31,7 +31,7 @@ jobs:
 
     - name: Create Project Files (package.json & bot.js)
       run: |
-        # 1. Generate package.json (Sudah ditambahkan core playwright)
+        # 1. Generate package.json
         cat << 'EOF' > package.json
         {
           "name": "meta-ai-bot",
@@ -67,9 +67,22 @@ jobs:
           if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots');
 
           try {
-            // Langkah 1: Inject Cookies
+            // Langkah 1: Inject Cookies + Sanitizer SameSite
             console.log("Injecting cookies...");
-            const cookies = JSON.parse(cookiesInput);
+            let cookies = JSON.parse(cookiesInput);
+            
+            // Perbaikan otomatis untuk format sameSite agar sesuai standar Playwright
+            cookies = cookies.map(cookie => {
+              if (cookie.sameSite) {
+                const lower = cookie.sameSite.toLowerCase();
+                if (lower === 'lax') cookie.sameSite = 'Lax';
+                else if (lower === 'strict') cookie.sameSite = 'Strict';
+                else if (lower === 'none') cookie.sameSite = 'None';
+                else delete cookie.sameSite; // Hapus jika nilainya tidak valid/kosong
+              }
+              return cookie;
+            });
+
             await context.addCookies(cookies);
             
             // Langkah 2: Buka target url
