@@ -66,8 +66,9 @@ jobs:
             const cookiesRaw = fs.readFileSync('cookies.json', 'utf8');
             let cookies = JSON.parse(cookiesRaw);
             
-            // Sanitizer SameSite
+            // Sanitizer & Cleaner Cookie untuk Playwright
             cookies = cookies.map(cookie => {
+              // Perbaikan SameSite
               if (cookie.sameSite) {
                 const lower = cookie.sameSite.toLowerCase();
                 if (lower === 'lax') cookie.sameSite = 'Lax';
@@ -75,6 +76,12 @@ jobs:
                 else if (lower === 'none') cookie.sameSite = 'None';
                 else delete cookie.sameSite;
               }
+
+              // FIX: Hapus partitionKey jika berbentuk object karena Playwright tidak mendukungnya
+              if (cookie.partitionKey && typeof cookie.partitionKey === 'object') {
+                delete cookie.partitionKey;
+              }
+              
               return cookie;
             });
 
