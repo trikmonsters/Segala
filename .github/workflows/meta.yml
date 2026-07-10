@@ -62,7 +62,6 @@ jobs:
           if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots');
 
           try {
-            // Membaca Cookies aman dari file lokal yang di-generate dari GitHub Secret
             console.log("Reading and injecting cookies from secret file...");
             const cookiesRaw = fs.readFileSync('cookies.json', 'utf8');
             let cookies = JSON.parse(cookiesRaw);
@@ -125,10 +124,7 @@ jobs:
       env:
         COOKIE_SECRET: ${{ secrets.Cookie }}
       run: |
-        # Membaca data aman dari env variable yang mengambil nilai dari GitHub Secrets
-        cat << 'EOF' > cookies.json
-        $COOKIE_SECRET
-        EOF
+        node -e "require('fs').writeFileSync('cookies.json', process.env.COOKIE_SECRET)"
 
     - name: Run Playwright Bot
       env:
