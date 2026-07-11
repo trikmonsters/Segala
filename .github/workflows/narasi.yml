@@ -113,22 +113,59 @@ jobs:
             await chatInput.press('Enter');
             console.log('Prompt sent. Waiting 95 seconds for response to fully stream...');
             
-            await sleep(95000);
+            await sleep(45000);
 
             console.log('Delay finished. Extracting latest response text...');
             
-            const responseSelector = 'div[class*="message-content"], div[class*="response"], entry-content, [role="article"]'; 
-            const responseElements = page.locator(responseSelector);
-            
-            const count = await responseElements.count();
-            if (count === 0) {
-              throw new Error('Response element tidak ditemukan. Silakan periksa kembali target selector.');
+            let finalResponseText = '';
+
+            // 1. Strategi Utama: Cari container induk dari chat model agar paragraf tidak terpisah
+            const containers = [
+              '[data-message-author-role="model"]',
+              '.AI-response-container',
+              '.response-container',
+              'div[jsname]' // Mengambil div utama induk dari p
+            ];
+
+            for (const selector of containers) {
+              const elements = page.locator(selector);
+              const count = await elements.count();
+              if (count > 0) {
+                // Ambil container paling terakhir (respons terbaru dari bot)
+                finalResponseText = await elements.nth(count - 1).innerText();
+                if (finalResponseText && finalResponseText.trim().length > 100) {
+                  console.log(`✓ Berhasil mengambil respons menggunakan container selector: "${selector}"`);
+                  break;
+                }
+              }
             }
 
-            const finalResponseText = await responseElements.nth(count - 1).innerText();
+            // 2. Strategi Cadangan: Jika container gagal, kumpulkan & gabungkan semua tag <p> di dalam div[jsname] terakhir
+            if (!finalResponseText || finalResponseText.trim().length < 100) {
+              console.log('Container selector kurang efektif, mencoba metode ekstraksi gabungan paragraf (jsname p)...');
+              
+              // Mencari induk div[jsname] terakhir dahulu
+              const jsnameDivs = page.locator('div[jsname]');
+              const divCount = await jsnameDivs.count();
+              
+              if (divCount > 0) {
+                // Targetkan div[jsname] terakhir, lalu cari seluruh tag <p> di dalamnya
+                const pElements = jsnameDivs.nth(divCount - 1).locator('p');
+                const pCount = await pElements.count();
+                
+                let paragraphs = [];
+                for (let i = 0; i < pCount; i++) {
+                  const txt = await pElements.nth(i).innerText();
+                  if (txt.trim()) paragraphs.push(txt.trim());
+                }
+                
+                finalResponseText = paragraphs.join('\n\n');
+              }
+            }
 
+            // Validasi Akhir
             if (!finalResponseText || finalResponseText.trim().length < 200) {
-              throw new Error('Respons terdeteksi kosong atau terlalu pendek.');
+              throw new Error('Respons tetap kosong atau terlalu pendek setelah mencoba semua opsi selector.');
             }
 
             fs.writeFileSync('youtube-script.txt', finalResponseText.trim(), 'utf-8');
