@@ -28,7 +28,8 @@ jobs:
     - name: Install Dependencies
       run: |
         npm init -y
-        npm install playwright-extra puppeteer-extra-plugin-stealth playwright image-to-ascii-cli
+        # Menambahkan flag --omit=optional untuk melewati modul native yang rusak
+        npm install playwright-extra puppeteer-extra-plugin-stealth playwright image-to-ascii-cli --omit=optional
         npx playwright install chromium --with-deps
 
     - name: Run Playwright Scraper
