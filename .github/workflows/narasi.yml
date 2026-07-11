@@ -117,7 +117,6 @@ jobs:
 
             console.log('Delay finished. Extracting latest response text...');
             
-            // Selector fleksibel untuk mendeteksi chat bubble terakhir dari AI
             const responseSelector = 'div[class*="message-content"], div[class*="response"], entry-content, [role="article"]'; 
             const responseElements = page.locator(responseSelector);
             
@@ -126,7 +125,6 @@ jobs:
               throw new Error('Response element tidak ditemukan. Silakan periksa kembali target selector.');
             }
 
-            // Mengambil respons paling akhir agar tidak bertumpuk atau salah ambil prompt kita
             const finalResponseText = await responseElements.nth(count - 1).innerText();
 
             if (!finalResponseText || finalResponseText.trim().length < 200) {
@@ -164,8 +162,10 @@ jobs:
         
         node generate-script.js
 
-    - name: Upload Generated Script Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: youtube-script-result
-        path: youtube-script.txt
+    - name: Display Generated Script in Logs
+      run: |
+        echo "================================================================="
+        echo "                    GENERATED SCRIPT OUTPUT                      "
+        echo "================================================================="
+        cat youtube-script.txt
+        echo "================================================================="
