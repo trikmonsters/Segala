@@ -1,85 +1,61 @@
-name: Google AI 
+name: Playwright AI Scraper Pipeline
 
 on:
   workflow_dispatch:
     inputs:
       topic:
-        description: 'Masukkan Topik Utama (e.g., The Psychology of Manipulation)'
+        description: 'Input topik untuk script YouTube'
         required: true
-        default: 'The Psychology of Manipulation'
+        default: 'Psikologi Manipulasi Gelap'
       language:
-        description: 'Bahasa Output (e.g., Indonesian, English)'
+        description: 'Bahasa output'
         required: true
         default: 'Indonesian'
 
 jobs:
-  run-bot:
+  scrape-and-generate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-    - name: Checkout repository
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: 18
+        node-version: '20'
 
     - name: Install Dependencies
       run: |
         npm init -y
-        npm install playwright playwright-extra puppeteer-extra-plugin-stealth
-        npx playwright install --with-deps chromium
+        npm install playwright-extra puppeteer-extra-plugin-stealth playwright
+        npx playwright install chromium --with-deps
 
-    - name: Run Playwright Script
+    - name: Run Playwright Scraper
       env:
-        TOPIC: ${{ github.event.inputs.topic }}
+        TOPIC_INPUT: ${{ github.event.inputs.topic }}
         LANGUAGE: ${{ github.event.inputs.language }}
       run: |
-        cat << 'EOF' > script.js
+        cat > generate-script.js << 'JSEOF'
         const { chromium } = require('playwright-extra');
         const stealth = require('puppeteer-extra-plugin-stealth')();
         chromium.use(stealth);
+        const fs = require('fs');
 
-        (async () => {
-        const topic = process.env.TOPIC || 'The Psychology of Manipulation';
-        const language = process.env.LANGUAGE || 'Indonesian';
-        
-        const browser = await chromium.launch({ 
-        headless: true,
-        args: [
-        '--no-sandbox', 
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled'
-        ]
-        });
-        const context = await browser.newContext({
-        viewport: { width: 1280, height: 1000 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        locale: 'id-ID'
-        });
-        const page = await context.newPage();
-        try {
-        await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle' });
-        const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder="Tanyakan apa saja"]').first();
-        await chatInput.waitFor({ state: 'visible', timeout: 5000 });
-        
-        // Memasukkan prompt baru yang dinamis berdasarkan input user
-        const promptText = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${language} based on this raw topic data: "${topic}"
+        const TOPIC = process.env.TOPIC_INPUT || 'Rahasia Psikologi Manusia';
+        const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
+        const MAX_ATTEMPTS = 3;
 
+        const FULL_PROMPT = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} based on this raw topic data: "${TOPIC}"
         STRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):
         1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.
-        2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to "${topic}" naturally throughout the text. This ensures search engines index the video correctly.
-        3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency. Every paragraph must tightly serve the core premise of "${topic}" without drifting into unrelated psychological sub-topics, ensuring the YouTube algorithm establishes clear niche authority for this channel.
-
+        2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to "${TOPIC}" naturally throughout the text. This ensures search engines index the video correctly.
+        3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency. Every paragraph must tightly serve the core premise of "${TOPIC}" without drifting into unrelated psychological sub-topics, ensuring the YouTube algorithm establishes clear niche authority for this channel.
         STRICT NARRATIVE & RETENTION RULES:
         1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting, preamble, or introduction. Start immediately in the middle of an intense, ongoing psychological simulation or crisis to hook the viewer from second one.
         2. VALUE RETENTION: To maximize audience retention, the narrative must open by delivering the second-best insight/point of the topic right in the first paragraph.
         3. Every subsequent paragraph must begin with a cold, piercing psychological insight — NOT a generic question.
         4. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. Avoid cliché filler phrases.
-
         STRICT TTS-PIPELINE FORMAT RULES (MICRO-CHUNKING & ANTI-SPEED BUG):
         1. Every single paragraph MUST begin with an aggressive insight AND be preceded by a specific TTS audio directive bracket.
         2. CRITICAL VISUAL & SPEED CONTROL: Each paragraph MUST be ultra-short, consisting of ONLY 2 to 3 sentences maximum. Never let sentences pile up into many lines. Immediately hit Enter to start a new paragraph with a new tag.
@@ -100,60 +76,96 @@ jobs:
         - Do not, under any circumstances, act like a helpful chat assistant at the end.
         - PROHIBITED: Do not include any out-of-character text, follow-up questions, closing offers, conversational pleasantries, menus, or invitations for discussion.
         - The final word of the actual story under the [final authoritative tone] tag MUST be the absolute final character of your entire output. Stop generating immediately after that word. 2000+ words.`;
-        
-        await chatInput.fill(promptText);
-        await chatInput.press('Enter');
-        
-        console.log("Menunggu Google AI memproses dan menulis respons teks panjang...");
-        
-        // Logika tunggu baru: memantau pertumbuhan teks karena targetnya 2000+ kata
-        let previousLength = 0;
-        let currentLength = 0;
-        let stabilityCount = 0;
-        const startTime = Date.now();
-        const timeoutLimit = 180000; // Mengingat teks 2000+ kata butuh waktu lebih lama, batas dinaikkan ke 3 menit (180 detik)
-        let finalScriptText = "";
 
-        while (Date.now() - startTime < timeoutLimit) {
-            await page.waitForTimeout(5000); // Cek setiap 5 detik
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        async function tryGenerate(attempt) {
+          console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
+          
+          const browser = await chromium.launch({
+            headless: true,
+            args: [
+              '--no-sandbox', 
+              '--disable-setuid-sandbox', 
+              '--disable-blink-features=AutomationControlled',
+              '--incognito'
+            ]
+          });
+
+          const context = await browser.newContext({
+            viewport: { width: 1280, height: 1000 },
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            locale: 'id-ID'
+          });
+
+          const page = await context.newPage();
+
+          try {
+            console.log('Navigating to AI interface...');
+            await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
+
+            const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
+            await chatInput.waitFor({ state: 'visible', timeout: 30000 });
+
+            console.log('Input ready. Filling prompt...');
+            await chatInput.fill(FULL_PROMPT);
             
-            // Mengambil text dari elemen chat response (menggunakan selector yang umum atau body jika aimode)
-            const bodyText = await page.evaluate(() => document.body.innerText);
+            await chatInput.press('Enter');
+            console.log('Prompt sent. Waiting 95 seconds for response to fully stream...');
             
-            // Membersihkan teks di sekitar prompt awal agar hanya mengambil hasil respons
-            // Logika dasar: Ambil bagian setelah prompt dimasukkan atau cari kecocokan tag pertama
-            const searchIndex = bodyText.lastIndexOf("[hook tone,");
-            if (searchIndex !== -1) {
-                finalScriptText = bodyText.substring(searchIndex);
-                currentLength = finalScriptText.length;
-                
-                // Jika panjang teks tidak berubah setelah beberapa detik, berarti AI selesai mengetik
-                if (currentLength > 0 && currentLength === previousLength) {
-                    stabilityCount++;
-                    if (stabilityCount >= 3) { // Stabil selama 3x pengecekan (15 detik)
-                        break;
-                    }
-                } else {
-                    stabilityCount = 0;
-                    previousLength = currentLength;
-                }
+            await sleep(95000);
+
+            console.log('Delay finished. Extracting latest response text...');
+            
+            // Selector fleksibel untuk mendeteksi chat bubble terakhir dari AI
+            const responseSelector = 'div[class*="message-content"], div[class*="response"], entry-content, [role="article"]'; 
+            const responseElements = page.locator(responseSelector);
+            
+            const count = await responseElements.count();
+            if (count === 0) {
+              throw new Error('Response element tidak ditemukan. Silakan periksa kembali target selector.');
             }
+
+            // Mengambil respons paling akhir agar tidak bertumpuk atau salah ambil prompt kita
+            const finalResponseText = await responseElements.nth(count - 1).innerText();
+
+            if (!finalResponseText || finalResponseText.trim().length < 200) {
+              throw new Error('Respons terdeteksi kosong atau terlalu pendek.');
+            }
+
+            fs.writeFileSync('youtube-script.txt', finalResponseText.trim(), 'utf-8');
+            console.log('✓ Script successfully generated and saved.');
+            
+            await browser.close();
+            return true;
+
+          } catch (error) {
+            console.error(`Error on attempt ${attempt}:`, error.message);
+            await browser.close();
+            return false;
+          }
         }
 
-        if (finalScriptText.length > 0) {
-        console.log("\n=================== HASIL NARRATIVE SCRIPT ===================");
-        console.log(finalScriptText);
-        console.log("===============================================================\n");
-        } else {
-        throw new Error("Gagal mengambil text narasi atau batas waktu habis.");
+        async function main() {
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const success = await tryGenerate(attempt);
+            if (success) process.exit(0);
+            if (attempt < MAX_ATTEMPTS) {
+              console.log('Waiting 10 seconds before retrying...');
+              await sleep(10000);
+            }
+          }
+          console.error('❌ Failed to generate script after maximum attempts.');
+          process.exit(1);
         }
 
-        } catch (error) {
-        console.error("Terjadi error:", error.message);
-        process.exit(1);
-        } finally {
-        await browser.close();
-        }
-        })();
-        EOF
-        node script.js
+        main();
+        JSEOF
+        
+        node generate-script.js
+
+    - name: Upload Generated Script Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: youtube-script-result
+        path: youtube-script.txt
