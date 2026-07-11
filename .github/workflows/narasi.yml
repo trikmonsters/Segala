@@ -92,10 +92,12 @@ jobs:
             ]
           });
 
+          // PENTING: Berikan izin 'clipboard-read' dan 'clipboard-write' agar skrip bisa membaca hasil salin
           const context = await browser.newContext({
             viewport: { width: 1280, height: 1000 },
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            locale: 'id-ID'
+            locale: 'id-ID',
+            permissions: ['clipboard-read', 'clipboard-write']
           });
 
           const page = await context.newPage();
@@ -115,73 +117,46 @@ jobs:
             
             await sleep(55000);
 
-            // === PENAMBAHAN FITUR SCREENSHOT ===
             console.log('Delay finished. Taking screenshot...');
             await page.screenshot({ path: 'screenshot.png', fullPage: true });
-            console.log('✓ Screenshot saved as screenshot.png');
 
-            console.log('Extracting latest response text...');
-            let finalResponseText = '';
+            console.log('Locating the copy button...');
+            // Selector tombol berdasarkan struktur class HTML yang Anda berikan
+            const copyButtons = page.locator('div.Pc83ge button.W4bPNd');
+            const buttonCount = await copyButtons.count();
 
-            // 1. Strategi Utama: Cari container induk dari chat model agar paragraf tidak terpisah
-            const containers = [
-              '[data-message-author-role="model"]',
-              '.AI-response-container',
-              '.response-container',
-              'div[jsname]' 
-            ];
-
-            for (const selector of containers) {
-              const elements = page.locator(selector);
-              const count = await elements.count();
-              if (count > 0) {
-                finalResponseText = await elements.nth(count - 1).innerText();
-                if (finalResponseText && finalResponseText.trim().length > 100) {
-                  console.log(`✓ Berhasil mengambil respons menggunakan container selector: "${selector}"`);
-                  break;
-                }
-              }
+            if (buttonCount === 0) {
+              throw new Error('Tombol salin tidak ditemukan di halaman. Memeriksa fallback selector...');
             }
 
-            // 2. Strategi Cadangan: Gabungkan semua tag <p> di dalam div[jsname] terakhir jika container luput
-            if (!finalResponseText || finalResponseText.trim().length < 100) {
-              console.log('Container selector kurang efektif, mencoba metode ekstraksi gabungan paragraf (jsname p)...');
-              const jsnameDivs = page.locator('div[jsname]');
-              const divCount = await jsnameDivs.count();
-              
-              if (divCount > 0) {
-                const pElements = jsnameDivs.nth(divCount - 1).locator('p');
-                const pCount = await pElements.count();
-                
-                let paragraphs = [];
-                for (let i = 0; i < pCount; i++) {
-                  const txt = await pElements.nth(i).innerText();
-                  if (txt.trim()) paragraphs.push(txt.trim());
-                }
-                
-                finalResponseText = paragraphs.join('\n\n');
-              }
-            }
+            console.log(`Found ${buttonCount} copy buttons. Clicking the latest one...`);
+            // Klik tombol salin paling terakhir (respons terbaru dari model)
+            await copyButtons.nth(buttonCount - 1).click();
+            
+            // Beri jeda kecil agar proses salin ke clipboard selesai sempurna
+            await sleep(1500); 
+
+            console.log('Reading text from clipboard...');
+            // Mengambil teks yang sukses disalin dari clipboard page
+            const finalResponseText = await page.evaluate(async () => {
+              return await navigator.clipboard.readText();
+            });
 
             if (!finalResponseText || finalResponseText.trim().length < 200) {
-              throw new Error('Respons tetap kosong atau terlalu pendek setelah mencoba semua opsi selector.');
+              throw new Error('Teks clipboard kosong atau terlalu pendek.');
             }
 
             fs.writeFileSync('youtube-script.txt', finalResponseText.trim(), 'utf-8');
-            console.log('✓ Script successfully generated and saved.');
+            console.log('✓ Script successfully captured via clipboard and saved.');
             
             await browser.close();
             return true;
 
           } catch (error) {
             console.error(`Error on attempt ${attempt}:`, error.message);
-            // Tetap coba ambil screenshot untuk keperluan debugging jika terjadi error/gagal
             try {
               await page.screenshot({ path: `error-screenshot-attempt-${attempt}.png`, fullPage: true });
-              console.log(`✓ Saved debug screenshot for failed attempt ${attempt}`);
-            } catch (e) {
-              console.log('Gagal menyimpan screenshot error:', e.message);
-            }
+            } catch (e) {}
             await browser.close();
             return false;
           }
