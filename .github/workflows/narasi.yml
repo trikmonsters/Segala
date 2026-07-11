@@ -1,42 +1,234 @@
-name: Gemini API Request
+name: Playwright AI Scraper Pipeline
 
 on:
-  workflow_dispatch: # Memungkinkan Anda menjalankan workflow ini secara manual dari tab Actions
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Input topik untuk script YouTube'
+        required: true
+        default: 'Psikologi Manipulasi Gelap'
+      language:
+        description: 'Bahasa output'
+        required: true
+        default: 'Indonesian'
 
 jobs:
-  run-gemini-request:
+  scrape-and-generate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Execute Gemini API Curl
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          # Membuat file request.json dengan menggunakan single quote 'EOF' 
-          # agar string di dalamnya tidak dievaluasi oleh shell runner sebelum dikirim
-          cat << 'EOF' > request.json
-          {
-              "model": "models/gemini-3.1-flash-lite",
-              "input": "Topic = \"Decision Fatigue\"\n\nYou are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level English based on this raw topic data: \"${TOPIC}\"\n        STRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):\n        1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.\n        2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to \"${TOPIC}\" naturally throughout the text. This ensures search engines index the video correctly.\n        3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency. Every paragraph must tightly serve the core premise of \"${TOPIC}\" without drifting into unrelated psychological sub-topics, ensuring the YouTube algorithm establishes clear niche authority for this channel.\n        STRICT NARRATIVE & RETENTION RULES:\n        1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting, preamble, or introduction. Start immediately in the middle of an intense, ongoing psychological simulation or crisis to hook the viewer from second one.\n        2. VALUE RETENTION: To maximize audience retention, the narrative must open by delivering the second-best insight/point of the topic right in the first paragraph.\n        3. Every subsequent paragraph must begin with a cold, piercing psychological insight — NOT a generic question.\n        4. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. Avoid cliché filler phrases.\n        STRICT TTS-PIPELINE FORMAT RULES (MICRO-CHUNKING & ANTI-SPEED BUG):\n        1. Every single paragraph MUST begin with an aggressive insight AND be preceded by a specific TTS audio directive bracket.\n        2. CRITICAL VISUAL & SPEED CONTROL: Each paragraph MUST be ultra-short, consisting of ONLY 2 to 3 sentences maximum. Never let sentences pile up into many lines. Immediately hit Enter to start a new paragraph with a new tag.\n        3. Every single tag MUST explicitly include the instruction \"STRICTLY SLOW pace\" to lock the AI engine's reading speed and prevent it from speeding up over time.\n        4. Output ONLY the narrative text. Target length: 2000+ words.\n\n        CYCLE THROUGH THESE EXACT TAGS FOR THE SCRIPTS:\n        - Paragraph 1 (The Hook): [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]\n        - Next body paragraphs (alternate dynamically between these short 2-3 sentence blocks):\n          * [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]\n          * [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]\n          * [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]\n          * [rhetorical tone, STRICTLY SLOW pace, long philosophical pause]\n        - Final Paragraph: [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]\n\n        -\n        CRITICAL SAFETY VALVE (CONVERSATIONAL KILL-SWITCH):\n        - Do not, under any circumstances, act like a helpful chat assistant at the end.\n        - PROHIBITED: Do not include any out-of-character text, follow-up questions, closing offers, conversational pleasantries, menus, or invitations for discussion.\n        - The final word of the actual story under the [final authoritative tone] tag MUST be the absolute final character of your entire output. Stop generating immediately after that word. 2000+ words.",
-              "tools": [
-                  {
-                      "type": "google_search"
-                  }
-              ],
-              "generation_config": {
-                  "temperature": 1,
-                  "max_output_tokens": 65536,
-                  "top_p": 0.95,
-                  "thinking_level": "high"
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Dependencies
+      run: |
+        npm init -y
+        npm install playwright-extra puppeteer-extra-plugin-stealth playwright image-to-ascii-cli
+        npx playwright install chromium --with-deps
+
+    - name: Run Playwright Scraper
+      env:
+        TOPIC_INPUT: ${{ github.event.inputs.topic }}
+        LANGUAGE: ${{ github.event.inputs.language }}
+      run: |
+        cat > generate-script.js << 'JSEOF'
+        const { chromium } = require('playwright-extra');
+        const stealth = require('puppeteer-extra-plugin-stealth')();
+        chromium.use(stealth);
+        const fs = require('fs');
+
+        const TOPIC = process.env.TOPIC_INPUT || 'Rahasia Psikologi Manusia';
+        const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
+        const MAX_ATTEMPTS = 3;
+
+        const FULL_PROMPT = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} based on this raw topic data: "${TOPIC}"
+        STRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):
+        1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.
+        2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to "${TOPIC}" naturally throughout the text. This ensures search engines index the video correctly.
+        3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency. Every paragraph must tightly serve the core premise of "${TOPIC}" without drifting into unrelated psychological sub-topics, ensuring the YouTube algorithm establishes clear niche authority for this channel.
+        STRICT NARRATIVE & RETENTION RULES:
+        1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting, preamble, or introduction. Start immediately in the middle of an intense, ongoing psychological simulation or crisis to hook the viewer from second one.
+        2. VALUE RETENTION: To maximize audience retention, the narrative must open by delivering the second-best insight/point of the topic right in the first paragraph.
+        3. Every subsequent paragraph must begin with a cold, piercing psychological insight — NOT a generic question.
+        4. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. Avoid cliché filler phrases.
+        STRICT TTS-PIPELINE FORMAT RULES (MICRO-CHUNKING & ANTI-SPEED BUG):
+        1. Every single paragraph MUST begin with an aggressive insight AND be preceded by a specific TTS audio directive bracket.
+        2. CRITICAL VISUAL & SPEED CONTROL: Each paragraph MUST be ultra-short, consisting of ONLY 2 to 3 sentences maximum. Never let sentences pile up into many lines. Immediately hit Enter to start a new paragraph with a new tag.
+        3. Every single tag MUST explicitly include the instruction "STRICTLY SLOW pace" to lock the AI engine's reading speed and prevent it from speeding up over time.
+        4. Output ONLY the narrative text. Target length: 2000+ words.
+
+        CYCLE THROUGH THESE EXACT TAGS FOR THE SCRIPTS:
+        - Paragraph 1 (The Hook): [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]
+        - Next body paragraphs (alternate dynamically between these short 2-3 sentence blocks):
+          * [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]
+          * [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]
+          * [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]
+          * [rhetorical tone, STRICTLY SLOW pace, long philosophical pause]
+        - Final Paragraph: [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]
+
+        ---
+        CRITICAL SAFETY VALVE (CONVERSATIONAL KILL-SWITCH):
+        - Do not, under any circumstances, act like a helpful chat assistant at the end.
+        - PROHIBITED: Do not include any out-of-character text, follow-up questions, closing offers, conversational pleasantries, menus, or invitations for discussion.
+        - The final word of the actual story under the [final authoritative tone] tag MUST be the absolute final character of your entire output. Stop generating immediately after that word. 2000+ words.`;
+
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        async function tryGenerate(attempt) {
+          console.log(`\n[Attempt ${attempt}/${MAX_ATTEMPTS}] Launching browser...`);
+          
+          const browser = await chromium.launch({
+            headless: true,
+            args: [
+              '--no-sandbox', 
+              '--disable-setuid-sandbox', 
+              '--disable-blink-features=AutomationControlled',
+              '--incognito'
+            ]
+          });
+
+          const context = await browser.newContext({
+            viewport: { width: 1280, height: 1000 },
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            locale: 'id-ID'
+          });
+
+          const page = await context.newPage();
+
+          try {
+            console.log('Navigating to AI interface...');
+            await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
+
+            const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
+            await chatInput.waitFor({ state: 'visible', timeout: 30000 });
+
+            console.log('Input ready. Filling prompt...');
+            await chatInput.fill(FULL_PROMPT);
+            
+            await chatInput.press('Enter');
+            console.log('Prompt sent. Waiting 95 seconds for response to fully stream...');
+            
+            await sleep(55000);
+
+            // === PENAMBAHAN FITUR SCREENSHOT ===
+            console.log('Delay finished. Taking screenshot...');
+            await page.screenshot({ path: 'screenshot.png', fullPage: true });
+            console.log('✓ Screenshot saved as screenshot.png');
+
+            console.log('Extracting latest response text...');
+            let finalResponseText = '';
+
+            // 1. Strategi Utama: Cari container induk dari chat model agar paragraf tidak terpisah
+            const containers = [
+              '[data-message-author-role="model"]',
+              '.AI-response-container',
+              '.response-container',
+              'div[jsname]' 
+            ];
+
+            for (const selector of containers) {
+              const elements = page.locator(selector);
+              const count = await elements.count();
+              if (count > 0) {
+                finalResponseText = await elements.nth(count - 1).innerText();
+                if (finalResponseText && finalResponseText.trim().length > 100) {
+                  console.log(`✓ Berhasil mengambil respons menggunakan container selector: "${selector}"`);
+                  break;
+                }
               }
-          }
-          EOF
+            }
 
-          # Eksekusi request dan output respons langsung masuk ke log GitHub Actions
-          curl -X POST \
-            -H "Content-Type: application/json" \
-            "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
-            -d @request.json
+            // 2. Strategi Cadangan: Gabungkan semua tag <p> di dalam div[jsname] terakhir jika container luput
+            if (!finalResponseText || finalResponseText.trim().length < 100) {
+              console.log('Container selector kurang efektif, mencoba metode ekstraksi gabungan paragraf (jsname p)...');
+              const jsnameDivs = page.locator('div[jsname]');
+              const divCount = await jsnameDivs.count();
+              
+              if (divCount > 0) {
+                const pElements = jsnameDivs.nth(divCount - 1).locator('p');
+                const pCount = await pElements.count();
+                
+                let paragraphs = [];
+                for (let i = 0; i < pCount; i++) {
+                  const txt = await pElements.nth(i).innerText();
+                  if (txt.trim()) paragraphs.push(txt.trim());
+                }
+                
+                finalResponseText = paragraphs.join('\n\n');
+              }
+            }
+
+            if (!finalResponseText || finalResponseText.trim().length < 200) {
+              throw new Error('Respons tetap kosong atau terlalu pendek setelah mencoba semua opsi selector.');
+            }
+
+            fs.writeFileSync('youtube-script.txt', finalResponseText.trim(), 'utf-8');
+            console.log('✓ Script successfully generated and saved.');
+            
+            await browser.close();
+            return true;
+
+          } catch (error) {
+            console.error(`Error on attempt ${attempt}:`, error.message);
+            // Tetap coba ambil screenshot untuk keperluan debugging jika terjadi error/gagal
+            try {
+              await page.screenshot({ path: `error-screenshot-attempt-${attempt}.png`, fullPage: true });
+              console.log(`✓ Saved debug screenshot for failed attempt ${attempt}`);
+            } catch (e) {
+              console.log('Gagal menyimpan screenshot error:', e.message);
+            }
+            await browser.close();
+            return false;
+          }
+        }
+
+        async function main() {
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const success = await tryGenerate(attempt);
+            if (success) process.exit(0);
+            if (attempt < MAX_ATTEMPTS) {
+              console.log('Waiting 10 seconds before retrying...');
+              await sleep(10000);
+            }
+          }
+          console.error('❌ Failed to generate script after maximum attempts.');
+          process.exit(1);
+        }
+
+        main();
+        JSEOF
+        
+        node generate-script.js
+
+    - name: Display Screenshot in Logs
+      if: always()
+      run: |
+        echo "================================================================="
+        echo "                    SCREENSHOT PREVIEW (ASCII)                  "
+        echo "================================================================="
+        if [ -f screenshot.png ]; then
+          npx image-to-ascii-cli screenshot.png --width 80
+        elif [ -f error-screenshot-attempt-3.png ]; then
+          echo "Script gagal, menampilkan screenshot error percobaan terakhir:"
+          npx image-to-ascii-cli error-screenshot-attempt-3.png --width 80
+        else
+          echo "Screenshot file tidak ditemukan."
+        fi
+        echo "================================================================="
+
+    - name: Display Generated Script in Logs
+      run: |
+        echo "================================================================="
+        echo "                    GENERATED SCRIPT OUTPUT                      "
+        echo "================================================================="
+        if [ -f youtube-script.txt ]; then
+          cat youtube-script.txt
+        else
+          echo "Script tidak berhasil digenerate."
+        fi
+        echo "================================================================="
