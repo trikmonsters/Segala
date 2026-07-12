@@ -345,18 +345,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "🗑️ Checking for old releases..."
+          
+          # Hapus release jika ada
           RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
             --jq '.[] | select(.tag_name == "buffer_video") | .id' 2>/dev/null || echo "")
           if [ -n "$RELEASE_ID" ]; then
             echo "Deleting release ID: $RELEASE_ID"
             gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID || true
             sleep 3
-            gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/buffer_video || true
-            sleep 3
-            echo "✅ Old release deleted"
-          else
-            echo "ℹ️ No old release found"
           fi
+
+          # Selalu coba hapus tag (meski release tidak ditemukan, tag bisa masih ada)
+          gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/buffer_video || true
+          sleep 3
+          echo "✅ Cleanup done"
 
       - name: Upload video to GitHub Release
         if: ${{ github.event.inputs.post_to_buffer == 'true' }}
