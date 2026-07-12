@@ -29,6 +29,11 @@ jobs:
         run: |
           npm install playwright playwright-extra puppeteer-extra-plugin-stealth
 
+      - name: Install Playwright browsers
+        run: |
+          npx playwright install
+          npx playwright install-deps
+
       - name: Run Playwright Scraper
         env:
           TOPIC_INPUT: ${{ github.event.inputs.topic }}
@@ -164,7 +169,7 @@ jobs:
                 await sleep(10000);
               }
             }
-            console.error('❌ Failed to generate script after maximum attempts.');
+            console.error('Failed to generate script after maximum attempts.');
             process.exit(1);
           }
 
