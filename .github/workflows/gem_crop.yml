@@ -8,7 +8,7 @@ on:
         required: true
         default: ''
       caption:
-        description: 'Caption opsional (jika kosong, pakai hasil OCR)'
+        description: 'Caption opsional (jika kosong, pakai hasil Gemma)'
         required: false
         default: ''
       post_to_buffer:
@@ -37,11 +37,11 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Install Python Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libgomp1
-          pip install opencv-python-headless numpy requests
+          sudo apt-get install -y ffmpeg
+          pip install opencv-python-headless requests --quiet
 
       - name: Install Playwright Dependencies
         run: |
@@ -77,23 +77,23 @@ jobs:
               await page.waitForSelector(inputSelector, { timeout: 15000 });
               await page.fill(inputSelector, igUrl);
 
-              console.log('⚡ Mengirim URL dan menunggu proses pemrosesan server...');
+              console.log('⚡ Mengirim URL...');
               await page.press(inputSelector, 'Enter');
 
               const downloadBtnSelector = 'a.button__download, a[download="true"]';
               await page.waitForSelector(downloadBtnSelector, { timeout: 45000 });
 
               const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
-              console.log('🔗 Link video berhasil didapatkan! Mengunduh file MP4...');
+              console.log('🔗 Link video didapatkan! Mengunduh...');
 
               const response = await context.request.get(downloadUrl);
               const videoBuffer = await response.body();
 
               fs.writeFileSync('video.mp4', videoBuffer);
-              console.log('✅ Video berhasil disimpan sebagai video.mp4');
+              console.log('✅ Video disimpan sebagai video.mp4');
 
             } catch (error) {
-              console.error('❌ Gagal mengunduh video via SSSInstagram:', error.message);
+              console.error('❌ Gagal mengunduh video:', error.message);
               process.exit(1);
             } finally {
               await browser.close();
@@ -102,13 +102,12 @@ jobs:
           EOF
           node download_ig.js "${{ github.event.inputs.video_url }}"
 
-      - name: Extract Frame & Detect Video Bounds with Gemma 4
+      - name: Detect Video Bounds & Generate Caption with Gemma
         env:
-          GEMMA_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_CAPTION: ${{ github.event.inputs.caption }}
         run: |
-          pip install opencv-python-headless requests easyocr --quiet
-
-          cat << 'EOF' > detect_with_gemma.py
+          cat << 'EOF' > detect_and_caption.py
           import cv2
           import base64
           import json
@@ -118,11 +117,39 @@ jobs:
           import requests
 
           # ── 1. Validasi API Key ────────────────────────────────────
-          api_key = os.environ.get("GEMMA_API_KEY", "")
+          api_key = os.environ.get("GEMINI_API_KEY", "")
           if not api_key:
-              print("❌ GEMMA_API_KEY kosong! Cek secret di repo settings.")
+              print("❌ GEMINI_API_KEY kosong! Cek secret di repo settings.")
               sys.exit(1)
           print(f"🔑 API key loaded: {api_key[:8]}...")
+
+          input_caption = os.environ.get("INPUT_CAPTION", "").strip()
+          model_id = "gemma-4-31b-it"
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
+
+          def call_gemma(parts, max_tokens=1024):
+              payload = {
+                  "contents": [{"role": "user", "parts": parts}],
+                  "generationConfig": {
+                      "thinkingConfig": {"thinkingLevel": "HIGH"},
+                      "temperature": 0,
+                      "maxOutputTokens": max_tokens
+                  }
+              }
+              resp = requests.post(
+                  url,
+                  headers={"Content-Type": "application/json"},
+                  json=payload,
+                  timeout=60
+              )
+              resp.raise_for_status()
+              data = resp.json()
+              all_text = ""
+              for part in data["candidates"][0]["content"]["parts"]:
+                  if part.get("thought"):
+                      continue
+                  all_text += part.get("text", "") + "\n"
+              return all_text.strip()
 
           # ── 2. Ambil frame di detik ke-2 ──────────────────────────
           video_path = "video.mp4"
@@ -141,14 +168,19 @@ jobs:
 
           cv2.imwrite("frame.jpg", frame)
 
-          # ── 3. Encode frame ke base64 ──────────────────────────────
           with open("frame.jpg", "rb") as f:
               frame_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-          # ── 4. Kirim ke Gemma 4 via native Gemini API ─────────────
-          model_id = "gemma-4-31b-it"
+          image_part = {
+              "inline_data": {
+                  "mime_type": "image/jpeg",
+                  "data": frame_b64
+              }
+          }
 
-          prompt = """Analyze this video frame carefully.
+          # ── 3. Deteksi batas video (crop) ─────────────────────────
+          print("🤖 [1/2] Mendeteksi batas video content...")
+          crop_prompt = """Analyze this video frame carefully.
 
           The frame may contain:
           - A black background/letterbox area (top and/or bottom)
@@ -161,256 +193,113 @@ jobs:
           Return ONLY a raw JSON object, no markdown, no explanation:
           {"x": <left pixel>, "y": <top pixel>, "w": <width in pixels>, "h": <height in pixels>}"""
 
-          payload = {
-              "contents": [
-                  {
-                      "role": "user",
-                      "parts": [
-                          {
-                              "inline_data": {
-                                  "mime_type": "image/jpeg",
-                                  "data": frame_b64
-                              }
-                          },
-                          {
-                              "text": prompt
-                          }
-                      ]
-                  }
-              ],
-              "generationConfig": {
-                  "thinkingConfig": {
-                      "thinkingLevel": "HIGH"
-                  },
-                  "temperature": 0,
-                  "maxOutputTokens": 1024
-              }
-          }
-
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
-
-          print(f"🤖 Mengirim frame ke {model_id}...")
-
           try:
-              resp = requests.post(
-                  url,
-                  headers={"Content-Type": "application/json"},
-                  json=payload,
-                  timeout=60
-              )
-              resp.raise_for_status()
-              data = resp.json()
+              crop_response = call_gemma([image_part, {"text": crop_prompt}])
+              print(f"✅ Raw crop response: {crop_response[:300]}")
 
-              # ── 5. Parse response: kumpulkan semua teks, cari JSON ──
-              all_text = ""
-              for part in data["candidates"][0]["content"]["parts"]:
-                  if part.get("thought"):
-                      continue  # skip explicit thinking block
-                  all_text += part.get("text", "") + "\n"
-
-              print(f"✅ Raw response: {all_text[:300]}")
-
-              # Cari JSON {x, y, w, h} di dalam teks apapun
-              match = re.search(r'\{\s*"x"\s*:\s*\d+[^{}]*"h"\s*:\s*\d+\s*\}', all_text, re.DOTALL)
+              match = re.search(r'\{[^{}]*"x"[^{}]*"y"[^{}]*"w"[^{}]*"h"[^{}]*\}', crop_response, re.DOTALL)
               if not match:
-                  # Coba urutan key berbeda
-                  match = re.search(r'\{[^{}]*"x"[^{}]*"y"[^{}]*"w"[^{}]*"h"[^{}]*\}', all_text, re.DOTALL)
-              if not match:
-                  raise ValueError(f"JSON tidak ditemukan dalam respons: {all_text[:500]}")
+                  raise ValueError(f"JSON crop tidak ditemukan: {crop_response[:300]}")
 
-              raw_text = match.group(0)
-              print(f"✅ JSON terdeteksi: {raw_text}")
-
-              bounds = json.loads(raw_text)
-
-              crop_x = int(bounds["x"])
-              crop_y = int(bounds["y"])
-              crop_w = int(bounds["w"])
-              crop_h = int(bounds["h"])
-
-              # Validasi dalam batas frame
-              crop_x = max(0, min(crop_x, full_w - 1))
-              crop_y = max(0, min(crop_y, full_h - 1))
-              crop_w = min(crop_w, full_w - crop_x)
-              crop_h = min(crop_h, full_h - crop_y)
-
+              bounds = json.loads(match.group(0))
+              crop_x = max(0, min(int(bounds["x"]), full_w - 1))
+              crop_y = max(0, min(int(bounds["y"]), full_h - 1))
+              crop_w = min(int(bounds["w"]), full_w - crop_x)
+              crop_h = min(int(bounds["h"]), full_h - crop_y)
               print(f"✅ Crop final: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}")
 
           except Exception as e:
-              print(f"⚠️ Gemma gagal: {e}")
-              if 'resp' in locals() and hasattr(resp, 'text'):
-                  print(f"🔍 Detail error: {resp.text[:500]}")
-              print("🔄 Fallback: gunakan seluruh frame")
+              print(f"⚠️ Deteksi crop gagal: {e} → fallback full frame")
               crop_x, crop_y, crop_w, crop_h = 0, 0, full_w, full_h
 
-          # ── 6. Simpan crop params ke file & env ───────────────────
           with open("crop_params.txt", "w") as f:
               f.write(f"CROP_W={crop_w}\n")
               f.write(f"CROP_H={crop_h}\n")
               f.write(f"CROP_X={crop_x}\n")
               f.write(f"CROP_Y={crop_y}\n")
 
-          print(f"📄 crop_params.txt:\n  CROP_W={crop_w}\n  CROP_H={crop_h}\n  CROP_X={crop_x}\n  CROP_Y={crop_y}")
+          # ── 4. Generate text overlay & caption ────────────────────
+          print("🤖 [2/2] Generating text overlay & caption...")
 
-          # ── 7. OCR hanya pada area teks di atas video ─────────────
-          detected_text = ""
-          if crop_y > 20:
-              print(f"🔍 Menjalankan OCR pada area teks (y=0 sampai y={crop_y})...")
-              text_area = frame[0:crop_y, 0:full_w]
+          if input_caption:
+              source_text = input_caption
+              print(f"ℹ️ Menggunakan input caption manual: '{source_text}'")
+              caption_prompt = f"""Convert the following text into 2 engaging versions for social media.
+              First: a short, punchy, controversial or funny video hook (max 8 words, suitable as text overlay on a video).
+              Second: an engaging Instagram/TikTok caption with relevant hashtags.
+              Source text: "{source_text}"
+              Respond ONLY with a raw JSON array of exactly 2 strings: ["Short Hook", "Post Caption #hashtag"]
+              No markdown, no explanation, just the raw array."""
+
               try:
-                  import easyocr
-                  reader = easyocr.Reader(['en'], gpu=False)
-                  ocr_results = reader.readtext(text_area, detail=0)
-                  detected_text = " ".join(ocr_results).replace("\n", " ").strip()
-                  print(f"📝 OCR hasil: '{detected_text}'")
-              except Exception as ex:
-                  print(f"⚠️ OCR gagal: {ex}")
+                  gen_response = call_gemma([{"text": caption_prompt}], max_tokens=512)
+                  print(f"✅ Raw caption response: {gen_response[:300]}")
+                  match = re.search(r'\[.*?\]', gen_response, re.DOTALL)
+                  if not match:
+                      raise ValueError("JSON array tidak ditemukan")
+                  result = json.loads(match.group(0))
+                  text_overlay = result[0] if result else source_text
+                  buffer_caption = result[1] if len(result) > 1 else source_text
+              except Exception as e:
+                  print(f"⚠️ Generate caption gagal: {e} → pakai source text")
+                  text_overlay = source_text
+                  buffer_caption = source_text
+
           else:
-              print("ℹ️ crop_y <= 20, tidak ada area teks di atas video")
+              print("ℹ️ Tidak ada caption manual, generate dari visual frame...")
+              visual_prompt = """Look at this video frame and:
+              1. Understand what this video is about from the visual content and any visible text.
+              2. Generate a short punchy video hook (max 8 words) suitable as text overlay.
+              3. Generate an engaging Instagram/TikTok caption with relevant hashtags.
 
-          with open("detected_text.txt", "w", encoding="utf-8") as f:
-              f.write(detected_text)
+              Respond ONLY with a raw JSON array of exactly 2 strings: ["Short Hook", "Post Caption #hashtag"]
+              No markdown, no explanation, just the raw array."""
+
+              try:
+                  gen_response = call_gemma([image_part, {"text": visual_prompt}], max_tokens=512)
+                  print(f"✅ Raw visual caption response: {gen_response[:300]}")
+                  match = re.search(r'\[.*?\]', gen_response, re.DOTALL)
+                  if not match:
+                      raise ValueError("JSON array tidak ditemukan")
+                  result = json.loads(match.group(0))
+                  text_overlay = result[0] if result else ""
+                  buffer_caption = result[1] if len(result) > 1 else ""
+              except Exception as e:
+                  print(f"⚠️ Generate visual caption gagal: {e} → kosong")
+                  text_overlay = ""
+                  buffer_caption = "#reels #viral #fyp"
+
+          # Wrap text overlay agar tidak terlalu panjang per baris
+          def wrap_text(text, max_chars=35):
+              if not text:
+                  return ""
+              words = text.split()
+              lines, current = [], ""
+              for word in words:
+                  if len(current) + len(word) > max_chars:
+                      if current:
+                          lines.append(current.strip())
+                      current = word + " "
+                  else:
+                      current += word + " "
+              if current.strip():
+                  lines.append(current.strip())
+              return "\n".join(lines)
+
+          text_overlay_wrapped = wrap_text(text_overlay)
+
+          with open("text_overlay.txt", "w", encoding="utf-8") as f:
+              f.write(text_overlay_wrapped)
+
+          with open("buffer_caption.txt", "w", encoding="utf-8") as f:
+              f.write(buffer_caption)
+
+          print(f"📝 Text overlay: '{text_overlay_wrapped}'")
+          print(f"📝 Buffer caption: '{buffer_caption}'")
 
           EOF
-
-          python detect_with_gemma.py
+          python detect_and_caption.py
           cat crop_params.txt >> $GITHUB_ENV
-          
-      - name: Run Playwright ChatGPT Script
-        env:
-          INPUT_CAPTION: ${{ github.event.inputs.caption }}
-        run: |
-          cat << 'EOF' > script.js
-          const { chromium } = require('playwright-extra');
-          const stealth = require('puppeteer-extra-plugin-stealth')();
-          const fs = require('fs');
-
-          chromium.use(stealth);
-
-          function wrapText(text, maxChars = 40) {
-            if (!text) return "";
-            const words = text.split(' ');
-            let lines = [];
-            let currentLine = '';
-
-            for (let word of words) {
-              if ((currentLine + word).length > maxChars) {
-                lines.push(currentLine.trim());
-                currentLine = word + ' ';
-              } else {
-                currentLine += word + ' ';
-              }
-            }
-            if (currentLine.trim()) {
-              lines.push(currentLine.trim());
-            }
-            return lines.join('\n');
-          }
-
-          (async () => {
-            const inputCaption = process.env.INPUT_CAPTION ? process.env.INPUT_CAPTION.trim() : "";
-            let ocrText = "";
-            if (fs.existsSync('detected_text.txt')) {
-              ocrText = fs.readFileSync('detected_text.txt', 'utf8').trim();
-            }
-
-            let sourceText = "";
-            if (inputCaption.length > 0) {
-              sourceText = inputCaption;
-              console.log("ℹ️ Menggunakan input caption sebagai sumber AI.");
-            } else if (ocrText.length >= 3) {
-              sourceText = ocrText;
-              console.log("ℹ️ Menggunakan hasil OCR sebagai sumber AI.");
-            } else {
-              console.log("⚠️ Input caption kosong & OCR gagal/kosong. Menggunakan fallback hashtag.");
-              fs.writeFileSync('text_overlay.txt', '', 'utf8');
-              fs.writeFileSync('buffer_caption.txt', '#songs #countrymusic #music', 'utf8');
-              return;
-            }
-
-            const prompt = `Convert the following text into 2 engaging versions. 
-            First version: a short controversial or funny video hook overlay. 
-            Second version: an engaging social media post caption based on the text.
-            Text source: "${sourceText}"
-            Respond ONLY with a raw JSON array containing exactly 2 strings, example: ["Short Hook", "Post Caption"]. Do not include markdown blocks, do not include "json" formatting text, just the raw array.`;
-
-            const browser = await chromium.launch({ 
-              headless: true,
-              args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox']
-            });
-            const context = await browser.newContext({
-              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              viewport: { width: 1280, height: 720 },
-              locale: 'en-US'
-            });
-            const page = await context.newPage();
-
-            try {
-              console.log("🌐 Membuka ChatGPT...");
-              await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-              const inputSelector = 'div#prompt-textarea, textarea[placeholder*="Message ChatGPT"], [contenteditable="true"]';
-              await page.waitForSelector(inputSelector, { timeout: 30000 });
-              
-              console.log("⌨️ Memasukkan prompt ke ChatGPT...");
-              await page.fill(inputSelector, prompt);
-              await page.waitForTimeout(1000);
-              
-              const sendButtonSelector = 'button[data-testid="send-button"], button[aria-label="Send message"]';
-              if (await page.locator(sendButtonSelector).count() > 0) {
-                await page.click(sendButtonSelector);
-              } else {
-                await page.press(inputSelector, 'Enter');
-              }
-              
-              console.log("⏳ Menunggu AI memproses jawaban secara natural...");
-              const stopStreamingSelector = 'button[aria-label="Stop generating"], button[data-testid="stop-button"]';
-              
-              try { await page.waitForSelector(stopStreamingSelector, { timeout: 5000 }); } catch(e) {}
-              await page.waitForSelector(stopStreamingSelector, { state: 'detached', timeout: 60000 });
-              
-              const responseSelector = 'article [data-message-author-role="assistant"], div.markdown, .agent-turn';
-              await page.waitForSelector(responseSelector, { timeout: 15000 });
-              
-              const responses = await page.locator(responseSelector).all();
-              if (responses.length > 0) {
-                let lastResponseText = await responses[responses.length - 1].innerText();
-                console.log("✅ Respons didapatkan!");
-                
-                if (lastResponseText.includes('```')) {
-                    const parts = lastResponseText.split('```');
-                    lastResponseText = parts[1];
-                    if (lastResponseText.startsWith('json')) {
-                        lastResponseText = lastResponseText.substring(4);
-                    }
-                }
-                lastResponseText = lastResponseText.trim();
-
-                try {
-                    const parsedJson = JSON.parse(lastResponseText);
-                    const videoHook = parsedJson[0] || sourceText;
-                    const bufferCap = parsedJson[1] || sourceText;
-
-                    fs.writeFileSync('text_overlay.txt', wrapText(videoHook), 'utf8');
-                    fs.writeFileSync('buffer_caption.txt', bufferCap, 'utf8');
-                } catch (e) {
-                    const cleanText = lastResponseText.replace(/[\[\]"]/g, '').split('\n')[0] || sourceText;
-                    fs.writeFileSync('text_overlay.txt', wrapText(cleanText), 'utf8');
-                    fs.writeFileSync('buffer_caption.txt', cleanText, 'utf8');
-                }
-              } else {
-                throw new Error("Response element not found");
-              }
-            } catch (error) {
-              console.error("❌ Terjadi kesalahan pada Skrip Playwright:", error.message);
-              fs.writeFileSync('text_overlay.txt', wrapText(sourceText), 'utf8');
-              fs.writeFileSync('buffer_caption.txt', sourceText, 'utf8');
-            } finally {
-              await browser.close();
-            }
-          })();
-          EOF
-          node script.js
 
       - name: Process Video with FFmpeg
         run: |
@@ -442,22 +331,21 @@ jobs:
           fi
 
           mv output.mp4 video.mp4
-          
+
       - name: Delete old release
         if: ${{ github.event.inputs.post_to_buffer == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           echo "🗑️ Checking for old releases..."
           RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
             --jq '.[] | select(.tag_name == "buffer_video") | .id' 2>/dev/null || echo "")
           if [ -n "$RELEASE_ID" ]; then
             echo "Deleting release ID: $RELEASE_ID"
-            gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID
-            sleep 2
+            gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID || true
+            sleep 3
             gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/buffer_video || true
-            sleep 2
+            sleep 3
             echo "✅ Old release deleted"
           else
             echo "ℹ️ No old release found"
@@ -468,21 +356,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           echo "📦 Creating GitHub release..."
-          gh release create buffer_video \
-            --repo "${{ github.repository }}" \
-            --title "Buffer Video (Temporary Hosting)" \
-            --notes "Temporary hosting for Buffer API. Automatically replaced on next run." \
-            video.mp4
-          echo "✅ Release created successfully"
+          # Retry loop: kadang tag belum terhapus sempurna
+          for i in 1 2 3; do
+            gh release create buffer_video \
+              --repo "${{ github.repository }}" \
+              --title "Buffer Video (Temporary Hosting)" \
+              --notes "Temporary hosting for Buffer API. Automatically replaced on next run." \
+              video.mp4 && break
+            echo "⚠️ Attempt $i gagal, retry dalam 5 detik..."
+            sleep 5
+          done
+          echo "✅ Release created"
 
       - name: Get video URL from release
         if: ${{ github.event.inputs.post_to_buffer == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           sleep 5
           VIDEO_URL=$(gh api repos/${{ github.repository }}/releases/tags/buffer_video \
             --jq '.assets[0].browser_download_url')
@@ -499,12 +390,9 @@ jobs:
           BUFFER_API_KEY: ${{ secrets.BUFFER_V2 }}
           VIDEO_URL: ${{ env.VIDEO_URL }}
         run: |
-          set -e
-          echo "📤 Sending to Buffer API..."
           python3 - <<'PYEOF'
           import os
           import json
-          import sys
           import urllib.request
           import urllib.error
           from datetime import datetime, timezone, timedelta
@@ -533,8 +421,8 @@ jobs:
           for ch in channels:
               channel_id = ch["id"]
               platform = ch["platform"]
-              print(f"🚀 Processing channel: {channel_id} ({platform})")
-              
+              print(f"🚀 Processing: {channel_id} ({platform})")
+
               if platform == "instagram":
                   metadata_str = ", metadata: { instagram: { type: reel, shouldShareToFeed: true } }"
               else:
@@ -556,7 +444,6 @@ jobs:
               )
 
               payload = json.dumps({"query": mutation}).encode("utf-8")
-
               req = urllib.request.Request(
                   "https://api.buffer.com/graphql",
                   data=payload,
@@ -569,9 +456,8 @@ jobs:
               try:
                   with urllib.request.urlopen(req) as res:
                       body = json.loads(res.read().decode("utf-8"))
-                  print(f"✅ Buffer API Response for {channel_id}:")
+                  print(f"✅ Buffer response ({channel_id}):")
                   print(json.dumps(body, indent=2))
               except urllib.error.HTTPError as e:
-                  print(f"❌ HTTP Error {e.code} for channel {channel_id}: {e.read().decode()}")
-                  continue
+                  print(f"❌ HTTP Error {e.code} for {channel_id}: {e.read().decode()}")
           PYEOF
