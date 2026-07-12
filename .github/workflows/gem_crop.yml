@@ -107,16 +107,24 @@ jobs:
           GEMMA_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           pip install opencv-python-headless requests easyocr --quiet
-          
+
           cat << 'EOF' > detect_with_gemma.py
           import cv2
           import base64
           import json
+          import re
           import os
           import sys
           import requests
 
-          # ── 1. Ambil frame di detik ke-2 ──────────────────────────
+          # ── 1. Validasi API Key ────────────────────────────────────
+          api_key = os.environ.get("GEMMA_API_KEY", "")
+          if not api_key:
+              print("❌ GEMMA_API_KEY kosong! Cek secret di repo settings.")
+              sys.exit(1)
+          print(f"🔑 API key loaded: {api_key[:8]}...")
+
+          # ── 2. Ambil frame di detik ke-2 ──────────────────────────
           video_path = "video.mp4"
           cap = cv2.VideoCapture(video_path)
           fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -133,12 +141,11 @@ jobs:
 
           cv2.imwrite("frame.jpg", frame)
 
-          # ── 2. Encode frame ke base64 ──────────────────────────────
+          # ── 3. Encode frame ke base64 ──────────────────────────────
           with open("frame.jpg", "rb") as f:
               frame_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-          # ── 3. Kirim ke Gemma 4 via native Gemini API ─────────────
-          api_key = os.environ["GEMMA_API_KEY"]
+          # ── 4. Kirim ke Gemma 4 via native Gemini API ─────────────
           model_id = "gemma-4-31b-it"
 
           prompt = """Analyze this video frame carefully.
@@ -176,13 +183,13 @@ jobs:
                       "thinkingLevel": "HIGH"
                   },
                   "temperature": 0,
-                  "maxOutputTokens": 256
+                  "maxOutputTokens": 1024
               }
           }
 
           url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
 
-          print(f"🤖 Mengirim frame ke {model_id} (native Gemini API)...")
+          print(f"🤖 Mengirim frame ke {model_id}...")
 
           try:
               resp = requests.post(
@@ -194,17 +201,26 @@ jobs:
               resp.raise_for_status()
               data = resp.json()
 
-              # Ambil text, skip thinking block
-              raw_text = ""
+              # ── 5. Parse response: kumpulkan semua teks, cari JSON ──
+              all_text = ""
               for part in data["candidates"][0]["content"]["parts"]:
                   if part.get("thought"):
-                      continue
-                  raw_text = part.get("text", "").strip()
-                  break
+                      continue  # skip explicit thinking block
+                  all_text += part.get("text", "") + "\n"
 
-              print(f"✅ Respons Gemma: {raw_text}")
+              print(f"✅ Raw response: {all_text[:300]}")
 
-              raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+              # Cari JSON {x, y, w, h} di dalam teks apapun
+              match = re.search(r'\{\s*"x"\s*:\s*\d+[^{}]*"h"\s*:\s*\d+\s*\}', all_text, re.DOTALL)
+              if not match:
+                  # Coba urutan key berbeda
+                  match = re.search(r'\{[^{}]*"x"[^{}]*"y"[^{}]*"w"[^{}]*"h"[^{}]*\}', all_text, re.DOTALL)
+              if not match:
+                  raise ValueError(f"JSON tidak ditemukan dalam respons: {all_text[:500]}")
+
+              raw_text = match.group(0)
+              print(f"✅ JSON terdeteksi: {raw_text}")
+
               bounds = json.loads(raw_text)
 
               crop_x = int(bounds["x"])
@@ -218,7 +234,7 @@ jobs:
               crop_w = min(crop_w, full_w - crop_x)
               crop_h = min(crop_h, full_h - crop_y)
 
-              print(f"✅ Crop terdeteksi: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}")
+              print(f"✅ Crop final: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}")
 
           except Exception as e:
               print(f"⚠️ Gemma gagal: {e}")
@@ -227,32 +243,36 @@ jobs:
               print("🔄 Fallback: gunakan seluruh frame")
               crop_x, crop_y, crop_w, crop_h = 0, 0, full_w, full_h
 
-          # ── 4. Simpan crop params ──────────────────────────────────
+          # ── 6. Simpan crop params ke file & env ───────────────────
           with open("crop_params.txt", "w") as f:
               f.write(f"CROP_W={crop_w}\n")
               f.write(f"CROP_H={crop_h}\n")
               f.write(f"CROP_X={crop_x}\n")
               f.write(f"CROP_Y={crop_y}\n")
 
-          # ── 5. OCR hanya pada area teks di atas video ─────────────
+          print(f"📄 crop_params.txt:\n  CROP_W={crop_w}\n  CROP_H={crop_h}\n  CROP_X={crop_x}\n  CROP_Y={crop_y}")
+
+          # ── 7. OCR hanya pada area teks di atas video ─────────────
           detected_text = ""
           if crop_y > 20:
+              print(f"🔍 Menjalankan OCR pada area teks (y=0 sampai y={crop_y})...")
               text_area = frame[0:crop_y, 0:full_w]
               try:
                   import easyocr
                   reader = easyocr.Reader(['en'], gpu=False)
                   ocr_results = reader.readtext(text_area, detail=0)
                   detected_text = " ".join(ocr_results).replace("\n", " ").strip()
-                  print(f"📝 OCR teks overlay: {detected_text}")
+                  print(f"📝 OCR hasil: '{detected_text}'")
               except Exception as ex:
                   print(f"⚠️ OCR gagal: {ex}")
           else:
-              print("ℹ️ Tidak ada area teks di atas video (crop_y <= 20)")
+              print("ℹ️ crop_y <= 20, tidak ada area teks di atas video")
 
           with open("detected_text.txt", "w", encoding="utf-8") as f:
               f.write(detected_text)
+
           EOF
-          
+
           python detect_with_gemma.py
           cat crop_params.txt >> $GITHUB_ENV
           
