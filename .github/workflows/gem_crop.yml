@@ -180,18 +180,10 @@ jobs:
 
           # ── 3. Deteksi batas video (crop) ─────────────────────────
           print("🤖 [1/2] Mendeteksi batas video content...")
-          crop_prompt = """Analyze this video frame carefully.
-
-          The frame may contain:
-          - A black background/letterbox area (top and/or bottom)
-          - A text overlay printed on the black background (above or below the actual video)
-          - The actual video content (the real scene/clip, usually a rectangle in the center)
-
-          Your task: identify the bounding box of the ACTUAL VIDEO CONTENT only.
-          Exclude the black padding AND any text overlays on the black area.
-
-          Return ONLY a raw JSON object, no markdown, no explanation:
-          {"x": <left pixel>, "y": <top pixel>, "w": <width in pixels>, "h": <height in pixels>}"""
+          crop_prompt = """ Lihat gambar ini. Di dalamnya ada video utama dan teks overlay dengan latar belakang hitam/putih/sejenisnya.
+          Tolong deteksi koordinat kotak (bounding box) untuk VIDEO UTAMA saja. Abaikan semua teks overlay.
+          Kembalikan hasilnya dalam format JSON murni:  {"x": <left pixel>, "y": <top pixel>, "w": <width in pixels>, "h": <height in pixels>}
+          Gunakan skala 0 sampai 1000 untuk koordinatnya."""
 
           try:
               crop_response = call_gemma([image_part, {"text": crop_prompt}])
