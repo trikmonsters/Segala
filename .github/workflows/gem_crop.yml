@@ -197,9 +197,10 @@ jobs:
               crop_response = call_gemma([image_part, {"text": crop_prompt}])
               print(f"✅ Raw crop response: {crop_response[:300]}")
 
-              match = re.search(r'\{[^{}]*"x"[^{}]*"y"[^{}]*"w"[^{}]*"h"[^{}]*\}', crop_response, re.DOTALL)
+              clean_crop = crop_response.replace("```json", "").replace("```", "").strip()
+              match = re.search(r'\{[^{}]*"x"[^{}]*"y"[^{}]*"w"[^{}]*"h"[^{}]*\}', clean_crop, re.DOTALL)
               if not match:
-                  raise ValueError(f"JSON crop tidak ditemukan: {crop_response[:300]}")
+                  raise ValueError(f"JSON crop tidak ditemukan: {clean_crop[:300]}")
 
               bounds = json.loads(match.group(0))
               crop_x = max(0, min(int(bounds["x"]), full_w - 1))
@@ -212,14 +213,40 @@ jobs:
               print(f"⚠️ Deteksi crop gagal: {e} → fallback full frame")
               crop_x, crop_y, crop_w, crop_h = 0, 0, full_w, full_h
 
+          # Tulis crop_params.txt untuk dibaca bash langsung
           with open("crop_params.txt", "w") as f:
               f.write(f"CROP_W={crop_w}\n")
               f.write(f"CROP_H={crop_h}\n")
               f.write(f"CROP_X={crop_x}\n")
               f.write(f"CROP_Y={crop_y}\n")
 
+          print(f"📄 crop_params.txt ditulis: W={crop_w} H={crop_h} X={crop_x} Y={crop_y}")
+
           # ── 4. Generate text overlay & caption ────────────────────
           print("🤖 [2/2] Generating text overlay & caption...")
+
+          def parse_json_array(text):
+              clean = text.replace("```json", "").replace("```", "").strip()
+              match = re.search(r'\[.*\]', clean, re.DOTALL)
+              if not match:
+                  raise ValueError(f"JSON array tidak ditemukan dalam: {clean[:300]}")
+              return json.loads(match.group(0))
+
+          def wrap_text(text, max_chars=35):
+              if not text:
+                  return ""
+              words = text.split()
+              lines, current = [], ""
+              for word in words:
+                  if len(current) + len(word) > max_chars:
+                      if current:
+                          lines.append(current.strip())
+                      current = word + " "
+                  else:
+                      current += word + " "
+              if current.strip():
+                  lines.append(current.strip())
+              return "\n".join(lines)
 
           if input_caption:
               source_text = input_caption
@@ -232,12 +259,9 @@ jobs:
               No markdown, no explanation, just the raw array."""
 
               try:
-                  gen_response = call_gemma([{"text": caption_prompt}], max_tokens=512)
-                  print(f"✅ Raw caption response: {gen_response[:300]}")
-                  match = re.search(r'\[.*?\]', gen_response, re.DOTALL)
-                  if not match:
-                      raise ValueError("JSON array tidak ditemukan")
-                  result = json.loads(match.group(0))
+                  gen_response = call_gemma([{"text": caption_prompt}], max_tokens=1024)
+                  print(f"✅ Raw caption response: {gen_response[:500]}")
+                  result = parse_json_array(gen_response)
                   text_overlay = result[0] if result else source_text
                   buffer_caption = result[1] if len(result) > 1 else source_text
               except Exception as e:
@@ -256,35 +280,15 @@ jobs:
               No markdown, no explanation, just the raw array."""
 
               try:
-                  gen_response = call_gemma([image_part, {"text": visual_prompt}], max_tokens=512)
-                  print(f"✅ Raw visual caption response: {gen_response[:300]}")
-                  match = re.search(r'\[.*?\]', gen_response, re.DOTALL)
-                  if not match:
-                      raise ValueError("JSON array tidak ditemukan")
-                  result = json.loads(match.group(0))
+                  gen_response = call_gemma([image_part, {"text": visual_prompt}], max_tokens=1024)
+                  print(f"✅ Raw visual caption response: {gen_response[:500]}")
+                  result = parse_json_array(gen_response)
                   text_overlay = result[0] if result else ""
                   buffer_caption = result[1] if len(result) > 1 else ""
               except Exception as e:
                   print(f"⚠️ Generate visual caption gagal: {e} → kosong")
                   text_overlay = ""
                   buffer_caption = "#reels #viral #fyp"
-
-          # Wrap text overlay agar tidak terlalu panjang per baris
-          def wrap_text(text, max_chars=35):
-              if not text:
-                  return ""
-              words = text.split()
-              lines, current = [], ""
-              for word in words:
-                  if len(current) + len(word) > max_chars:
-                      if current:
-                          lines.append(current.strip())
-                      current = word + " "
-                  else:
-                      current += word + " "
-              if current.strip():
-                  lines.append(current.strip())
-              return "\n".join(lines)
 
           text_overlay_wrapped = wrap_text(text_overlay)
 
@@ -294,26 +298,29 @@ jobs:
           with open("buffer_caption.txt", "w", encoding="utf-8") as f:
               f.write(buffer_caption)
 
-          print(f"📝 Text overlay: '{text_overlay_wrapped}'")
+          print(f"📝 Text overlay : '{text_overlay_wrapped}'")
           print(f"📝 Buffer caption: '{buffer_caption}'")
 
           EOF
           python detect_and_caption.py
-          cat crop_params.txt >> $GITHUB_ENV
 
       - name: Process Video with FFmpeg
         run: |
           curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
 
+          # Baca crop params dari file langsung (lebih reliable dari ${{ env.* }})
+          source crop_params.txt
+          echo "📐 Crop params: x=$CROP_X y=$CROP_Y w=$CROP_W h=$CROP_H"
+
           if [ ! -s text_overlay.txt ]; then
             echo "ℹ️ Teks overlay kosong, memotong video tanpa teks..."
             ffmpeg -i "video.mp4" \
-              -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }},\
+              -filter_complex "[0:v]crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},\
                                scale=1080:1920:force_original_aspect_ratio=decrease,\
                                pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white[v]" \
               -map "[v]" -map 0:a -c:a copy output.mp4
           else
-            SCALED_H=$(( ${{ env.CROP_H }} * 1080 / ${{ env.CROP_W }} ))
+            SCALED_H=$(( CROP_H * 1080 / CROP_W ))
             TOP_PAD=$(( (1920 - SCALED_H) / 2 ))
             if [ $TOP_PAD -lt 0 ]; then TOP_PAD=0; fi
             TOP_CENTER=$(( TOP_PAD / 2 ))
@@ -322,7 +329,7 @@ jobs:
             echo "📐 Scaled H=$SCALED_H | Top Pad=$TOP_PAD | Text Y=$TOP_CENTER"
 
             ffmpeg -i "video.mp4" \
-              -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }},\
+              -filter_complex "[0:v]crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},\
                                scale=1080:1920:force_original_aspect_ratio=decrease,\
                                unsharp=5:5:1.0:5:5:0.0,\
                                pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white,\
@@ -357,7 +364,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "📦 Creating GitHub release..."
-          # Retry loop: kadang tag belum terhapus sempurna
           for i in 1 2 3; do
             gh release create buffer_video \
               --repo "${{ github.repository }}" \
