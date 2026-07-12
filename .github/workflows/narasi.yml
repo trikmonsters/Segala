@@ -27,14 +27,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth axios
 
       - name: Install Playwright browsers
         run: |
           npx playwright install
           npx playwright install-deps
 
-      - name: Run Playwright Scraper
+      - name: Run Playwright Scraper with Rotating Proxy
         env:
           TOPIC_INPUT: ${{ github.event.inputs.topic }}
           LANGUAGE: ${{ github.event.inputs.language }}
@@ -43,11 +43,13 @@ jobs:
           const { chromium } = require('playwright-extra');
           const stealth = require('puppeteer-extra-plugin-stealth')();
           chromium.use(stealth);
+          const axios = require('axios');
           const fs = require('fs');
 
           const TOPIC = process.env.TOPIC_INPUT || 'Rahasia Psikologi Manusia';
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
-          const MAX_ATTEMPTS = 3;
+          const MAX_ATTEMPTS = 5;
+          const MAX_PROXY_RETRIES = 3;
 
           const prompt = `Hallo apa kabar?`;
 
@@ -84,16 +86,53 @@ jobs:
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-          async function tryGenerate(attempt) {
-            console.log('[Attempt ' + attempt + '/' + MAX_ATTEMPTS + '] Launching browser...');
+          // Fetch proxy list from ProxyScrape API
+          async function getProxyList() {
+            try {
+              console.log('[Proxy] Fetching proxy list from ProxyScrape API...');
+              const response = await axios.get(
+                'https://api.proxyscrape.com/v4/free-proxy-list/get?' +
+                'request=display_proxies&' +
+                'protocol=http&' +
+                'format=textplain&' +
+                'anonymity=elite&' +
+                'timeout=5000',
+                { timeout: 15000 }
+              );
+
+              const proxies = response.data
+                .split('\n')
+                .filter(p => p.trim().length > 0)
+                .slice(0, 20); // Ambil 20 proxy terbaik
+
+              console.log('[Proxy] Successfully fetched ' + proxies.length + ' working proxies');
+              return proxies;
+            } catch (error) {
+              console.error('[Proxy] Failed to fetch proxy list:', error.message);
+              return [];
+            }
+          }
+
+          // Parse proxy string to object
+          function parseProxy(proxyStr) {
+            const [ip, port] = proxyStr.trim().split(':');
+            return { ip: ip.trim(), port: port.trim() };
+          }
+
+          async function tryGenerate(attempt, proxyList, proxyIndex) {
+            const currentProxy = proxyList[proxyIndex % proxyList.length];
+            const { ip, port } = parseProxy(currentProxy);
+
+            console.log('[Attempt ' + attempt + '] Launching browser with proxy: ' + ip + ':' + port);
             
             const browser = await chromium.launch({
               headless: true,
               args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
                 '--disable-blink-features=AutomationControlled',
-                '--incognito'
+                '--incognito',
+                '--proxy-server=http://' + ip + ':' + port
               ]
             });
 
@@ -101,84 +140,158 @@ jobs:
               viewport: { width: 1280, height: 1000 },
               userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
               locale: 'id-ID',
-              permissions: ['clipboard-read', 'clipboard-write']
+              permissions: ['clipboard-read', 'clipboard-write'],
+              ignoreHTTPSErrors: true
             });
 
             const page = await context.newPage();
 
             try {
-              console.log('Navigating to AI interface...');
-              await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
-
-              const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
-              await chatInput.waitFor({ state: 'visible', timeout: 30000 });
-
-              console.log('Input ready. Filling prompt...');
-              await chatInput.fill(prompt);
+              console.log('[Attempt ' + attempt + '] Navigating to Google AI Mode...');
               
-              await chatInput.press('Enter');
-              console.log('Prompt sent. Waiting 4m for response to fully stream...');
-              
-              await sleep(4 * 60 * 1000);
-
-              console.log('Delay finished. Taking screenshot...');
-              await page.screenshot({ path: 'screenshot.png', fullPage: true });
-
-              console.log('Locating the copy button...');
-
-              const selectors = [
-                'button[aria-label="Salin teks"]',      // Indonesian
-                'button[aria-label="Copy text"]',        // English
-                'button[aria-label*="Salin"]',
-                'button[aria-label*="Copy"]',
-                'button.bKxaof',                         // Class backup
-                'div.Pc83ge button.W4bPNd'               // Original selector
-              ];
-
-              let copyButtons = null;
-              let foundSelector = '';
-
-              for (const selector of selectors) {
-                const btn = page.locator(selector);
-                const count = await btn.count();
-                if (count > 0) {
-                  copyButtons = btn;
-                  foundSelector = selector;
-                  console.log('✓ Found copy button with selector: ' + selector);
-                  break;
-                }
-              }
-
-              if (!copyButtons || await copyButtons.count() === 0) {
-                throw new Error('Tombol salin tidak ditemukan dengan selector apapun.');
-              }
-
-              const buttonCount = await copyButtons.count();
-              console.log('Found ' + buttonCount + ' copy buttons. Clicking the latest one...');
-              await copyButtons.nth(buttonCount - 1).click();
-              
-              await sleep(1500); 
-
-              console.log('Reading text from clipboard...');
-              const finalResponseText = await page.evaluate(async () => {
-                return await navigator.clipboard.readText();
+              // Set extra headers untuk bypass detection
+              await page.setExtraHTTPHeaders({
+                'Accept-Language': 'id-ID,id;q=0.9',
+                'Accept-Encoding': 'gzip, deflate',
+                'Cache-Control': 'max-age=0',
               });
 
+              await page.goto('https://www.google.com/aimode', { 
+                waitUntil: 'domcontentloaded', 
+                timeout: 45000 
+              });
+
+              console.log('[Attempt ' + attempt + '] Page loaded. Waiting for input element...');
+
+              // Lebih aggressive waiting
+              try {
+                await page.waitForSelector('textarea', { timeout: 30000 });
+              } catch (e) {
+                console.warn('[Attempt ' + attempt + '] Textarea not found with waitForSelector');
+              }
+
+              // Tunggu hingga element visible dan clickable
+              await page.waitForFunction(() => {
+                const textarea = document.querySelector('textarea');
+                return textarea && textarea.offsetParent !== null && !textarea.disabled;
+              }, { timeout: 30000 });
+
+              const chatInput = page.locator('textarea').first();
+              
+              console.log('[Attempt ' + attempt + '] Input ready. Clicking and filling...');
+              await chatInput.click();
+              await sleep(800);
+              await chatInput.fill('');
+              
+              // Type dengan delay untuk mimic human behavior
+              await chatInput.type(prompt, { delay: 30 });
+              await sleep(1000);
+
+              // Press Enter
+              console.log('[Attempt ' + attempt + '] Sending prompt...');
+              await chatInput.press('Enter');
+              
+              console.log('[Attempt ' + attempt + '] Waiting for response stream...');
+              
+              // Tunggu response dengan smart detection
+              let responseDetected = false;
+              let startWait = Date.now();
+              const maxWait = 120000; // 2 menit max
+
+              while (!responseDetected && (Date.now() - startWait) < maxWait) {
+                const hasResponse = await page.evaluate(() => {
+                  const responses = document.querySelectorAll('[role="article"], .response-message, div[data-message]');
+                  return responses.length > 0;
+                });
+
+                if (hasResponse) {
+                  responseDetected = true;
+                  console.log('[Attempt ' + attempt + '] ✓ Response detected!');
+                  break;
+                }
+                await sleep(2000);
+              }
+
+              if (!responseDetected) {
+                console.warn('[Attempt ' + attempt + '] No response detected after 2 minutes, but continuing...');
+              }
+
+              // Tunggu loading selesai
+              console.log('[Attempt ' + attempt + '] Waiting for response to complete...');
+              await page.waitForFunction(() => {
+                const loaders = document.querySelectorAll('[role="status"], .loading');
+                return loaders.length === 0;
+              }, { timeout: 120000 }).catch(() => {
+                console.warn('[Attempt ' + attempt + '] Still loading, proceeding anyway...');
+              });
+
+              // Buffer time
+              await sleep(3000);
+
+              // Scroll to bottom
+              await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+              await sleep(1000);
+
+              console.log('[Attempt ' + attempt + '] Looking for copy button...');
+
+              // Cari dan click copy button
+              const copySuccess = await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const copyBtn = buttons.find(b => {
+                  const label = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+                  return label.includes('copy') || label.includes('salin');
+                });
+
+                if (copyBtn) {
+                  copyBtn.click();
+                  return true;
+                }
+                return false;
+              });
+
+              if (!copySuccess) {
+                console.warn('[Attempt ' + attempt + '] Copy button not found, trying alternative method...');
+              }
+
+              await sleep(2000);
+
+              // Read from clipboard
+              console.log('[Attempt ' + attempt + '] Reading clipboard...');
+              let finalResponseText = '';
+              try {
+                finalResponseText = await page.evaluate(async () => {
+                  return await navigator.clipboard.readText();
+                });
+              } catch (e) {
+                console.warn('[Attempt ' + attempt + '] Clipboard read failed');
+                finalResponseText = await page.evaluate(() => {
+                  const responses = document.querySelectorAll('[role="article"], .message-content');
+                  if (responses.length > 0) {
+                    return Array.from(responses).map(r => r.textContent).join('\n\n');
+                  }
+                  return '';
+                });
+              }
+
               if (!finalResponseText || finalResponseText.trim().length < 200) {
-                throw new Error('Teks clipboard kosong atau terlalu pendek.');
+                const charCount = finalResponseText ? finalResponseText.length : 0;
+                throw new Error('Response terlalu pendek: ' + charCount + ' chars');
               }
 
               fs.writeFileSync('youtube-script.txt', finalResponseText.trim(), 'utf-8');
-              console.log('✓ Script successfully captured via clipboard and saved.');
-              console.log('✓ Script length: ' + finalResponseText.length + ' characters');
+              console.log('✅ [Attempt ' + attempt + '] Script generated successfully!');
+              console.log('   Length: ' + finalResponseText.length + ' characters');
               
               await browser.close();
               return true;
 
             } catch (error) {
-              console.error('Error on attempt ' + attempt + ':', error.message);
+              console.error('[Attempt ' + attempt + '] Error:', error.message);
               try {
-                await page.screenshot({ path: 'error-screenshot-attempt-' + attempt + '.png', fullPage: true });
+                await page.screenshot({ 
+                  path: 'error-attempt-' + attempt + '-proxy-' + ip.replace(/\./g, '-') + '.png', 
+                  fullPage: true 
+                });
               } catch (e) {}
               await browser.close();
               return false;
@@ -186,15 +299,39 @@ jobs:
           }
 
           async function main() {
+            const proxyList = await getProxyList();
+            
+            if (proxyList.length === 0) {
+              console.error('❌ Failed to fetch proxy list');
+              process.exit(1);
+            }
+
+            let proxyIndex = 0;
+
             for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-              const success = await tryGenerate(attempt);
-              if (success) process.exit(0);
+              // Try multiple proxies per attempt
+              for (let proxyRetry = 0; proxyRetry < MAX_PROXY_RETRIES; proxyRetry++) {
+                const success = await tryGenerate(attempt, proxyList, proxyIndex);
+                proxyIndex++;
+
+                if (success) {
+                  console.log('✅ Success! Exiting...');
+                  process.exit(0);
+                }
+
+                if (proxyRetry < MAX_PROXY_RETRIES - 1) {
+                  console.log('Trying next proxy...');
+                  await sleep(3000);
+                }
+              }
+
               if (attempt < MAX_ATTEMPTS) {
-                console.log('Waiting 10 seconds before retrying...');
-                await sleep(10000);
+                console.log('Waiting 15 seconds before next attempt...');
+                await sleep(15000);
               }
             }
-            console.error('Failed to generate script after maximum attempts.');
+
+            console.error('❌ Failed to generate script after maximum attempts');
             process.exit(1);
           }
 
@@ -203,40 +340,28 @@ jobs:
           
           node generate-script.js
 
-      - name: Display Screenshot in Logs
-        if: always()
-        run: |
-          echo "================================================================="
-          echo "                    SCREENSHOT PREVIEW                         "
-          echo "================================================================="
-          if [ -f screenshot.png ]; then
-            echo "✓ Screenshot tersedia di artifacts"
-          elif [ -f error-screenshot-attempt-3.png ]; then
-            echo "❌ Script gagal, screenshot error tersedia di artifacts"
-          else
-            echo "⚠️  Screenshot file tidak ditemukan."
-          fi
-          echo "================================================================="
-
-      - name: Display Generated Script in Logs
+      - name: Display Generated Script
         if: always()
         run: |
           echo "================================================================="
           echo "                    GENERATED SCRIPT OUTPUT                      "
           echo "================================================================="
           if [ -f youtube-script.txt ]; then
-            LINE_COUNT=$(wc -l < youtube-script.txt)
             CHAR_COUNT=$(wc -c < youtube-script.txt)
-            echo "✓ Script generated successfully"
-            echo "  Lines: $LINE_COUNT"
-            echo "  Characters: $CHAR_COUNT"
+            WORD_COUNT=$(wc -w < youtube-script.txt)
+            echo "✅ Script generated successfully"
+            echo "   Words: $WORD_COUNT"
+            echo "   Characters: $CHAR_COUNT"
             echo ""
-            echo "--- PREVIEW (First 50 lines) ---"
-            head -50 youtube-script.txt
+            echo "--- PREVIEW (First 100 lines) ---"
+            head -100 youtube-script.txt
             echo ""
             echo "... [Script lengkap tersimpan di artifacts] ..."
           else
-            echo "❌ Script tidak berhasil digenerate."
+            echo "❌ Script gagal digenerate"
+            echo ""
+            echo "Error screenshots:"
+            ls -lah error-attempt-*.png 2>/dev/null || echo "  Tidak ada error screenshots"
           fi
           echo "================================================================="
 
@@ -247,8 +372,7 @@ jobs:
           name: generated-files
           path: |
             youtube-script.txt
-            screenshot.png
-            error-screenshot-*.png
+            error-attempt-*.png
           retention-days: 7
           if-no-files-found: warn
 
@@ -258,17 +382,4 @@ jobs:
           echo "## 📊 Workflow Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Topic:** \`${{ github.event.inputs.topic }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Language:** \`${{ github.event.inputs.language }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Timestamp:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f youtube-script.txt ]; then
-            CHAR_COUNT=$(wc -c < youtube-script.txt)
-            echo "### ✅ Success" >> $GITHUB_STEP_SUMMARY
-            echo "- Script generated with **$CHAR_COUNT characters**" >> $GITHUB_STEP_SUMMARY
-            echo "- Files available in artifacts for 7 days" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ❌ Failed" >> $GITHUB_STEP_SUMMARY
-            echo "- Check workflow logs for details" >> $GITHUB_STEP_SUMMARY
-            echo "- Error screenshots available in artifacts" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo
