@@ -1,20 +1,16 @@
-name: Generate YouTube Script with Google AI
+name: Generate YouTube Script with AI
 
 on:
   workflow_dispatch:
     inputs:
       topic:
-        description: 'Topic for YouTube script'
+        description: 'Topik untuk script YouTube'
         required: true
-        default: 'How to Make Delicious Coffee'
+        default: 'Rahasia Psikologi Manusia'
       language:
-        description: 'Script language'
+        description: 'Bahasa untuk script'
         required: true
-        default: 'English'
-        type: choice
-        options:
-          - English
-          - Indonesian
+        default: 'Indonesian'
 
 jobs:
   generate-script:
@@ -29,57 +25,102 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install Playwright
-        run: npm install -D @playwright/test
-
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
-
-      - name: Generate YouTube Script
+      - name: Install dependencies
         run: |
-          node - <<'EOF'
-          const { chromium } = require('@playwright/test');
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+
+      - name: Install Playwright browsers
+        run: |
+          npx playwright install
+          npx playwright install-deps
+
+      - name: Run Playwright Scraper
+        env:
+          TOPIC_INPUT: ${{ github.event.inputs.topic }}
+          LANGUAGE: ${{ github.event.inputs.language }}
+        run: |
+          cat > generate-script.js << 'JSEOF'
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+          chromium.use(stealth);
           const fs = require('fs');
-          const path = require('path');
 
-          (async () => {
-            const browser = await chromium.launch({ headless: true });
-            const context = await browser.newContext({
-              locale: 'en-US',
-              timezoneId: 'UTC'
+          const TOPIC = process.env.TOPIC_INPUT || 'Rahasia Psikologi Manusia';
+          const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
+          const MAX_ATTEMPTS = 3;
+
+          const FULL_PROMPT = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} based on this raw topic data: "${TOPIC}"
+          STRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):
+          1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.
+          2. SEO KEYWORD RETENTION: Intelligently weave core semantic keywords related to "${TOPIC}" naturally throughout the text. This ensures search engines index the video correctly.
+          3. ANTI-TOPIC CHAOS: Maintain strict thematic consistency. Every paragraph must tightly serve the core premise of "${TOPIC}" without drifting into unrelated psychological sub-topics, ensuring the YouTube algorithm establishes clear niche authority for this channel.
+          STRICT NARRATIVE & RETENTION RULES:
+          1. HOOK TECHNIQUE (START IN THE MIDDLE): Do not start with a greeting, preamble, or introduction. Start immediately in the middle of an intense, ongoing psychological simulation or crisis to hook the viewer from second one.
+          2. VALUE RETENTION: To maximize audience retention, the narrative must open by delivering the second-best insight/point of the topic right in the first paragraph.
+          3. Every subsequent paragraph must begin with a cold, piercing psychological insight — NOT a generic question.
+          4. Treat human emotions as physical phenomena. Use architectural, biological, and quantum metaphors. Avoid cliché filler phrases.
+          STRICT TTS-PIPELINE FORMAT RULES (MICRO-CHUNKING & ANTI-SPEED BUG):
+          1. Every single paragraph MUST begin with an aggressive insight AND be preceded by a specific TTS audio directive bracket.
+          2. CRITICAL VISUAL & SPEED CONTROL: Each paragraph MUST be ultra-short, consisting of ONLY 2 to 3 sentences maximum. Never let sentences pile up into many lines. Immediately hit Enter to start a new paragraph with a new tag.
+          3. Every single tag MUST explicitly include the instruction "STRICTLY SLOW pace" to lock the AI engine's reading speed and prevent it from speeding up over time.
+          4. Output ONLY the narrative text. Target length: 2000+ words.
+
+          CYCLE THROUGH THESE EXACT TAGS FOR THE SCRIPTS:
+          - Paragraph 1 (The Hook): [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]
+          - Next body paragraphs (alternate dynamically between these short 2-3 sentence blocks):
+            * [cold analytical tone, piercing delivery, STRICTLY SLOW pace, deliberate pauses]
+            * [assertive tone, exposing the truth, STRICTLY SLOW pace, heavy cadence]
+            * [chilling tone, psychological exposure, cynical edge, STRICTLY SLOW calculated delivery]
+            * [rhetorical tone, STRICTLY SLOW pace, long philosophical pause]
+          - Final Paragraph: [final authoritative tone, heavy cadence, EXTREMELY SLOW powerful conclusion]
+
+          ---
+          CRITICAL SAFETY VALVE (CONVERSATIONAL KILL-SWITCH):
+          - Do not, under any circumstances, act like a helpful chat assistant at the end.
+          - PROHIBITED: Do not include any out-of-character text, follow-up questions, closing offers, conversational pleasantries, menus, or invitations for discussion.
+          - The final word of the actual story under the [final authoritative tone] tag MUST be the absolute final character of your entire output. Stop generating immediately after that word. 2000+ words.`;
+
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+          async function tryGenerate(attempt) {
+            console.log('[Attempt ' + attempt + '/' + MAX_ATTEMPTS + '] Launching browser...');
+            
+            const browser = await chromium.launch({
+              headless: true,
+              args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-blink-features=AutomationControlled',
+                '--incognito'
+              ]
             });
-            
+
+            const context = await browser.newContext({
+              viewport: { width: 1280, height: 1000 },
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              locale: 'id-ID',
+              permissions: ['clipboard-read', 'clipboard-write']
+            });
+
             const page = await context.newPage();
-            
+
             try {
-              console.log('🚀 Opening Google AI mode...');
-              await page.goto('https://www.google.com/aimode', { 
-                waitUntil: 'networkidle',
-                timeout: 30000 
-              });
+              console.log('Navigating to AI interface...');
+              await page.goto('https://www.google.com/aimode', { waitUntil: 'networkidle', timeout: 60000 });
 
-              await page.waitForTimeout(3000);
+              const chatInput = page.locator('textarea.ITIRGe, textarea[placeholder*="Tanyakan"], textarea[placeholder*="Ask"], textarea[aria-label*="Search"]').first();
+              await chatInput.waitFor({ state: 'visible', timeout: 30000 });
 
-              console.log('📝 Filling in the prompt...');
-              const promptText = `Create a YouTube script about: "${{ github.event.inputs.topic }}"
+              console.log('Input ready. Filling prompt...');
+              await chatInput.fill(FULL_PROMPT);
               
-              Requirements:
-              - Minimum 2000 words
-              - Language: ${{ github.event.inputs.language }}
-              - Use TTS tags like [hook tone, commanding volume, STRICTLY SLOW pace, start in the middle delivery]
-              - No conversational filler
-              - Structure: Hook → Body → Call to Action`;
+              await chatInput.press('Enter');
+              console.log('Prompt sent. Waiting 95 seconds for response to fully stream...');
+              
+              await sleep(95000);
 
-              const textArea = page.locator('textarea, [contenteditable="true"]').first();
-              await textArea.fill(promptText);
-              await page.waitForTimeout(1000);
-
-              console.log('🎬 Submitting prompt...');
-              const submitBtn = page.locator('button:has-text("Generate"), button[aria-label*="Send"], button[aria-label*="Kirim"]').first();
-              await submitBtn.click();
-
-              console.log('⏳ Waiting for response...');
-              await page.waitForTimeout(8000);
+              console.log('Delay finished. Taking screenshot...');
+              await page.screenshot({ path: 'screenshot.png', fullPage: true });
 
               console.log('Locating the copy button...');
 
@@ -88,98 +129,144 @@ jobs:
                 'button[aria-label="Copy text"]',        // English
                 'button[aria-label*="Salin"]',
                 'button[aria-label*="Copy"]',
-                'button.bKxaof'                          // Class dari elemen Anda
+                'button.bKxaof',                         // Class backup
+                'div.Pc83ge button.W4bPNd'               // Original selector
               ];
 
-              let copyButton = null;
+              let copyButtons = null;
               let foundSelector = '';
 
               for (const selector of selectors) {
                 const btn = page.locator(selector);
                 const count = await btn.count();
                 if (count > 0) {
-                  copyButton = btn;
+                  copyButtons = btn;
                   foundSelector = selector;
                   console.log('✓ Found copy button with selector: ' + selector);
                   break;
                 }
               }
 
-              if (!copyButton || await copyButton.count() === 0) {
+              if (!copyButtons || await copyButtons.count() === 0) {
                 throw new Error('Tombol salin tidak ditemukan dengan selector apapun.');
               }
 
-              console.log('Clicking the copy button...');
-              await copyButton.first().click();
+              const buttonCount = await copyButtons.count();
+              console.log('Found ' + buttonCount + ' copy buttons. Clicking the latest one...');
+              await copyButtons.nth(buttonCount - 1).click();
+              
+              await sleep(1500); 
 
-              await page.waitForTimeout(1500);
-
-              console.log('📋 Reading text from clipboard...');
-              const scriptText = await page.evaluate(async () => {
-                try {
-                  return await navigator.clipboard.readText();
-                } catch (err) {
-                  console.error('Clipboard read failed:', err);
-                  return '';
-                }
+              console.log('Reading text from clipboard...');
+              const finalResponseText = await page.evaluate(async () => {
+                return await navigator.clipboard.readText();
               });
 
-              if (!scriptText || scriptText.trim().length === 0) {
-                throw new Error('Clipboard is empty atau gagal membaca teks.');
+              if (!finalResponseText || finalResponseText.trim().length < 200) {
+                throw new Error('Teks clipboard kosong atau terlalu pendek.');
               }
 
-              console.log('✅ Script retrieved successfully!');
-              console.log('📊 Script length: ' + scriptText.length + ' characters');
-
-              // Simpan ke file
-              const outputDir = 'scripts';
-              if (!fs.existsSync(outputDir)) {
-                fs.mkdirSync(outputDir, { recursive: true });
-              }
-
-              const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-              const filename = path.join(outputDir, `youtube-script-${timestamp}.txt`);
-              fs.writeFileSync(filename, scriptText, 'utf-8');
-
-              console.log('💾 Script saved to: ' + filename);
-
-              // Upload ke artifact
-              console.log('📤 Script preview (first 500 chars):');
-              console.log(scriptText.substring(0, 500) + '...');
+              fs.writeFileSync('youtube-script.txt', finalResponseText.trim(), 'utf-8');
+              console.log('✓ Script successfully captured via clipboard and saved.');
+              console.log('✓ Script length: ' + finalResponseText.length + ' characters');
+              
+              await browser.close();
+              return true;
 
             } catch (error) {
-              console.error('❌ Error:', error.message);
-              process.exit(1);
-            } finally {
+              console.error('Error on attempt ' + attempt + ':', error.message);
+              try {
+                await page.screenshot({ path: 'error-screenshot-attempt-' + attempt + '.png', fullPage: true });
+              } catch (e) {}
               await browser.close();
+              return false;
             }
-          })();
-          EOF
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 'false'
+          }
 
-      - name: Upload Script Artifact
-        if: success()
+          async function main() {
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              const success = await tryGenerate(attempt);
+              if (success) process.exit(0);
+              if (attempt < MAX_ATTEMPTS) {
+                console.log('Waiting 10 seconds before retrying...');
+                await sleep(10000);
+              }
+            }
+            console.error('Failed to generate script after maximum attempts.');
+            process.exit(1);
+          }
+
+          main();
+          JSEOF
+          
+          node generate-script.js
+
+      - name: Display Screenshot in Logs
+        if: always()
+        run: |
+          echo "================================================================="
+          echo "                    SCREENSHOT PREVIEW                         "
+          echo "================================================================="
+          if [ -f screenshot.png ]; then
+            echo "✓ Screenshot tersedia di artifacts"
+          elif [ -f error-screenshot-attempt-3.png ]; then
+            echo "❌ Script gagal, screenshot error tersedia di artifacts"
+          else
+            echo "⚠️  Screenshot file tidak ditemukan."
+          fi
+          echo "================================================================="
+
+      - name: Display Generated Script in Logs
+        if: always()
+        run: |
+          echo "================================================================="
+          echo "                    GENERATED SCRIPT OUTPUT                      "
+          echo "================================================================="
+          if [ -f youtube-script.txt ]; then
+            LINE_COUNT=$(wc -l < youtube-script.txt)
+            CHAR_COUNT=$(wc -c < youtube-script.txt)
+            echo "✓ Script generated successfully"
+            echo "  Lines: $LINE_COUNT"
+            echo "  Characters: $CHAR_COUNT"
+            echo ""
+            echo "--- PREVIEW (First 50 lines) ---"
+            head -50 youtube-script.txt
+            echo ""
+            echo "... [Script lengkap tersimpan di artifacts] ..."
+          else
+            echo "❌ Script tidak berhasil digenerate."
+          fi
+          echo "================================================================="
+
+      - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-scripts
-          path: scripts/
-          retention-days: 30
+          name: generated-files
+          path: |
+            youtube-script.txt
+            screenshot.png
+            error-screenshot-*.png
+          retention-days: 7
+          if-no-files-found: warn
 
-      - name: Create Summary
-        if: success()
+      - name: Generate Summary
+        if: always()
         run: |
-          echo "## ✅ YouTube Script Generated Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Workflow Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Topic:** ${{ github.event.inputs.topic }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Language:** ${{ github.event.inputs.language }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Generated At:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Topic:** \`${{ github.event.inputs.topic }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Language:** \`${{ github.event.inputs.language }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📂 Scripts saved in artifacts" >> $GITHUB_STEP_SUMMARY
-
-      - name: Failure Summary
-        if: failure()
-        run: |
-          echo "## ❌ Script Generation Failed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Please check the logs above for details." >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f youtube-script.txt ]; then
+            CHAR_COUNT=$(wc -c < youtube-script.txt)
+            echo "### ✅ Success" >> $GITHUB_STEP_SUMMARY
+            echo "- Script generated with **$CHAR_COUNT characters**" >> $GITHUB_STEP_SUMMARY
+            echo "- Files available in artifacts for 7 days" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Failed" >> $GITHUB_STEP_SUMMARY
+            echo "- Check workflow logs for details" >> $GITHUB_STEP_SUMMARY
+            echo "- Error screenshots available in artifacts" >> $GITHUB_STEP_SUMMARY
+          fi
