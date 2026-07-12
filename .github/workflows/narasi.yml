@@ -115,9 +115,9 @@ jobs:
               await chatInput.fill(FULL_PROMPT);
               
               await chatInput.press('Enter');
-              console.log('Prompt sent. Waiting 95 seconds for response to fully stream...');
+              console.log('Prompt sent. Waiting 4m for response to fully stream...');
               
-              await sleep(95000);
+              await sleep(24000);
 
               console.log('Delay finished. Taking screenshot...');
               await page.screenshot({ path: 'screenshot.png', fullPage: true });
