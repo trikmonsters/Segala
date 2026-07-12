@@ -49,6 +49,8 @@ jobs:
           const LANGUAGE = process.env.LANGUAGE || 'Indonesian';
           const MAX_ATTEMPTS = 3;
 
+          const prompt = `Hallo apa kabar?`;
+
           const FULL_PROMPT = `You are a combination of an elite YouTube Growth Strategist, a rigorous behavioral scientist, and a master of psychological narrative design. Write a highly immersive, continuous psychological narrative in fluent, native-level ${LANGUAGE} based on this raw topic data: "${TOPIC}"
           STRICT FACTUAL & SEO GUARDRAILS (ALGORITHM AUTHORITY LOCK):
           1. ANCHOR ON FACTS: The narrative must be strictly rooted in real, proven psychological phenomena, cognitive biases, or evolutionary biology data. Do not invent fake science or wild fictions.
@@ -112,7 +114,7 @@ jobs:
               await chatInput.waitFor({ state: 'visible', timeout: 30000 });
 
               console.log('Input ready. Filling prompt...');
-              await chatInput.fill(FULL_PROMPT);
+              await chatInput.fill(prompt);
               
               await chatInput.press('Enter');
               console.log('Prompt sent. Waiting 4m for response to fully stream...');
