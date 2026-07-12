@@ -29,7 +29,7 @@ jobs:
         run: |
           npm install playwright playwright-extra puppeteer-extra-plugin-stealth
 
-      - name: Create generate-script.js
+      - name: Run Playwright Scraper
         env:
           TOPIC_INPUT: ${{ github.event.inputs.topic }}
           LANGUAGE: ${{ github.event.inputs.language }}
@@ -78,7 +78,7 @@ jobs:
           const sleep = ms => new Promise(r => setTimeout(r, ms));
 
           async function tryGenerate(attempt) {
-            console.log(\`\n[Attempt \${attempt}/\${MAX_ATTEMPTS}] Launching browser...\`);
+            console.log('[Attempt ' + attempt + '/' + MAX_ATTEMPTS + '] Launching browser...');
             
             const browser = await chromium.launch({
               headless: true,
@@ -125,7 +125,7 @@ jobs:
                 throw new Error('Tombol salin tidak ditemukan di halaman. Memeriksa fallback selector...');
               }
 
-              console.log(\`Found \${buttonCount} copy buttons. Clicking the latest one...\`);
+              console.log('Found ' + buttonCount + ' copy buttons. Clicking the latest one...');
               await copyButtons.nth(buttonCount - 1).click();
               
               await sleep(1500); 
@@ -146,9 +146,9 @@ jobs:
               return true;
 
             } catch (error) {
-              console.error(\`Error on attempt \${attempt}:\`, error.message);
+              console.error('Error on attempt ' + attempt + ':', error.message);
               try {
-                await page.screenshot({ path: \`error-screenshot-attempt-\${attempt}.png\`, fullPage: true });
+                await page.screenshot({ path: 'error-screenshot-attempt-' + attempt + '.png', fullPage: true });
               } catch (e) {}
               await browser.close();
               return false;
@@ -170,18 +170,14 @@ jobs:
 
           main();
           JSEOF
-
-      - name: Run Playwright Scraper
-        env:
-          TOPIC_INPUT: ${{ github.event.inputs.topic }}
-          LANGUAGE: ${{ github.event.inputs.language }}
-        run: node generate-script.js
+          
+          node generate-script.js
 
       - name: Display Screenshot in Logs
         if: always()
         run: |
           echo "================================================================="
-          echo "                    SCREENSHOT PREVIEW (ASCII)                  "
+          echo "                    SCREENSHOT PREVIEW                         "
           echo "================================================================="
           if [ -f screenshot.png ]; then
             echo "Screenshot tersedia di artifacts"
