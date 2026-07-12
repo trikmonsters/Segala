@@ -145,18 +145,18 @@ jobs:
 
           prompt = """Analyze this video frame carefully.
 
-The frame may contain:
-- A black background/letterbox area (top and/or bottom)
-- A text overlay on the black background (above or below the actual video content)
-- The actual video content (the real scene/clip)
-
-Your task: identify the bounding box of the ACTUAL VIDEO CONTENT only.
-Exclude any black padding/letterbox areas AND any text overlays that appear on the black background.
-
-Return ONLY a raw JSON object, no markdown, no explanation:
-{"x": <left pixel>, "y": <top pixel>, "w": <width in pixels>, "h": <height in pixels>}
-
-Where x,y,w,h are integer pixel coordinates of the actual video content area."""
+          The frame may contain:
+          - A black background/letterbox area (top and/or bottom)
+          - A text overlay on the black background (above or below the actual video content)
+          - The actual video content (the real scene/clip)
+          
+          Your task: identify the bounding box of the ACTUAL VIDEO CONTENT only.
+          Exclude any black padding/letterbox areas AND any text overlays that appear on the black background.
+          
+          Return ONLY a raw JSON object, no markdown, no explanation:
+          {"x": <left pixel>, "y": <top pixel>, "w": <width in pixels>, "h": <height in pixels>}
+          
+          Where x,y,w,h are integer pixel coordinates of the actual video content area."""
 
           payload = {
               "model": "gemma-4-31b-it",
