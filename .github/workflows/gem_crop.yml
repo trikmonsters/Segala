@@ -104,7 +104,7 @@ jobs:
 
       - name: Extract Frame & Detect Video Bounds with Gemma 4
         env:
-          GEMMA_API_KEY: ${{ secrets.GEMMA_API_KEY }}
+          GEMMA_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           pip install opencv-python-headless requests easyocr --quiet
           
@@ -395,33 +395,30 @@ jobs:
       - name: Process Video with FFmpeg
         run: |
           curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
-          
+
           if [ ! -s text_overlay.txt ]; then
-            echo "ℹ️ Teks overlay kosong, memotong video tanpa menambahkan teks..."
+            echo "ℹ️ Teks overlay kosong, memotong video tanpa teks..."
             ffmpeg -i "video.mp4" \
-              -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
-                               scale=1080:-1, \
-                               pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white" \
-              -c:a copy output.mp4
+              -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }},\
+                               scale=1080:1920:force_original_aspect_ratio=decrease,\
+                               pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white[v]" \
+              -map "[v]" -map 0:a -c:a copy output.mp4
           else
             SCALED_H=$(( ${{ env.CROP_H }} * 1080 / ${{ env.CROP_W }} ))
-            
             TOP_PAD=$(( (1920 - SCALED_H) / 2 ))
             if [ $TOP_PAD -lt 0 ]; then TOP_PAD=0; fi
-            
             TOP_CENTER=$(( TOP_PAD / 2 ))
-            
             if [ $TOP_CENTER -lt 80 ]; then TOP_CENTER=80; fi
-            
-            echo "📐 Analisis Frame: Tinggi Scaled=$SCALED_H px | Putih Atas=$TOP_PAD px | Target Pusat Y=$TOP_CENTER px"
-            
+
+            echo "📐 Scaled H=$SCALED_H | Top Pad=$TOP_PAD | Text Y=$TOP_CENTER"
+
             ffmpeg -i "video.mp4" \
-              -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }}, \
-                               scale=1080:-1, \
-                               unsharp=5:5:1.0:5:5:0.0, \
-                               pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white, \
-                               drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=${TOP_CENTER}-(text_h/2):fontsize=45:fontcolor=black" \
-              -c:a copy output.mp4
+              -filter_complex "[0:v]crop=${{ env.CROP_W }}:${{ env.CROP_H }}:${{ env.CROP_X }}:${{ env.CROP_Y }},\
+                               scale=1080:1920:force_original_aspect_ratio=decrease,\
+                               unsharp=5:5:1.0:5:5:0.0,\
+                               pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white,\
+                               drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=${TOP_CENTER}-(text_h/2):fontsize=45:fontcolor=black[v]" \
+              -map "[v]" -map 0:a -c:a copy output.mp4
           fi
 
           mv output.mp4 video.mp4
