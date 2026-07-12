@@ -124,7 +124,7 @@ jobs:
           print(f"🔑 API key loaded: {api_key[:8]}...")
 
           input_caption = os.environ.get("INPUT_CAPTION", "").strip()
-          model_id = "gemma-4-31b-it"
+          model_id = "gemini-flash-lite-latest"
           url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
 
           def call_gemma(parts, max_tokens=1024):
