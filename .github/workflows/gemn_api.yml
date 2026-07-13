@@ -47,3 +47,6 @@ jobs:
         -H "Content-Type: application/json" \
         "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
         -d @request.json
+        
+        echo "=== Hasil Respon API ==="
+        cat response.json
