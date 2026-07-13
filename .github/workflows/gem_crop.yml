@@ -102,11 +102,6 @@ jobs:
           EOF
           node download_ig.js "${{ github.event.inputs.video_url }}"
 
-      # ═══════════════════════════════════════════════════════════════
-      # FIX #1: Analisis AI menggunakan sample 15 detik TERAKHIR,
-      #         tapi koordinat piksel dihitung dari dimensi VIDEO ASLI.
-      #         Hasilnya disimpan ke crop_params.txt & video_meta.txt
-      # ═══════════════════════════════════════════════════════════════
       - name: Extract Sample, Analyze Video & Generate Metadata via Gemini API
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -181,10 +176,10 @@ jobs:
           Anda WAJIB mengembalikan respons dalam format JSON MURNI seperti di bawah,
           tanpa teks, kalimat, atau markdown apapun di luar JSON:
           {
-            "y_min_persen": <integer 0-100, posisi Y atas bingkai video inti (setelah teks meme hitam berakhir)>,
-            "y_max_persen": <integer 0-100, posisi Y bawah bingkai video inti (sebelum padding/navigasi HP)>,
-            "caption_sosmed": "<caption promosi media sosial yang menarik dan relevan dengan isi video>",
-            "text_overlay_saran": "<1 kalimat hook dramatis maksimal 8 kata untuk ditempel di tengah video>"
+            "y_min_persen": [Angka persentase 0-100 posisi horizontal atas di mana teks meme luar berakhir dan bingkai video film asli dimulai],
+            "y_max_persen": [Angka persentase 0-100 posisi horizontal bawah di mana bingkai video berakhir sebelum tombol navigasi HP],
+            "caption_sosmed": "[Buat caption promosi media sosial yang menarik, bikin penasaran, dan relevan dengan isi/ending video ini]",
+            "text_overlay_saran": "[Buat 1 kalimat teks pendek/hook-meme dramatis maksimal 8 kata yang sangat cocok ditempel di tengah video]"
           }
           """
 
