@@ -137,9 +137,17 @@ jobs:
 
           print(f"📐 Resolusi Video Asli: {full_w}x{full_h} | Durasi: {total_duration:.2f} detik")
 
-          start_time = max(0, total_duration - 15)
-          print(f"🎬 Memotong 15 detik akhir video (detik {start_time:.2f} s/d {total_duration:.2f})...")
-          cmd_sample = f'ffmpeg -ss {start_time} -i "{video_path}" -t 15 -c:v libx264 -c:a aac -strict -2 "{sample_segment_path}" -y -loglevel quiet'
+          # ── LOGIKA ANTI-ERROR DURASI PENDEK ──────────────────────
+          if total_duration <= 15.0:
+              print(f"ℹ️ Video pendek dideteksi ({total_duration:.2f}s). Mengambil seluruh video dari detik 0...")
+              start_time = 0
+              duration_to_cut = total_duration
+          else:
+              start_time = total_duration - 15
+              duration_to_cut = 15
+              print(f"🎬 Memotong 15 detik akhir video (detik {start_time:.2f} s/d {total_duration:.2f})...")
+
+          cmd_sample = f'ffmpeg -ss {start_time} -i "{video_path}" -t {duration_to_cut} -c:v libx264 -c:a aac -strict -2 "{sample_segment_path}" -y -loglevel quiet'
           subprocess.run(cmd_sample, shell=True)
 
           print("🚀 Mengunggah potongan video ke Google Gemini API...")
@@ -156,7 +164,7 @@ jobs:
           print("🤖 AI siap menganalisis video secara multimodal!")
 
           prompt = f"""
-          Tonton cuplikan video media sosial berdurasi 15 detik ini dengan seksama. 
+          Tonton cuplikan video media sosial ini dengan seksama. 
           Pahami jalan ceritanya, ekspresi, teks, dan visualnya untuk menghasilkan metadata sosmed yang relevan, sekaligus analisis batas bingkai videonya.
 
           Anda wajib mengembalikan respons dalam format JSON murni terpadu seperti di bawah ini, tanpa ulasan kalimat atau markdown penjelasan di luar JSON:
@@ -188,12 +196,16 @@ jobs:
               data = json.loads(clean_json_text)
               crop_y = int(data['y_min_persen'] * full_h / 100)
               y_max_pixel = int(data['y_max_persen'] * full_h / 100)
+              
+              # Kalibrasi presisi pasca hilangkan offset liar
+              crop_y = crop_y + 15 
               crop_h = y_max_pixel - crop_y
+              
               crop_x = 0
               crop_w = full_w
               text_overlay = data['text_overlay_saran']
               buffer_caption = input_caption if input_caption else data['caption_sosmed']
-              print(f"✅ AI Berhasil Menganalisis Geometri & Visual!")
+              print(f"✅ AI Berhasil Menganalisis Geometri & Visual secara Akurat!")
           except Exception as e:
               print(f"⚠️ Deteksi AI gagal parsing: {e} → Gunakan Fallback Default")
               crop_x, crop_y, crop_w, crop_h = 0, int(full_h * 0.34), full_w, int(full_h * 0.32)
@@ -224,7 +236,7 @@ jobs:
         run: |
           curl -L -o Arial.ttf "https://github.com"
           source crop_params.txt
-          echo "📐 Mengaktifkan FFmpeg Crop Engine pada 15s akhir video: X=$CROP_X, Y=$CROP_Y, W=$CROP_W, H=$CROP_H"
+          echo "📐 Mengaktifkan FFmpeg Crop Engine: X=$CROP_X, Y=$CROP_Y, W=$CROP_W, H=$CROP_H"
 
           if [ ! -s text_overlay.txt ]; then
             echo "ℹ️ Teks overlay kosong, memotong video standar..."
@@ -246,7 +258,8 @@ jobs:
           fi
 
           mv output.mp4 video.mp4
-          echo "✅ Pemrosesan video 15 detik akhir sukses tanpa corrupt!"
+          echo "✅ Pemrosesan video sukses tanpa corrupt!"
+
 
       - name: Delete old release
         if: ${{ github.event.inputs.post_to_buffer == 'true' }}
