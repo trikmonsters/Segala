@@ -8,7 +8,7 @@ on:
         required: true
         default: ''
       caption:
-        description: 'Caption opsional (jika kosong, pakai hasil Gemma)'
+        description: 'Caption opsional (jika kosong, pakai hasil Gemini)'
         required: false
         default: ''
       post_to_buffer:
@@ -41,7 +41,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          pip install opencv-python-headless requests --quiet
+          pip install opencv-python-headless requests google-generativeai --quiet
 
       - name: Install Playwright Dependencies
         run: |
@@ -59,7 +59,7 @@ jobs:
           chromium.use(stealth);
 
           (async () => {
-            const igUrl = process.argv[2] || "https://www.instagram.com/reel/DTJ6u-JE-Ta/";
+            const igUrl = process.argv[2] || "https://instagram.com";
             console.log(`🚀 Memulai proses unduh untuk URL: ${igUrl}`);
 
             const browser = await chromium.launch({ headless: true });
@@ -71,7 +71,7 @@ jobs:
 
             try {
               console.log('🌐 Membuka sssinstagram.com...');
-              await page.goto('https://sssinstagram.com/reels-downloader', { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await page.goto('https://sssinstagram.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
               const inputSelector = '#input, input.form__input';
               await page.waitForSelector(inputSelector, { timeout: 15000 });
@@ -102,215 +102,135 @@ jobs:
           EOF
           node download_ig.js "${{ github.event.inputs.video_url }}"
 
-      - name: Detect Video Bounds & Generate Caption with Gemma
+      - name: Extract Sample, Analyze Video & Generate Metadata via Gemini API
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INPUT_CAPTION: ${{ github.event.inputs.caption }}
         run: |
           cat << 'EOF' > detect_and_caption.py
           import cv2
-          import base64
           import json
           import re
           import os
           import sys
-          import requests
+          import time
+          import subprocess
+          import google.generativeai as genai
 
-          # ── 1. Validasi API Key ────────────────────────────────────
           api_key = os.environ.get("GEMINI_API_KEY", "")
           if not api_key:
               print("❌ GEMINI_API_KEY kosong! Cek secret di repo settings.")
               sys.exit(1)
-          print(f"🔑 API key loaded: {api_key[:8]}...")
+          genai.configure(api_key=api_key)
 
           input_caption = os.environ.get("INPUT_CAPTION", "").strip()
-          model_id = "gemini-flash-lite-latest"
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
-
-          def call_gemma(parts, max_tokens=1024):
-              payload = {
-                  "contents": [{"role": "user", "parts": parts}],
-                  "generationConfig": {
-                      "thinkingConfig": {"thinkingLevel": "HIGH"},
-                      "temperature": 0,
-                      "maxOutputTokens": max_tokens
-                  }
-              }
-              resp = requests.post(
-                  url,
-                  headers={"Content-Type": "application/json"},
-                  json=payload,
-                  timeout=60
-              )
-              resp.raise_for_status()
-              data = resp.json()
-              all_text = ""
-              for part in data["candidates"][0]["content"]["parts"]:
-                  if part.get("thought"):
-                      continue
-                  all_text += part.get("text", "") + "\n"
-              return all_text.strip()
-
-          # ── 2. Ambil frame di detik ke-2 ──────────────────────────
           video_path = "video.mp4"
+          sample_segment_path = "sample_15s_end.mp4"
+
           cap = cv2.VideoCapture(video_path)
+          full_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+          full_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
           fps = cap.get(cv2.CAP_PROP_FPS) or 30
-          cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))
-          ret, frame = cap.read()
+          frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+          total_duration = frame_count / fps
           cap.release()
 
-          if not ret:
-              print("❌ Gagal membaca frame video")
+          print(f"📐 Resolusi Video Asli: {full_w}x{full_h} | Durasi: {total_duration:.2f} detik")
+
+          start_time = max(0, total_duration - 15)
+          print(f"🎬 Memotong 15 detik akhir video (detik {start_time:.2f} s/d {total_duration:.2f})...")
+          cmd_sample = f'ffmpeg -ss {start_time} -i "{video_path}" -t 15 -c:v libx264 -c:a aac -strict -2 "{sample_segment_path}" -y -loglevel quiet'
+          subprocess.run(cmd_sample, shell=True)
+
+          print("🚀 Mengunggah potongan video ke Google Gemini API...")
+          video_file = genai.upload_file(path=sample_segment_path)
+
+          print("⏳ Menunggu server Gemini memproses video...")
+          while video_file.state.name == "PROCESSING":
+              time.sleep(2)
+              video_file = genai.get_file(video_file.name)
+
+          if video_file.state.name == "FAILED":
+              print("❌ Server Gemini gagal memproses video.")
               sys.exit(1)
+          print("🤖 AI siap menganalisis video secara multimodal!")
 
-          full_h, full_w = frame.shape[:2]
-          print(f"📐 Resolusi frame asli: {full_w}x{full_h}")
+          prompt = f"""
+          Tonton cuplikan video media sosial berdurasi 15 detik ini dengan seksama. 
+          Pahami jalan ceritanya, ekspresi, teks, dan visualnya untuk menghasilkan metadata sosmed yang relevan, sekaligus analisis batas bingkai videonya.
 
-          cv2.imwrite("frame.jpg", frame)
+          Anda wajib mengembalikan respons dalam format JSON murni terpadu seperti di bawah ini, tanpa ulasan kalimat atau markdown penjelasan di luar JSON:
+          {{
+            "y_min_persen": [Angka persentase 0-100 posisi horizontal atas di mana teks meme luar berakhir dan bingkai video film asli dimulai],
+            "y_max_persen": [Angka persentase 0-100 posisi horizontal bawah di mana bingkai video berakhir sebelum tombol navigasi HP],
+            "caption_sosmed": "[Buat caption promosi media sosial yang menarik, bikin penasaran, dan relevan dengan isi/ending video ini]",
+            "text_overlay_saran": "[Buat 1 kalimat teks pendek/hook-meme dramatis maksimal 8 kata yang sangat cocok ditempel di tengah video]"
+          }}
+          """
 
-          with open("frame.jpg", "rb") as f:
-              frame_b64 = base64.b64encode(f.read()).decode("utf-8")
+          model = genai.GenerativeModel("gemini-3.5-flash")
+          response = model.generate_content([video_file, prompt])
+          clean_json_text = response.text.replace("```json", "").replace("```", "").strip()
 
-          image_part = {
-              "inline_data": {
-                  "mime_type": "image/jpeg",
-                  "data": frame_b64
-              }
-          }
-
-          # ── 3. Deteksi batas video (crop) ─────────────────────────
-          print("🤖 [1/2] Mendeteksi batas video content...")
-          crop_prompt = """ Lihat gambar ini. Di dalamnya ada video utama dan teks overlay dengan latar belakang hitam/putih/sejenisnya.
-          Tolong deteksi koordinat kotak (bounding box) untuk VIDEO UTAMA saja. Abaikan semua teks overlay.
-          Kembalikan hasilnya dalam format JSON murni:  {"x": <left pixel>, "y": <top pixel>, "w": <width in pixels>, "h": <height in pixels>}
-          Gunakan skala 0 sampai 1000 untuk koordinatnya."""
+          def wrap_text(text, max_chars=35):
+              if not text: return ""
+              words = text.split()
+              lines, current = [], ""
+              for word in words:
+                  if len(current) + len(word) > max_chars:
+                      if current: lines.append(current.strip())
+                      current = word + " "
+                  else: current += word + " "
+              if current.strip(): lines.append(current.strip())
+              return "\n".join(lines)
 
           try:
-              crop_response = call_gemma([image_part, {"text": crop_prompt}])
-              print(f"✅ Raw crop response: {crop_response[:300]}")
-
-              clean_crop = crop_response.replace("```json", "").replace("```", "").strip()
-              match = re.search(r'\{[^{}]*"x"[^{}]*"y"[^{}]*"w"[^{}]*"h"[^{}]*\}', clean_crop, re.DOTALL)
-              if not match:
-                  raise ValueError(f"JSON crop tidak ditemukan: {clean_crop[:300]}")
-
-              bounds = json.loads(match.group(0))
-              crop_x = max(0, min(int(bounds["x"]), full_w - 1))
-              crop_y = max(0, min(int(bounds["y"]), full_h - 1))
-              crop_w = min(int(bounds["w"]), full_w - crop_x)
-              crop_h = min(int(bounds["h"]), full_h - crop_y)
-              print(f"✅ Crop final: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}")
-
+              data = json.loads(clean_json_text)
+              crop_y = int(data['y_min_persen'] * full_h / 100)
+              y_max_pixel = int(data['y_max_persen'] * full_h / 100)
+              crop_h = y_max_pixel - crop_y
+              crop_x = 0
+              crop_w = full_w
+              text_overlay = data['text_overlay_saran']
+              buffer_caption = input_caption if input_caption else data['caption_sosmed']
+              print(f"✅ AI Berhasil Menganalisis Geometri & Visual!")
           except Exception as e:
-              print(f"⚠️ Deteksi crop gagal: {e} → fallback full frame")
-              crop_x, crop_y, crop_w, crop_h = 0, 0, full_w, full_h
+              print(f"⚠️ Deteksi AI gagal parsing: {e} → Gunakan Fallback Default")
+              crop_x, crop_y, crop_w, crop_h = 0, int(full_h * 0.34), full_w, int(full_h * 0.32)
+              text_overlay = "Check this out! 😱🔥"
+              buffer_caption = input_caption if input_caption else "#reels #viral #fyp"
 
-          # Tulis crop_params.txt untuk dibaca bash langsung
           with open("crop_params.txt", "w") as f:
               f.write(f"CROP_W={crop_w}\n")
               f.write(f"CROP_H={crop_h}\n")
               f.write(f"CROP_X={crop_x}\n")
               f.write(f"CROP_Y={crop_y}\n")
 
-          print(f"📄 crop_params.txt ditulis: W={crop_w} H={crop_h} X={crop_x} Y={crop_y}")
-
-          # ── 4. Generate text overlay & caption ────────────────────
-          print("🤖 [2/2] Generating text overlay & caption...")
-
-          def parse_json_array(text):
-              clean = text.replace("```json", "").replace("```", "").strip()
-              match = re.search(r'\[.*\]', clean, re.DOTALL)
-              if not match:
-                  raise ValueError(f"JSON array tidak ditemukan dalam: {clean[:300]}")
-              return json.loads(match.group(0))
-
-          def wrap_text(text, max_chars=35):
-              if not text:
-                  return ""
-              words = text.split()
-              lines, current = [], ""
-              for word in words:
-                  if len(current) + len(word) > max_chars:
-                      if current:
-                          lines.append(current.strip())
-                      current = word + " "
-                  else:
-                      current += word + " "
-              if current.strip():
-                  lines.append(current.strip())
-              return "\n".join(lines)
-
-          if input_caption:
-              source_text = input_caption
-              print(f"ℹ️ Menggunakan input caption manual: '{source_text}'")
-              caption_prompt = f"""Convert the following text into 2 engaging versions for social media.
-              First: a short, punchy, controversial or funny video hook (max 8 words, suitable as text overlay on a video).
-              Second: an engaging Instagram/TikTok caption with relevant hashtags.
-              Source text: "{source_text}"
-              Respond ONLY with a raw JSON array of exactly 2 strings: ["Short Hook", "Post Caption #hashtag"]
-              No markdown, no explanation, just the raw array."""
-
-              try:
-                  gen_response = call_gemma([{"text": caption_prompt}], max_tokens=1024)
-                  print(f"✅ Raw caption response: {gen_response[:500]}")
-                  result = parse_json_array(gen_response)
-                  text_overlay = result[0] if result else source_text
-                  buffer_caption = result[1] if len(result) > 1 else source_text
-              except Exception as e:
-                  print(f"⚠️ Generate caption gagal: {e} → pakai source text")
-                  text_overlay = source_text
-                  buffer_caption = source_text
-
-          else:
-              print("ℹ️ Tidak ada caption manual, generate dari visual frame...")
-              visual_prompt = """Look at this video frame and:
-              1. Understand what this video is about from the visual content and any visible text.
-              2. Generate a short punchy video hook (max 8 words) suitable as text overlay.
-              3. Generate an engaging Instagram/TikTok caption with relevant hashtags.
-
-              Respond ONLY with a raw JSON array of exactly 2 strings: ["Short Hook", "Post Caption #hashtag"]
-              No markdown, no explanation, just the raw array."""
-
-              try:
-                  gen_response = call_gemma([image_part, {"text": visual_prompt}], max_tokens=1024)
-                  print(f"✅ Raw visual caption response: {gen_response[:500]}")
-                  result = parse_json_array(gen_response)
-                  text_overlay = result[0] if result else ""
-                  buffer_caption = result[1] if len(result) > 1 else ""
-              except Exception as e:
-                  print(f"⚠️ Generate visual caption gagal: {e} → kosong")
-                  text_overlay = ""
-                  buffer_caption = "#reels #viral #fyp"
-
           text_overlay_wrapped = wrap_text(text_overlay)
-
           with open("text_overlay.txt", "w", encoding="utf-8") as f:
               f.write(text_overlay_wrapped)
 
           with open("buffer_caption.txt", "w", encoding="utf-8") as f:
               f.write(buffer_caption)
 
-          print(f"📝 Text overlay : '{text_overlay_wrapped}'")
-          print(f"📝 Buffer caption: '{buffer_caption}'")
-
+          try:
+              genai.delete_file(video_file.name)
+          except:
+              pass
           EOF
           python detect_and_caption.py
 
       - name: Process Video with FFmpeg
         run: |
-          curl -L -o Arial.ttf "https://github.com/matthieua/WOW-Fonts/raw/master/Arial.ttf"
-
-          # Baca crop params dari file langsung (lebih reliable dari ${{ env.* }})
+          curl -L -o Arial.ttf "https://github.com"
           source crop_params.txt
-          echo "📐 Crop params: x=$CROP_X y=$CROP_Y w=$CROP_W h=$CROP_H"
+          echo "📐 Mengaktifkan FFmpeg Crop Engine pada 15s akhir video: X=$CROP_X, Y=$CROP_Y, W=$CROP_W, H=$CROP_H"
 
           if [ ! -s text_overlay.txt ]; then
-            echo "ℹ️ Teks overlay kosong, memotong video tanpa teks..."
-            ffmpeg -i "video.mp4" \
-              -filter_complex "[0:v]crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},\
-                               scale=1080:1920:force_original_aspect_ratio=decrease,\
-                               pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white[v]" \
-              -map "[v]" -map 0:a -c:a copy output.mp4
+            echo "ℹ️ Teks overlay kosong, memotong video standar..."
+            ffmpeg -i "sample_15s_end.mp4" \
+              -vf "crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white" \
+              -c:v libx264 -crf 20 -c:a aac -b:a 128k "output.mp4" -y -loglevel quiet
           else
             SCALED_H=$(( CROP_H * 1080 / CROP_W ))
             TOP_PAD=$(( (1920 - SCALED_H) / 2 ))
@@ -320,16 +240,13 @@ jobs:
 
             echo "📐 Scaled H=$SCALED_H | Top Pad=$TOP_PAD | Text Y=$TOP_CENTER"
 
-            ffmpeg -i "video.mp4" \
-              -filter_complex "[0:v]crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},\
-                               scale=1080:1920:force_original_aspect_ratio=decrease,\
-                               unsharp=5:5:1.0:5:5:0.0,\
-                               pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white,\
-                               drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=${TOP_CENTER}-(text_h/2):fontsize=45:fontcolor=black[v]" \
-              -map "[v]" -map 0:a -c:a copy output.mp4
+            ffmpeg -i "sample_15s_end.mp4" \
+              -vf "crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},scale=1080:1920:force_original_aspect_ratio=decrease,unsharp=5:5:1.0:5:5:0.0,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white,drawtext=fontfile=Arial.ttf:textfile=text_overlay.txt:x=(w-text_w)/2:y=${TOP_CENTER}-(text_h/2):fontsize=45:fontcolor=black" \
+              -c:v libx264 -crf 20 -c:a aac -b:a 128k "output.mp4" -y -loglevel quiet
           fi
 
           mv output.mp4 video.mp4
+          echo "✅ Pemrosesan video 15 detik akhir sukses tanpa corrupt!"
 
       - name: Delete old release
         if: ${{ github.event.inputs.post_to_buffer == 'true' }}
@@ -337,8 +254,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "🗑️ Checking for old releases..."
-          
-          # Hapus release jika ada
           RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
             --jq '.[] | select(.tag_name == "buffer_video") | .id' 2>/dev/null || echo "")
           if [ -n "$RELEASE_ID" ]; then
@@ -346,8 +261,6 @@ jobs:
             gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID || true
             sleep 3
           fi
-
-          # Selalu coba hapus tag (meski release tidak ditemukan, tag bisa masih ada)
           gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/buffer_video || true
           sleep 3
           echo "✅ Cleanup done"
@@ -445,7 +358,7 @@ jobs:
 
               payload = json.dumps({"query": mutation}).encode("utf-8")
               req = urllib.request.Request(
-                  "https://api.buffer.com/graphql",
+                  "https://buffer.com",
                   data=payload,
                   headers={
                       "Content-Type": "application/json",
