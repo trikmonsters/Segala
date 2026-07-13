@@ -301,6 +301,7 @@ jobs:
             # KUNCI FIX: -i video.mp4 (bukan sample_15s_end.mp4)
             ffmpeg -i "video.mp4" \
               -vf "crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},\
+                   hflip,\
                    scale=1080:1920:force_original_aspect_ratio=decrease,\
                    pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white" \
               -c:v libx264 -crf 20 -c:a aac -b:a 128k \
@@ -321,6 +322,7 @@ jobs:
             # KUNCI FIX: -i video.mp4 (bukan sample_15s_end.mp4)
             ffmpeg -i "video.mp4" \
               -vf "crop=${CROP_W}:${CROP_H}:${CROP_X}:${CROP_Y},\
+                   hflip,\
                    scale=1080:1920:force_original_aspect_ratio=decrease,\
                    unsharp=5:5:1.0:5:5:0.0,\
                    pad=1080:1920:(ow-iw)/2:(oh-ih)/2:white,\
