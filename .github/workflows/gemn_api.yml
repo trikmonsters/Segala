@@ -35,14 +35,32 @@ jobs:
         }
         EOF
 
-    - name: Execute cURL Request to Gemini API
+    - name: Execute cURL Request to Gemini API and Print Log
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: |
-        curl -X POST \
+        echo "=== Mengirim permintaan ke Gemini API ==="
+        
+        # Menyimpan output respons mentah ke file response.json
+        curl -s -X POST \
         -H "Content-Type: application/json" \
         "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
-        -d @request.json
+        -d @request.json -o response.json
         
-        echo "=== Hasil Respon API ==="
-        cat response.json
+        echo "=== Statistik Penggunaan Token ==="
+        # Menampilkan detail token untuk monitoring
+        jq '.usage' response.json
+        
+        echo "=== Hasil Teks Cerita/Narasi ==="
+        # Mengekstrak teks narasi utama dari struktur JSON beta interactions
+        # (Mengambil text dari bagian output step terakhir)
+        jq -r '.steps[-1].output.text // .steps[-1].output.parts[0].text // "Teks tidak ditemukan / format berbeda"' response.json > output_story.txt
+        
+        # Menampilkan hasil cerita langsung ke log GitHub Actions
+        cat output_story.txt
+
+        # Opsional: Kirim cerita ke ringkasan halaman GitHub Actions agar makin rapi dibaca
+        echo "### 📜 Hasil Narasi Gemini" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`text" >> $GITHUB_STEP_SUMMARY
+        cat output_story.txt >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
