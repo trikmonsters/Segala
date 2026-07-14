@@ -41,25 +41,36 @@ jobs:
       run: |
         echo "=== Mengirim permintaan ke Gemini API ==="
         
-        # Menyimpan output respons mentah ke file response.json
         curl -s -X POST \
         -H "Content-Type: application/json" \
         "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
         -d @request.json -o response.json
         
         echo "=== Statistik Penggunaan Token ==="
-        # Menampilkan detail token untuk monitoring
         jq '.usage' response.json
         
-        echo "=== Hasil Teks Cerita/Narasi ==="
-        # Mengekstrak teks narasi utama dari struktur JSON beta interactions
-        # (Mengambil text dari bagian output step terakhir)
-        jq -r '.steps[-1].output.text // .steps[-1].output.parts[0].text // "Teks tidak ditemukan / format berbeda"' response.json > output_story.txt
+        echo "=== Struktur Lengkap response.json (Raw) ==="
+        # Menampilkan seluruh isi JSON agar Anda bisa melihat struktur objeknya secara detail
+        cat response.json
         
-        # Menampilkan hasil cerita langsung ke log GitHub Actions
+        echo -e "\n=== Hasil Teks Cerita/Narasi ==="
+        # Mencoba mengekstrak menggunakan beberapa kemungkinan jalur data (fallback)
+        jq -r '
+          if .steps then
+            [.steps[] | select(.type == "model_turn" or .model_turn != null) | .model_turn.parts[0].text] | last
+          else
+            .candidates[0].content.parts[0].text
+          end // "Teks belum berhasil diekstrak otomatis, silakan periksa struktur JSON di atas."' response.json > output_story.txt
+        
+        # Menampilkan hasil cerita langsung ke log
         cat output_story.txt
 
-        # Opsional: Kirim cerita ke ringkasan halaman GitHub Actions agar makin rapi dibaca
+        # Kirim informasi lengkap ke ringkasan halaman GitHub Actions agar rapi dibaca
+        echo "### 📊 Statistik & Struktur" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+        cat response.json >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        
         echo "### 📜 Hasil Narasi Gemini" >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`text" >> $GITHUB_STEP_SUMMARY
         cat output_story.txt >> $GITHUB_STEP_SUMMARY
