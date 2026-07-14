@@ -50,22 +50,28 @@ jobs:
         jq '.usage' response.json
         
         echo "=== Struktur Lengkap response.json (Raw) ==="
-        # Menampilkan seluruh isi JSON agar Anda bisa melihat struktur objeknya secara detail
         cat response.json
         
         echo -e "\n=== Hasil Teks Cerita/Narasi ==="
-        # Mencoba mengekstrak menggunakan beberapa kemungkinan jalur data (fallback)
+        # Filter jq spesifik untuk struktur model_output -> content -> text
         jq -r '
-          if .steps then
-            [.steps[] | select(.type == "model_turn" or .model_turn != null) | .model_turn.parts[0].text] | last
-          else
-            .candidates[0].content.parts[0].text
-          end // "Teks belum berhasil diekstrak otomatis, silakan periksa struktur JSON di atas."' response.json > output_story.txt
+          .steps[] 
+          | select(.type == "model_output") 
+          | .content[] 
+          | select(.type == "text") 
+          | .text
+        ' response.json > output_story.txt
+        
+        # Pengaman jika filter di atas kosong, gunakan fallback
+        if [ ! -s output_story.txt ]; then
+          echo "Filter utama kosong, mencoba fallback..."
+          jq -r '.steps[-1].content[0].text // "Teks tidak ditemukan"' response.json > output_story.txt
+        fi
         
         # Menampilkan hasil cerita langsung ke log
         cat output_story.txt
 
-        # Kirim informasi lengkap ke ringkasan halaman GitHub Actions agar rapi dibaca
+        # Kirim ke ringkasan halaman GitHub Actions
         echo "### 📊 Statistik & Struktur" >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
         cat response.json >> $GITHUB_STEP_SUMMARY
