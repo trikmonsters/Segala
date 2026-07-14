@@ -1,383 +1,43 @@
-name: Test Freegen 150 Images (Multi-Sesi Incognito)
+name: AutoNation Workflow
 
 on:
-  workflow_dispatch:
-
-permissions:
-  contents: write
+  push:
+    branches:
+      - main
 
 jobs:
-  test-freegen:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        run: |
-          npm init -y
-          npm install playwright sharp ws
-          npx playwright install chromium
+      - name: Install dependencies
+        run: npm install
 
-      - name: Prepare Workspace
-        run: mkdir -p release/images
+      - name: Build project
+        run: npm run build
 
-      - name: Generate 150 Dummy Segments JSON
-        run: |
-          python3 << 'PYEOF'
-          import json
+  test:
+    runs-on: ubuntu-latest
 
-          # 150 prompt dummy bervariasi untuk test generate image
-          prompts = [
-              "A lone philosopher sitting at the edge of a vast geometric void, surrounded by floating clock fragments and shattered mirrors, 2D flat vector illustration, deep midnight blue and gold palette",
-              "A human silhouette with a transparent chest revealing a complex clockwork mechanism instead of a heart, avant-garde editorial style, crimson and charcoal tones",
-              "An architect drawing blueprints that transform into neural network diagrams mid-stroke, minimalist surrealist vector art, clinical white background",
-              "A figure standing at a crossroads where each path dissolves into abstract emotional weather patterns, flat vector editorial illustration",
-              "A psychologist's office with chairs arranged in an infinite recursive loop, each chair slightly smaller, dark surrealist style",
-              "A human brain rendered as an intricate city skyline at dusk, isometric flat vector illustration, navy and terracotta palette",
-              "A person holding a lantern that casts shadows shaped like their deepest fears, avant-garde psychological art",
-              "Twin figures facing each other across a chasm, their reflections distorted into opposite emotional states, flat vector style",
-              "A library where every book floats open and the words form constellations on the ceiling, surrealist editorial illustration",
-              "A scientist measuring the weight of a thought on an enormous golden scale, minimalist 2D vector art",
-          ] * 15  # 10 prompt x 15 = 150 total
+    steps:
+      - uses: actions/checkout@v4
 
-          segments = []
-          for i, prompt in enumerate(prompts[:150]):
-              m = i * 5 // 60
-              s = (i * 5) % 60
-              em = (i * 5 + 5) // 60
-              es = ((i * 5 + 5)) % 60
-              segments.append({
-                  "start": f"{m:02d}:{s:02d}",
-                  "end":   f"{em:02d}:{es:02d}",
-                  "duration": 5,
-                  "text": f"Test segment {i+1}",
-                  "image_prompt": f"[Segment {i+1}/150] {prompt}. Segment number {i+1}, ultra-detailed composition."
-              })
+      - name: Install dependencies
+        run: npm install
 
-          data = {
-              "summary": "Test run — 150 image generation across 3 incognito sessions",
-              "segments": segments,
-              "thumbnail_prompt": "A dramatic 2D flat vector illustration of a researcher studying three glowing browser windows side by side, each window displaying a different psychological artwork, deep midnight navy background, gold accent lighting, avant-garde editorial style, clinical white geometric details"
-          }
+      - name: Run tests
+        run: npm test
 
-          with open("release/analysis.json", "w") as f:
-              json.dump(data, f, indent=2)
+  deploy:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - test
 
-          print(f"✓ Dummy analysis.json dibuat dengan {len(segments)} segmen")
-          PYEOF
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Generate Images — Test 150 (Multi-Sesi Incognito)
-        run: |
-          cat > generate-images-test.js <<'EOF'
-          const { chromium } = require("playwright");
-          const fs   = require("fs");
-          const sharp = require("sharp");
-          const os   = require("os");
-          const path = require("path");
-
-          const analysis  = JSON.parse(fs.readFileSync("release/analysis.json", "utf8"));
-          const segments  = analysis.segments;
-
-          // ── Konfigurasi ────────────────────────────────────────────────────────
-          const BROWSER_LIMIT           = 100; // maks gambar per sesi sebelum ganti browser baru
-          const NUM_BROWSERS            = 3;   // 3 sesi = aman sampai 300 gambar
-          const MAX_WORKERS_PER_BROWSER = 2;   // tab paralel per sesi
-
-          // Fingerprint berbeda tiap sesi — freegen.app menganggap user berbeda
-          const USER_AGENTS = [
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          ];
-          const LOCALES   = ['en-US', 'en-GB', 'id-ID'];
-          const TIMEZONES = ['America/New_York', 'Europe/London', 'Asia/Jakarta'];
-          const VIEWPORTS = [
-              { width: 1280, height: 800 },
-              { width: 1366, height: 768 },
-              { width: 1440, height: 900 },
-          ];
-          // ───────────────────────────────────────────────────────────────────────
-
-          fs.mkdirSync("release/images", { recursive: true });
-
-          const crypto    = require('crypto');
-          const WebSocket = require('ws');
-          const FREEGEN_RATIO = '16:9';
-
-          // ── freegen API fallback (tanpa browser) ───────────────────────────────
-          async function generateFreegenAPI(prompt, outPath) {
-              for (let retry = 1; retry <= 2; retry++) {
-                  try {
-                      const signerRes = await fetch('https://prompt-signer.freegen.app', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ prompt })
-                      });
-                      if (!signerRes.ok) throw new Error(`Signer HTTP ${signerRes.status}`);
-                      const { ts, sig } = await signerRes.json();
-
-                      const genRes = await fetch('https://image-generator.freegen.app', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ prompt, ts, sig, ratio_id: FREEGEN_RATIO })
-                      });
-                      if (!genRes.ok) throw new Error(`Generator HTTP ${genRes.status}`);
-                      const genData = await genRes.json();
-
-                      if (genData.image_data_url) {
-                          const imgRes = await fetch(genData.image_data_url);
-                          const buffer = Buffer.from(await imgRes.arrayBuffer());
-                          await sharp(buffer).jpeg({ quality: 92 }).toFile(outPath);
-                          console.log(`✓ ${outPath} (freegen API direct)`);
-                          return true;
-                      }
-
-                      if (genData.job_id) {
-                          const jobId   = genData.job_id;
-                          const hashHex = crypto.createHash('sha256').update(jobId + ts).digest('hex');
-                          const auth    = Buffer.from(hashHex).toString('base64').substring(0, 20) + ':' + ts;
-                          const ok = await new Promise((resolve) => {
-                              const ws    = new WebSocket('wss://websocket-bridge.freegen.app/ws');
-                              const timer = setTimeout(() => { ws.terminate(); resolve(false); }, 300000);
-                              ws.on('open', () => {
-                                  ws.send(JSON.stringify({ type: 'subscribe', job_id: jobId, auth }));
-                              });
-                              ws.on('message', async (data) => {
-                                  const msg = JSON.parse(data.toString());
-                                  if (msg.type === 'result') {
-                                      clearTimeout(timer);
-                                      let b64 = msg.image_data;
-                                      if (b64.includes(',')) b64 = b64.split(',')[1];
-                                      try {
-                                          await sharp(Buffer.from(b64, 'base64')).jpeg({ quality: 92 }).toFile(outPath);
-                                          ws.terminate(); resolve(true);
-                                      } catch (e) { ws.terminate(); resolve(false); }
-                                  } else if (msg.type === 'error') {
-                                      clearTimeout(timer); ws.terminate(); resolve(false);
-                                  }
-                              });
-                              ws.on('error', (err) => {
-                                  clearTimeout(timer);
-                                  console.log(`[FreegenAPI WS] ${err.message}`);
-                                  resolve(false);
-                              });
-                          });
-                          if (ok) {
-                              console.log(`✓ ${outPath} (freegen API WebSocket)`);
-                              return true;
-                          }
-                          throw new Error('WebSocket result not received');
-                      }
-                      throw new Error('No job_id or image_data_url in response');
-                  } catch (err) {
-                      console.log(`[FreegenAPI] Retry ${retry}/2: ${err.message}`);
-                  }
-              }
-              return false;
-          }
-
-          // ── Generate via Playwright page ───────────────────────────────────────
-          async function generate(page, prompt, outPath) {
-              try {
-                  await page.goto("https://freegen.app/", { waitUntil: "domcontentloaded" });
-                  await page.waitForLoadState("networkidle").catch(() => {});
-
-                  await page.selectOption("#aspectRatioSelect", "16:9");
-                  await page.fill("#prompt", prompt);
-                  await page.keyboard.press("Enter");
-
-                  const imageContainer = page.locator("#imageContainer");
-                  await imageContainer.waitFor({ timeout: 90000 });
-
-                  const img    = imageContainer.locator("img");
-                  const src    = await img.getAttribute("src");
-                  const base64 = src.replace(/^data:image\/[a-z]+;base64,/, "");
-                  fs.writeFileSync(outPath, base64, "base64");
-
-                  console.log("✓", outPath);
-                  return true;
-              } catch (err) {
-                  console.log(`[Playwright] Gagal: ${err.message} — masuk failedQueue`);
-                  try {
-                      await page.screenshot({ path: outPath.replace(/\.jpg$/, ".debug.png"), fullPage: true });
-                      const bodyText = await page.locator("body").innerText().catch(() => "(gagal)");
-                      fs.writeFileSync(outPath.replace(/\.jpg$/, ".debug.txt"), bodyText.slice(0, 3000));
-                  } catch (_) {}
-                  return false;
-              }
-          }
-
-          // ── Launch sesi incognito baru dengan identitas unik ──────────────────
-          async function launchIncognitoSession(sessionIdx) {
-              // userDataDir baru = tidak ada cookie/localStorage/session dari sesi sebelumnya
-              // Persis seperti buka Firefox setelah sebelumnya pakai Chrome
-              const userDataDir = path.join(os.tmpdir(), `freegen-session-${sessionIdx}-${Date.now()}`);
-
-              const context = await chromium.launchPersistentContext(userDataDir, {
-                  headless: true,
-                  args: [
-                      '--no-sandbox',
-                      '--disable-setuid-sandbox',
-                      '--incognito',
-                      '--disable-blink-features=AutomationControlled',
-                      '--disable-dev-shm-usage',
-                  ],
-                  userAgent:    USER_AGENTS[sessionIdx % USER_AGENTS.length],
-                  locale:       LOCALES[sessionIdx % LOCALES.length],
-                  timezoneId:   TIMEZONES[sessionIdx % TIMEZONES.length],
-                  viewport:     VIEWPORTS[sessionIdx % VIEWPORTS.length],
-                  storageState: undefined,
-              });
-
-              console.log(`  UserAgent : ${USER_AGENTS[sessionIdx % USER_AGENTS.length]}`);
-              console.log(`  Locale    : ${LOCALES[sessionIdx % LOCALES.length]}`);
-              console.log(`  Timezone  : ${TIMEZONES[sessionIdx % TIMEZONES.length]}`);
-              console.log(`  Viewport  : ${JSON.stringify(VIEWPORTS[sessionIdx % VIEWPORTS.length])}`);
-              console.log(`  DataDir   : ${userDataDir}\n`);
-
-              return context;
-          }
-
-          // ── Worker ─────────────────────────────────────────────────────────────
-          const failedQueue = [];
-
-          async function worker(tabId, sessionIdx, context, queue) {
-              const page = await context.newPage();
-              while (true) {
-                  const index = queue.shift();
-                  if (index === undefined) break;
-                  console.log(`[Sesi${sessionIdx + 1}|Tab${tabId}] Segmen ${index + 1}/${segments.length}`);
-                  const outPath = `release/images/${String(index + 1).padStart(3, "0")}.jpg`;
-                  const ok = await generate(page, segments[index].image_prompt, outPath);
-                  if (!ok) failedQueue.push({ index, prompt: segments[index].image_prompt, outPath });
-              }
-              await page.close();
-          }
-
-          async function freegenAPIWorker() {
-              let processed = 0;
-              while (failedQueue.length > 0) {
-                  const job = failedQueue.shift();
-                  console.log(`[FallbackAPI] Retry segmen ${job.index + 1}`);
-                  const ok = await generateFreegenAPI(job.prompt, job.outPath);
-                  if (!ok) {
-                      fs.writeFileSync(
-                          job.outPath.replace(/\.jpg$/, ".error.txt"),
-                          `Segmen ${job.index + 1} gagal total.`
-                      );
-                      console.log(`⚠️ Segmen ${job.index + 1} gagal total.`);
-                  }
-                  processed++;
-              }
-              if (processed > 0) console.log(`[FallbackAPI] Selesai ${processed} gambar.`);
-          }
-
-          // ── Main ───────────────────────────────────────────────────────────────
-          (async () => {
-              const startTime = Date.now();
-
-              console.log("\n" + "=".repeat(60));
-              console.log(" TEST — 150 IMAGE MULTI-SESI INCOGNITO ");
-              console.log("=".repeat(60));
-              console.log(`Total segmen : ${segments.length}`);
-              console.log(`Sesi 1       : segmen 1–100   (fingerprint: Windows/en-US)`);
-              console.log(`Sesi 2       : segmen 101–150 (fingerprint: Mac/en-GB)`);
-              console.log(`Sesi 3       : tidak dipakai (< 200 segmen)`);
-              console.log(`Fallback     : freegen API jika Playwright gagal\n`);
-
-              // Bagi ke bucket
-              const buckets = [];
-              for (let b = 0; b < NUM_BROWSERS; b++) {
-                  const start = b * BROWSER_LIMIT;
-                  const end   = Math.min(start + BROWSER_LIMIT, segments.length);
-                  if (start >= segments.length) break;
-                  buckets.push(Array.from({ length: end - start }, (_, i) => start + i));
-              }
-
-              // Thumbnail via freegen API
-              if (analysis.thumbnail_prompt) {
-                  console.log("--- Generating THUMBNAIL ---");
-                  const ok = await generateFreegenAPI(analysis.thumbnail_prompt, "release/thumbnail.jpg");
-                  console.log(ok ? "✓ Thumbnail berhasil\n" : "⚠️ Thumbnail gagal\n");
-              }
-
-              // Jalankan tiap sesi berurutan
-              for (let b = 0; b < buckets.length; b++) {
-                  const bucket = buckets[b];
-                  console.log(`\n${"=".repeat(60)}`);
-                  console.log(` SESI ${b + 1}/${buckets.length} — Segmen ${bucket[0] + 1} s/d ${bucket[bucket.length - 1] + 1}`);
-                  console.log("=".repeat(60));
-
-                  const context = await launchIncognitoSession(b);
-                  const queue   = [...bucket];
-
-                  await Promise.all(
-                      Array.from({ length: Math.min(MAX_WORKERS_PER_BROWSER, queue.length) }, (_, i) =>
-                          worker(i + 1, b, context, queue)
-                      )
-                  );
-
-                  await context.close(); // buang semua cookie & session sesi ini
-                  console.log(`✓ Sesi ${b + 1} selesai & ditutup.\n`);
-              }
-
-              // Retry via API
-              if (failedQueue.length > 0) {
-                  console.log(`\n${failedQueue.length} gambar gagal — retry via freegen API...`);
-                  await freegenAPIWorker();
-              }
-
-              // Fallback thumbnail
-              if (!fs.existsSync("release/thumbnail.jpg")) {
-                  const first = fs.readdirSync("release/images").filter(f => f.endsWith(".jpg")).sort()[0];
-                  if (first) fs.copyFileSync(`release/images/${first}`, "release/thumbnail.jpg");
-              }
-
-              // ── Laporan hasil test ─────────────────────────────────────────────
-              const elapsed    = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
-              const allImages  = fs.readdirSync("release/images").filter(f => f.endsWith(".jpg"));
-              const allErrors  = fs.readdirSync("release/images").filter(f => f.endsWith(".error.txt"));
-
-              console.log("\n" + "=".repeat(60));
-              console.log(" HASIL TEST ");
-              console.log("=".repeat(60));
-              console.log(`Total target   : ${segments.length} gambar`);
-              console.log(`Berhasil       : ${allImages.length} gambar`);
-              console.log(`Gagal total    : ${allErrors.length} gambar`);
-              console.log(`Waktu          : ${elapsed} menit`);
-              console.log(`Status         : ${allErrors.length === 0 ? "✓ SEMUA BERHASIL" : `⚠️ ${allErrors.length} GAGAL`}`);
-              console.log("=".repeat(60));
-          })();
-          EOF
-
-          node generate-images-test.js
-
-      - name: Zip Hasil Gambar
-        if: always()
-        run: |
-          cd release
-          zip -r images.zip images/ || echo "Tidak ada gambar"
-          cd ..
-
-      - name: Publish Hasil Test
-        if: always()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: test-freegen-${{ github.run_number }}
-          name: "Test Freegen 150 Images — Run #${{ github.run_number }}"
-          draft: false
-          prerelease: true
-          body: |
-            ## Test Multi-Sesi Incognito — 150 Gambar
-
-            **Cara baca hasil:**
-            - Cek `images.zip` → lihat apakah gambar 001–100 dan 101–150 semua ada
-            - Jika ada file `.error.txt` di dalam zip → segmen itu gagal total
-            - Jika semua `.jpg` ada tanpa `.error.txt` → teknik berhasil ✓
-          files: |
-            release/images.zip
-            release/thumbnail.jpg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy
+        run: echo "Deploying application..."
