@@ -1,0 +1,49 @@
+name: Pexels API Search
+
+# Workflow ini bisa dijalankan secara manual via tab "Actions" di GitHub
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: 'Kata kunci pencarian (contoh: nature, space, ocean)'
+        required: true
+        default: 'nature'
+        type: string
+
+jobs:
+  search-pexels:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Langkah 1: Mencari Foto di Pexels
+      - name: Search Photos on Pexels
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          QUERY: ${{ inputs.query }}
+        run: |
+          echo "🔍 Mencari FOTO dengan kata kunci: $QUERY..."
+          
+          # Melakukan request ke endpoint foto Pexels
+          RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
+            "https://api.pexels.com/v1/search?query=$QUERY&per_page=3")
+          
+          # Menampilkan hasil format JSON yang rapi (menggunakan jq)
+          echo "$RESPONSE" | jq .
+
+      # Langkah 2: Mencari Video di Pexels
+      - name: Search Videos on Pexels
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          QUERY: ${{ inputs.query }}
+        run: |
+          echo "🎥 Mencari VIDEO dengan kata kunci: $QUERY..."
+          
+          # Melakukan request ke endpoint video Pexels
+          RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
+            "https://api.pexels.com/videos/search?query=$QUERY&per_page=3")
+          
+          # Menampilkan hasil format JSON yang rapi (menggunakan jq)
+          echo "$RESPONSE" | jq .
