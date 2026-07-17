@@ -1,13 +1,12 @@
-name: Pexels API Search
+name: Pexels API Unlimited Portrait Search
 
-# Workflow ini bisa dijalankan secara manual via tab "Actions" di GitHub
 on:
   workflow_dispatch:
     inputs:
       query:
-        description: 'Kata kunci pencarian (contoh: nature, space, ocean)'
+        description: 'Kata kunci pencarian (contoh: Home decor, nature)'
         required: true
-        default: 'nature'
+        default: 'Home decor'
         type: string
 
 jobs:
@@ -18,32 +17,96 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Langkah 1: Mencari Foto di Pexels
-      - name: Search Photos on Pexels
+      # Langkah 1: Ambil Semua Foto Portrait (Looping Pagination)
+      - name: Fetch All Portrait Photos
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           QUERY: ${{ inputs.query }}
         run: |
-          echo "🔍 Mencari FOTO dengan kata kunci: $QUERY..."
+          echo "🔍 Mencari SEMUA FOTO portrait untuk: $QUERY..."
           
-          # Melakukan request ke endpoint foto Pexels
-          RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
-            "https://api.pexels.com/v1/search?query=$QUERY&per_page=3")
+          # URL Encode query
+          ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
           
-          # Menampilkan hasil format JSON yang rapi (menggunakan jq)
-          echo "$RESPONSE" | jq .
+          PAGE=1
+          HAS_MORE=true
+          
+          # File sementara untuk menampung semua hasil
+          touch all_photos.txt
+          
+          while [ "$HAS_MORE" = true ]; do
+            echo "Mengambil Foto Halaman $PAGE..."
+            
+            # Request ke Pexels dengan orientation=portrait dan per_page maksimal (80)
+            RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
+              "https://api.pexels.com/v1/search?query=${ENCODED_QUERY}&orientation=portrait&per_page=80&page=${PAGE}")
+            
+            # Ambil hanya link portrait menggunakan jq
+            PHOTO_LINKS=$(echo "$RESPONSE" | jq -r '.photos[].src.portrait' 2>/dev/null)
+            
+            if [ -z "$PHOTO_LINKS" ] || [ "$PHOTO_LINKS" = "null" ]; then
+              HAS_MORE=false
+            else
+              echo "$PHOTO_LINKS" >> all_photos.txt
+              
+              # Cek apakah ada halaman berikutnya
+              NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.next_page')
+              if [ -z "$NEXT_PAGE" ] || [ "$NEXT_PAGE" = "null" ]; then
+                HAS_MORE=false
+              else
+                PAGE=$((PAGE+1))
+                sleep 1 # Delay ringan untuk menghindari rate limit API
+              fi
+            fi
+          done
+          
+          echo "============================================="
+          echo "🎉 Selesai! Berhasil mengumpulkan $(wc -l < all_photos.txt) Foto Portrait."
+          echo "============================================="
+          cat all_photos.txt
 
-      # Langkah 2: Mencari Video di Pexels
-      - name: Search Videos on Pexels
+      # Langkah 2: Ambil Semua Video Portrait (Looping Pagination)
+      - name: Fetch All Portrait Videos
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           QUERY: ${{ inputs.query }}
         run: |
-          echo "🎥 Mencari VIDEO dengan kata kunci: $QUERY..."
+          echo "🎥 Mencari SEMUA VIDEO portrait untuk: $QUERY..."
           
-          # Melakukan request ke endpoint video Pexels
-          RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
-            "https://api.pexels.com/videos/search?query=$QUERY&per_page=3")
+          # URL Encode query
+          ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
           
-          # Menampilkan hasil format JSON yang rapi (menggunakan jq)
-          echo "$RESPONSE" | jq .
+          PAGE=1
+          HAS_MORE=true
+          
+          touch all_videos.txt
+          
+          while [ "$HAS_MORE" = true ]; do
+            echo "Mengambil Video Halaman $PAGE..."
+            
+            # Request video dengan orientation=portrait
+            RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
+              "https://api.pexels.com/videos/search?query=${ENCODED_QUERY}&orientation=portrait&per_page=80&page=${PAGE}")
+            
+            # Pada video, kita mencari video_files yang bertipe 'video/mp4' dan memiliki aspek portrait (width < height)
+            VIDEO_LINKS=$(echo "$RESPONSE" | jq -r '.videos[].video_files[] | select(.width < .height and .link != null) | .link' 2>/dev/null | uniq)
+            
+            if [ -z "$VIDEO_LINKS" ] || [ "$VIDEO_LINKS" = "null" ]; then
+              HAS_MORE=false
+            else
+              echo "$VIDEO_LINKS" >> all_videos.txt
+              
+              NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.next_page')
+              if [ -z "$NEXT_PAGE" ] || [ "$NEXT_PAGE" = "null" ]; then
+                HAS_MORE=false
+              else
+                PAGE=$((PAGE+1))
+                sleep 1
+              fi
+            fi
+          done
+          
+          echo "============================================="
+          echo "🎉 Selesai! Berhasil mengumpulkan $(wc -l < all_videos.txt) Video Portrait."
+          echo "============================================="
+          cat all_videos.txt
