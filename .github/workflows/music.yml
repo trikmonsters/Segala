@@ -1,0 +1,46 @@
+name: Loop Video Audio for SoundOn
+
+on:
+  workflow_dispatch: # Memungkinkan Anda menjalankan workflow ini secara manual dari tab Actions di GitHub
+
+jobs:
+  process-audio:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Extract, Loop, and Master Audio
+      run: |
+        # 1. Pastikan file input ada
+        if [ ! -f "music.mp4" ]; then
+          echo "Error: File music.mp4 tidak ditemukan di root repositori!"
+          exit 1
+        fi
+
+        echo "Mengekstrak audio asli ke WAV kualitas tinggi..."
+        # Menggunakan format PCM 24-bit (s24le) dan sample rate 48kHz untuk kualitas terbaik
+        ffmpeg -i music.mp4 -vn -acodec pcm_s24le -ar 48000 single_track.wav
+
+        echo "Membuat file konfigurasi untuk looping..."
+        # Membuat list untuk concating (menggabungkan) file yang sama sebanyak 4 kali
+        for i in {1..4}; do echo "file 'single_track.wav'" >> file_list.txt; done
+
+        echo "Menggabungkan (looping) audio sebanyak 4 kali..."
+        # Melakukan concat tanpa re-encoding tambahan untuk menjaga kualitas asli
+        ffmpeg -f concat -safe 0 -i file_list.txt -c copy output_master.wav
+
+        echo "Proses selesai. File siap diunduh."
+
+    - name: Upload Master Audio to Artifacts
+      uses: actions/artifacts-upload@v4
+      with:
+        name: soundon-master-audio
+        path: output_master.wav
+        retention-days: 5
