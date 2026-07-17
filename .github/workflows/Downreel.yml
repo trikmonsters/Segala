@@ -1,0 +1,168 @@
+name: Downreels Multi-Web Download & Debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Masukkan URL Video Media / Instagram'
+        required: true
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old debug release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🗑️ Memeriksa dan menghapus release lama jika ada..."
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
+            --jq '.[] | select(.tag_name == "test_debug_assets") | .id' 2>/dev/null || echo "")
+          if [ -n "$RELEASE_ID" ]; then
+            gh api -X DELETE repos/${{ github.repository }}/releases/$RELEASE_ID || true
+            sleep 2
+          fi
+          gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/test_debug_assets || true
+          
+          echo "📦 Membuat Wadah GitHub Release Baru..."
+          gh release create test_debug_assets \
+            --repo "${{ github.repository }}" \
+            --title "Debug & Test Assets (Downreels Mode)" \
+            --notes "Aset dikumpulkan secara real-time dari target downreels.com."
+
+  download-engine:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Playwright Dependencies
+        run: |
+          npm init -y
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+          npx playwright install chromium --with-deps
+
+      - name: Execute Download In Incognito
+        run: |
+          cat << 'EOF' > run_download.js
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+          const fs = require('fs');
+
+          chromium.use(stealth);
+
+          (async () => {
+            const igUrl = process.argv[2] || "";
+            
+            // Konfigurasi khusus untuk downreels.com
+            const srcId = "downreels";
+            const srcUrl = "https://downreels.com/";
+            const srcInput = "input[placeholder*='Instagram'], input[type='text'], #url";
+            const srcButton = "button[type='submit'], form button, #download-btn";
+            const srcDownload = "#downloadLinks .btn-dl-overlay-main, #downloadLinks button, .btn-dl-overlay-main, a.download-button";
+
+            console.log(`🚀 [${srcId}] Memulai pemicu unduh: ${igUrl}`);
+
+            const browser = await chromium.launch({ 
+              headless: true,
+              args: ['--incognito', '--no-sandbox', '--disable-setuid-sandbox', '--disable-infobars']
+            });
+
+            const context = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+              viewport: { width: 1366, height: 768 },
+              locale: 'en-US',
+              extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
+            });
+
+            await context.addInitScript(() => {
+              Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+              Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            });
+
+            const page = await context.newPage();
+            let downloadSuccess = false;
+
+            try {
+              await page.goto(srcUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+              await page.screenshot({ path: `step1_homepage_${srcId}.png`, fullPage: true });
+
+              await page.waitForSelector(srcInput, { timeout: 15000 });
+              await page.fill(srcInput, igUrl);
+
+              const submitBtn = await page.$(srcButton);
+              if (submitBtn) { await submitBtn.click(); } else { await page.press(srcInput, 'Enter'); }
+
+              await page.waitForTimeout(12000);
+              await page.screenshot({ path: `step2_submitted_${srcId}.png`, fullPage: true });
+
+              console.log(`⏳ Menunggu tautan unduhan dirender (Maks 60 detik)...`);
+              await page.waitForSelector(srcDownload, { timeout: 60000 });
+
+              const downloadElement = await page.$(srcDownload);
+              let downloadUrl = "";
+              const tagName = await page.evaluate(el => el.tagName.toLowerCase(), downloadElement);
+
+              if (tagName === 'button' || tagName === 'div') {
+                downloadUrl = await page.evaluate(el => {
+                  const anchor = el.closest('a') || el.querySelector('a');
+                  return anchor ? anchor.href : el.getAttribute('data-url') || el.getAttribute('data-href');
+                }, downloadElement);
+
+                if (!downloadUrl) {
+                  console.log(`🔄 Target berupa tombol tanpa href, merekam stream via klik langsung...`);
+                  const [downloadEvent] = await Promise.all([
+                    page.waitForEvent('download', { timeout: 45000 }),
+                    downloadElement.click()
+                  ]);
+                  await downloadEvent.saveAs(`video_${srcId}.mp4`);
+                  downloadSuccess = true;
+                }
+              } else {
+                downloadUrl = await page.getAttribute(srcDownload, 'href');
+              }
+
+              if (downloadUrl && !downloadSuccess) {
+                console.log(`🔗 Link video didapatkan. Mendownload stream data...`);
+                const response = await context.request.get(downloadUrl, { timeout: 45000 });
+                const videoBuffer = await response.body();
+                fs.writeFileSync(`video_${srcId}.mp4`, videoBuffer);
+                downloadSuccess = true;
+              }
+
+              if (downloadSuccess) {
+                console.log(`✅ Selesai! File video_${srcId}.mp4 sukses ditulis.`);
+              }
+
+            } catch (error) {
+              console.error(`❌ Gangguan pada ${srcId}:`, error.message);
+              try { await page.screenshot({ path: `step_error_${srcId}.png`, fullPage: true }); } catch (e) {}
+            } finally {
+              await context.close();
+              await browser.close();
+            }
+          })();
+          EOF
+          node run_download.js "${{ github.event.inputs.video_url }}"
+
+      - name: Upload Runner Assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          for file in *.png video_downreels.mp4; do
+            if [ -f "$file" ]; then
+              echo "📤 Memasukkan $file ke dalam rilis..."
+              gh release upload test_debug_assets "$file" --repo "${{ github.repository }}" --clobber
+            fi
+          done
