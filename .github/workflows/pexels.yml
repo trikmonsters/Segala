@@ -1,4 +1,4 @@
-name: Pexels API Unlimited Portrait Search
+name: Multi-Source Portrait Image Search
 
 on:
   workflow_dispatch:
@@ -10,103 +10,142 @@ on:
         type: string
 
 jobs:
+  # ==========================================
+  # JOB 1: PEXELS (Foto & Video Portrait)
+  # ==========================================
   search-pexels:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # Langkah 1: Ambil Semua Foto Portrait (Looping Pagination)
-      - name: Fetch All Portrait Photos
+      # Menggabungkan pencarian foto dan video Pexels ke satu job agar efisien
+       Tarik Foto & Video Pexels Portrait
+      - name: Fetch Pexels Media
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           QUERY: ${{ inputs.query }}
         run: |
-          echo "🔍 Mencari SEMUA FOTO portrait untuk: $QUERY..."
-          
-          # URL Encode query
           ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
           
-          PAGE=1
-          HAS_MORE=true
-          
-          # File sementara untuk menampung semua hasil
-          touch all_photos.txt
-          
+          # --- Ambil Semua Foto Portrait ---
+          echo "🔍 Mencari FOTO Portrait di Pexels..."
+          PAGE=1; HAS_MORE=true; touch pexels_photos.txt
           while [ "$HAS_MORE" = true ]; do
-            echo "Mengambil Foto Halaman $PAGE..."
-            
-            # Request ke Pexels dengan orientation=portrait dan per_page maksimal (80)
-            RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
-              "https://api.pexels.com/v1/search?query=${ENCODED_QUERY}&orientation=portrait&per_page=80&page=${PAGE}")
-            
-            # Ambil hanya link portrait menggunakan jq
-            PHOTO_LINKS=$(echo "$RESPONSE" | jq -r '.photos[].src.portrait' 2>/dev/null)
-            
-            if [ -z "$PHOTO_LINKS" ] || [ "$PHOTO_LINKS" = "null" ]; then
-              HAS_MORE=false
-            else
-              echo "$PHOTO_LINKS" >> all_photos.txt
-              
-              # Cek apakah ada halaman berikutnya
-              NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.next_page')
-              if [ -z "$NEXT_PAGE" ] || [ "$NEXT_PAGE" = "null" ]; then
-                HAS_MORE=false
-              else
-                PAGE=$((PAGE+1))
-                sleep 1 # Delay ringan untuk menghindari rate limit API
-              fi
+            RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" "https://api.pexels.com/v1/search?query=${ENCODED_QUERY}&orientation=portrait&per_page=80&page=${PAGE}")
+            LINKS=$(echo "$RESPONSE" | jq -r '.photos[].src.portrait' 2>/dev/null)
+            if [ -z "$LINKS" ] || [ "$LINKS" = "null" ]; then HAS_MORE=false; else
+              echo "$LINKS" >> pexels_photos.txt
+              NEXT=$(echo "$RESPONSE" | jq -r '.next_page')
+              if [ -z "$NEXT" ] || [ "$NEXT" = "null" ]; then HAS_MORE=false; else PAGE=$((PAGE+1)); sleep 1; fi
             fi
           done
-          
-          echo "============================================="
-          echo "🎉 Selesai! Berhasil mengumpulkan $(wc -l < all_photos.txt) Foto Portrait."
-          echo "============================================="
-          cat all_photos.txt
+          echo "🎉 Total Foto Pexels: $(wc -l < pexels_photos.txt)"
 
-      # Langkah 2: Ambil Semua Video Portrait (Looping Pagination)
-      - name: Fetch All Portrait Videos
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          QUERY: ${{ inputs.query }}
-        run: |
-          echo "🎥 Mencari SEMUA VIDEO portrait untuk: $QUERY..."
-          
-          # URL Encode query
-          ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
-          
-          PAGE=1
-          HAS_MORE=true
-          
-          touch all_videos.txt
-          
+          # --- Ambil Semua Video Portrait ---
+          echo "🎥 Mencari VIDEO Portrait di Pexels..."
+          PAGE=1; HAS_MORE=true; touch pexels_videos.txt
           while [ "$HAS_MORE" = true ]; do
-            echo "Mengambil Video Halaman $PAGE..."
-            
-            # Request video dengan orientation=portrait
-            RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" \
-              "https://api.pexels.com/videos/search?query=${ENCODED_QUERY}&orientation=portrait&per_page=80&page=${PAGE}")
-            
-            # Pada video, kita mencari video_files yang bertipe 'video/mp4' dan memiliki aspek portrait (width < height)
-            VIDEO_LINKS=$(echo "$RESPONSE" | jq -r '.videos[].video_files[] | select(.width < .height and .link != null) | .link' 2>/dev/null | uniq)
-            
-            if [ -z "$VIDEO_LINKS" ] || [ "$VIDEO_LINKS" = "null" ]; then
-              HAS_MORE=false
-            else
-              echo "$VIDEO_LINKS" >> all_videos.txt
-              
-              NEXT_PAGE=$(echo "$RESPONSE" | jq -r '.next_page')
-              if [ -z "$NEXT_PAGE" ] || [ "$NEXT_PAGE" = "null" ]; then
-                HAS_MORE=false
-              else
-                PAGE=$((PAGE+1))
-                sleep 1
-              fi
+            RESPONSE=$(curl -s -H "Authorization: $PEXELS_API_KEY" "https://api.pexels.com/videos/search?query=${ENCODED_QUERY}&orientation=portrait&per_page=80&page=${PAGE}")
+            LINKS=$(echo "$RESPONSE" | jq -r '.videos[].video_files[] | select(.width < .height and .link != null) | .link' 2>/dev/null | uniq)
+            if [ -z "$LINKS" ] || [ "$LINKS" = "null" ]; then HAS_MORE=false; else
+              echo "$LINKS" >> pexels_videos.txt
+              NEXT=$(echo "$RESPONSE" | jq -r '.next_page')
+              if [ -z "$NEXT" ] || [ "$NEXT" = "null" ]; then HAS_MORE=false; else PAGE=$((PAGE+1)); sleep 1; fi
             fi
           done
+          echo "🎉 Total Video Pexels: $(wc -l < pexels_videos.txt)"
+
+  # ==========================================
+  # JOB 2: PIXABAY (Foto & Video Portrait)
+  # ==========================================
+  search-pixabay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch Pixabay Media
+        env:
+          PIXABAY_KEY: "56732658-d2c01deb4cc4c79744e282f5a" # Token Anda
+          QUERY: ${{ inputs.query }}
+        run: |
+          ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
           
-          echo "============================================="
-          echo "🎉 Selesai! Berhasil mengumpulkan $(wc -l < all_videos.txt) Video Portrait."
-          echo "============================================="
-          cat all_videos.txt
+          # --- Ambil Semua Foto Portrait di Pixabay ---
+          echo "🔍 Mencari FOTO Portrait di Pixabay..."
+          PAGE=1; HAS_MORE=true; touch pixabay_photos.txt
+          while [ "$HAS_MORE" = true ]; do
+            # Pixabay menggunakan parameter &orientation=vertical
+            RESPONSE=$(curl -s "https://pixabay.com/api/?key=${PIXABAY_KEY}&q=${ENCODED_QUERY}&orientation=vertical&per_page=200&page=${PAGE}")
+            LINKS=$(echo "$RESPONSE" | jq -r '.hits[].largeImageURL' 2>/dev/null)
+            
+            if [ -z "$LINKS" ] || [ "$LINKS" = "null" ]; then HAS_MORE=false; else
+              echo "$LINKS" >> pixabay_photos.txt
+              # Cek apakah jumlah total yang ditarik sudah mencukupi total hits
+              TOTAL_HITS=$(echo "$RESPONSE" | jq -r '.totalHits')
+              CURRENT_COUNT=$(wc -l < pixabay_photos.txt)
+              if [ "$CURRENT_COUNT" -ge "$TOTAL_HITS" ] || [ "$PAGE" -ge 5 ]; then HAS_MORE=false; else PAGE=$((PAGE+1)); sleep 1; fi
+            fi
+          done
+          echo "🎉 Total Foto Pixabay: $(wc -l < pixabay_photos.txt)"
+
+          # --- Ambil Semua Video Portrait di Pixabay ---
+          echo "🎥 Mencari VIDEO Portrait di Pixabay..."
+          PAGE=1; HAS_MORE=true; touch pixabay_videos.txt
+          while [ "$HAS_MORE" = true ]; do
+            RESPONSE=$(curl -s "https://pixabay.com/api/videos/?key=${PIXABAY_KEY}&q=${ENCODED_QUERY}&per_page=200&page=${PAGE}")
+            # Filter video portrait secara manual dengan JQ (width < height) dan ambil resolusi paling besar (misal large/medium)
+            LINKS=$(echo "$RESPONSE" | jq -r '.hits[] | select(.videos.large.width < .videos.large.height or .videos.medium.width < .videos.medium.height) | if .videos.large.url != "" then .videos.large.url else .videos.medium.url end' 2>/dev/null)
+            
+            if [ -z "$LINKS" ] || [ "$LINKS" = "null" ]; then HAS_MORE=false; else
+              echo "$LINKS" >> pixabay_videos.txt
+              TOTAL_HITS=$(echo "$RESPONSE" | jq -r '.totalHits')
+              CURRENT_COUNT=$(wc -l < pixabay_videos.txt)
+              if [ "$CURRENT_COUNT" -ge "$TOTAL_HITS" ] || [ "$PAGE" -ge 5 ]; then HAS_MORE=false; else PAGE=$((PAGE+1)); sleep 1; fi
+            fi
+          done
+          echo "🎉 Total Video Pixabay: $(wc -l < pixabay_videos.txt)"
+
+  # ==========================================
+  # JOB 3: UNSPLASH (Hanya Foto Portrait)
+  # ==========================================
+  search-unsplash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Unsplash hanya menyediakan Foto (tidak ada API Video gratis)
+      - name: Fetch Unsplash Photos
+        env:
+          UNSPLASH_ACCESS_KEY: "tAObIJ-BrU4SZBcPUfcLhDrLbHMtgdd8ivbrRCXc_-U"
+          QUERY: ${{ inputs.query }}
+        run: |
+          if [ -z "$UNSPLASH_ACCESS_KEY" ]; then
+            echo "❌ Error: UNSPLASH_ACCESS_KEY belum dikonfigurasi di GitHub Secrets."
+            exit 1
+          fi
+
+          ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
+          
+          echo "🔍 Mencari FOTO Portrait di Unsplash..."
+          PAGE=1; HAS_MORE=true; touch unsplash_photos.txt
+          
+          while [ "$HAS_MORE" = true ]; do
+            # Unsplash menggunakan header Authorization: Client-ID dan parameter orientation=portrait
+            RESPONSE=$(curl -s -H "Authorization: Client-ID $UNSPLASH_ACCESS_KEY" \
+              "https://api.unsplash.com/search/photos?query=${ENCODED_QUERY}&orientation=portrait&per_page=30&page=${PAGE}")
+            
+            LINKS=$(echo "$RESPONSE" | jq -r '.results[].urls.regular' 2>/dev/null)
+            TOTAL_PAGES=$(echo "$RESPONSE" | jq -r '.total_pages' 2>/dev/null)
+            
+            if [ -z "$LINKS" ] || [ "$LINKS" = "null" ] || [ "$PAGE" -gt "$TOTAL_PAGES" ]; then
+              HAS_MORE=false
+            else
+              echo "$LINKS" >> unsplash_photos.txt
+              PAGE=$((PAGE+1))
+              sleep 1
+            fi
+          done
+          echo "🎉 Total Foto Unsplash: $(wc -l < unsplash_photos.txt)"
