@@ -19,22 +19,22 @@ jobs:
     - name: Extract, Loop, and Master Audio
       run: |
         # 1. Pastikan file input ada
-        if [ ! -f "music.mp4" ]; then
+        if [ ! -f "Soft_Breath_of_Pines.mp4" ]; then
           echo "Error: File music.mp4 tidak ditemukan di root repositori!"
           exit 1
         fi
 
         echo "Mengekstrak audio asli ke WAV kualitas tinggi..."
         # Menggunakan format PCM 24-bit (s24le) dan sample rate 48kHz untuk kualitas terbaik
-        ffmpeg -i music.mp4 -vn -acodec pcm_s24le -ar 48000 single_track.wav
+        ffmpeg -i Soft_Breath_of_Pines.mp4 -vn -acodec pcm_s24le -ar 48000 Soft_Breath_of_Pines.wav
 
         echo "Membuat file konfigurasi untuk looping..."
         # Membuat list untuk concating (menggabungkan) file yang sama sebanyak 4 kali
-        for i in {1..4}; do echo "file 'single_track.wav'" >> file_list.txt; done
+        for i in {1..4}; do echo "file 'Soft_Breath_of_Pines.wav'" >> file_list.txt; done
 
         echo "Menggabungkan (looping) audio sebanyak 4 kali..."
         # Melakukan concat tanpa re-encoding tambahan untuk menjaga kualitas asli
-        ffmpeg -f concat -safe 0 -i file_list.txt -c copy output_master.wav
+        ffmpeg -f concat -safe 0 -i file_list.txt -c copy Soft_Breath_of_Pines.wav
 
         echo "Proses selesai. File siap diunduh."
 
@@ -42,5 +42,5 @@ jobs:
       uses: actions/artifacts-upload@v4
       with:
         name: soundon-master-audio
-        path: output_master.wav
+        path: Soft_Breath_of_Pines.wav
         retention-days: 5
