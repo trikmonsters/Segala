@@ -26,12 +26,12 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install FFmpeg & yt-dlp (Nightly)
+      - name: Install FFmpeg & yt-dlp (Latest Build)
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          # Mengunduh paket yt-dlp-nightly langsung dari PyPI
-          pip install --upgrade yt-dlp-nightly
+          # Menginstall yt-dlp versi paling baru langsung dari repository master GitHub
+          pip install --upgrade git+https://github.com/yt-dlp/yt-dlp.git
 
       - name: Download Shorts with yt-dlp
         run: |
