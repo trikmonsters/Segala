@@ -1,10 +1,10 @@
-name: Download YouTube Shorts
+name: Download Video (YouTube Shorts / IG Reels)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'URL YouTube Shorts'
+        description: 'URL YouTube Shorts atau Instagram Reels'
         required: true
         type: string
 
@@ -22,14 +22,13 @@ jobs:
         with:
           deno-version: v2.x
 
-      # Download FFmpeg Static Binary Kilat (~3-4 detik, tanpa warning node.js)
-      - name: Install FFmpeg Binary
-        run: |
-          mkdir -p ~/.local/bin
-          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      # Setup FFmpeg Resmi - Menggunakan 'github-token' yang valid
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Download yt-dlp Binary (~2 detik)
+      # Download yt-dlp Binary Standar (~2 detik)
       - name: Install yt-dlp Binary
         run: |
           mkdir -p ~/.local/bin
@@ -37,11 +36,12 @@ jobs:
           chmod +x ~/.local/bin/yt-dlp
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Download Shorts with yt-dlp
+      - name: Download Video with yt-dlp
         run: |
+          # Format -f fleksibel untuk YouTube (Video+Audio) maupun Instagram (Single Stream)
           yt-dlp --cookies ./cookie.txt \
                  --remote-components ejs:github \
-                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b/best" \
                  --merge-output-format mp4 \
                  -o "downloads/%(title)s.%(ext)s" \
                  "${{ inputs.url }}"
@@ -49,6 +49,6 @@ jobs:
       - name: Upload Video as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-shorts
+          name: downloaded-video
           path: downloads/*.mp4
           retention-days: 7
