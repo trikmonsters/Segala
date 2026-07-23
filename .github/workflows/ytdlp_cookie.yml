@@ -1,10 +1,10 @@
-name: Download Video (YouTube Shorts / IG Reels)
+name: Download YouTube Shorts
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'URL YouTube Shorts atau Instagram Reels'
+        description: 'URL YouTube Shorts'
         required: true
         type: string
 
@@ -16,19 +16,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Setup FFmpeg Kilat (~2-3 detik)
+      - name: Set up FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       # Setup Deno (~2 detik)
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      # Setup FFmpeg Resmi - Menggunakan 'github-token' yang valid
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # Download yt-dlp Binary Standar (~2 detik)
+      # Install yt-dlp Binary (~2 detik)
       - name: Install yt-dlp Binary
         run: |
           mkdir -p ~/.local/bin
@@ -36,12 +36,18 @@ jobs:
           chmod +x ~/.local/bin/yt-dlp
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Download Video with yt-dlp
+      # Step baru: Mengambil cookie dari GitHub Secrets dan menulisnya ke file ./cookie.txt
+      - name: Create Cookie File from Secret
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIES }}
         run: |
-          # Format -f fleksibel untuk YouTube (Video+Audio) maupun Instagram (Single Stream)
+          echo "$COOKIES_TEXT" > ./cookie.txt
+
+      - name: Download Shorts with yt-dlp
+        run: |
           yt-dlp --cookies ./cookie.txt \
                  --remote-components ejs:github \
-                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b/best" \
+                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
                  --merge-output-format mp4 \
                  -o "downloads/%(title)s.%(ext)s" \
                  "${{ inputs.url }}"
@@ -49,6 +55,6 @@ jobs:
       - name: Upload Video as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: downloaded-video
+          name: youtube-shorts
           path: downloads/*.mp4
           retention-days: 7
