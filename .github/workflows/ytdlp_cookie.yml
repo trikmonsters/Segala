@@ -16,23 +16,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # Setup FFmpeg Kilat (~2-3 detik)
+      - name: Set up FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
         with:
-          python-version: '3.x'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Install Deno (JS Runtime resmi yang direkomendasikan yt-dlp)
+      # Setup Deno (~2 detik)
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
-      - name: Install FFmpeg & yt-dlp dengan EJS
+      # Install yt-dlp Binary (~2 detik)
+      - name: Install yt-dlp Binary
         run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-          python -m pip install --upgrade pip
-          # Menginstall yt-dlp beserta pustaka EJS challenge solver
-          pip install --upgrade "yt-dlp[default]" yt-dlp-ejs
+          mkdir -p ~/.local/bin
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp
+          chmod +x ~/.local/bin/yt-dlp
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Download Shorts with yt-dlp
         run: |
