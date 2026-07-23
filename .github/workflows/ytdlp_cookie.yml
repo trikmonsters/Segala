@@ -21,21 +21,23 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      # Install Deno (JS Runtime resmi yang direkomendasikan yt-dlp)
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
         with:
-          node-version: '20'
+          deno-version: v2.x
 
-      - name: Install FFmpeg & yt-dlp (Latest Build)
+      - name: Install FFmpeg & yt-dlp dengan EJS
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          # Menginstall yt-dlp versi paling baru langsung dari repository master GitHub
-          pip install --upgrade git+https://github.com/yt-dlp/yt-dlp.git
+          # Menginstall yt-dlp beserta pustaka EJS challenge solver
+          pip install --upgrade "yt-dlp[default]" yt-dlp-ejs
 
       - name: Download Shorts with yt-dlp
         run: |
           yt-dlp --cookies ./cookie.txt \
+                 --remote-components ejs:github \
                  -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
                  --merge-output-format mp4 \
                  -o "downloads/%(title)s.%(ext)s" \
