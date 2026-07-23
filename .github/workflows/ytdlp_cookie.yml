@@ -36,15 +36,9 @@ jobs:
           chmod +x ~/.local/bin/yt-dlp
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Create Cookie File from Secret
-        env:
-          COOKIES_TEXT: ${{ secrets.COOKIE }}
-        run: |
-          echo "$COOKIES_TEXT" > ./cookies.txt
-
       - name: Download Shorts with yt-dlp
         run: |
-          yt-dlp --cookies ./cookies.txt \
+          yt-dlp --cookies ./cookie.txt \
                  --remote-components ejs:github \
                  -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
                  --merge-output-format mp4 \
