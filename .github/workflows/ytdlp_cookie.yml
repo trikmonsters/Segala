@@ -21,18 +21,17 @@ jobs:
         with:
           python-version: '3.x'
 
-      # STEP PENTING: Install Node.js untuk JS Challenge Solver
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install FFmpeg & yt-dlp (Nightly Build)
+      - name: Install FFmpeg & yt-dlp (Nightly)
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
-          # Menggunakan versi nightly agar selalu mendapat patch enkripsi YouTube terbaru
-          pip install --upgrade --force-reinstall https://github.com/yt-dlp/yt-dlp/archive/nightly.tar.gz
+          # Mengunduh paket yt-dlp-nightly langsung dari PyPI
+          pip install --upgrade yt-dlp-nightly
 
       - name: Download Shorts with yt-dlp
         run: |
