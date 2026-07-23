@@ -39,7 +39,7 @@ jobs:
       # Step baru: Mengambil cookie dari GitHub Secrets dan menulisnya ke file ./cookie.txt
       - name: Create Cookie File from Secret
         env:
-          COOKIES_TEXT: ${{ secrets.COOKIES }}
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
         run: |
           echo "$COOKIES_TEXT" > ./cookie.txt
 
