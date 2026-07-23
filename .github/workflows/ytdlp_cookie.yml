@@ -1,0 +1,44 @@
+name: Download YouTube Shorts
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL YouTube Shorts'
+        required: true
+        type: string
+
+jobs:
+  download-video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install yt-dlp & FFmpeg
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install yt-dlp
+
+      - name: Download Shorts with yt-dlp
+        run: |
+          # Mengambil file cookie.txt dari root repository
+          yt-dlp --cookies ./cookie.txt \
+                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+                 --merge-output-format mp4 \
+                 -o "downloads/%(title)s.%(ext)s" \
+                 "${{ inputs.url }}"
+
+      - name: Upload Video as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-shorts
+          path: downloads/*.mp4
+          retention-days: 7
