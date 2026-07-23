@@ -16,11 +16,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Setup FFmpeg Kilat (~2-3 detik)
-      - name: Set up FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install FFmpeg Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       # Setup Deno (~2 detik)
       - name: Setup Deno
