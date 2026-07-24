@@ -1,0 +1,87 @@
+name: Auto Long to Clips
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL YouTube Shorts'
+        required: true
+        type: string
+      sections:
+        description: 'Potongan Menit (opsional, contoh: 5s-30s, 40s-55s, 79s-83s)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  download-video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install yt-dlp Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp
+          chmod +x ~/.local/bin/yt-dlp
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Create Cookie File from Secret
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
+        run: |
+          echo "$COOKIES_TEXT" > ./cookies.txt
+
+      - name: Download Shorts with yt-dlp
+        env:
+          RAW_SECTIONS: ${{ inputs.sections }}
+        run: |
+          SECTIONS_ARGS=""
+
+          # Jika input sections diisi oleh user
+          if [ -n "$RAW_SECTIONS" ]; then
+            # Hapus huruf 's' jika user mengetik '5s-30s' agar menjadi '5-30'
+            CLEANED=$(echo "$RAW_SECTIONS" | sed 's/s//g')
+            
+            # Pisahkan berdasarkan koma dan susun menjadi argumen --download-sections "*..."
+            IFS=',' read -ra ADDR <<< "$CLEANED"
+            for sec in "${ADDR[@]}"; do
+              # Trim spasi di awal/akhir
+              TRIMMED=$(echo "$sec" | xargs)
+              if [ -n "$TRIMMED" ]; then
+                SECTIONS_ARGS="$SECTIONS_ARGS --download-sections \"*$TRIMMED\""
+              fi
+            done
+          fi
+
+          echo "Menjalankan yt-dlp dengan argumen: $SECTIONS_ARGS"
+
+          # Eksekusi yt-dlp dengan opsi potongan waktu dan penyelarasan keyframe
+          eval yt-dlp --cookies ./cookies.txt \
+                   --remote-components ejs:github \
+                   $SECTIONS_ARGS \
+                   --force-keyframes-at-cuts \
+                   -f \"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best\" \
+                   --merge-output-format mp4 \
+                   -o \"downloads/%(title)s.%(ext)s\" \
+                   "\"${{ inputs.url }}\""
+
+      - name: Upload Video as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-shorts
+          path: downloads/*.mp4
+          retention-days: 7
