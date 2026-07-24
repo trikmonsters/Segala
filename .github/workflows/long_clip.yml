@@ -48,36 +48,36 @@ jobs:
       - name: Download Shorts with yt-dlp
         env:
           RAW_SECTIONS: ${{ inputs.sections }}
+          URL: ${{ inputs.url }}
         run: |
-          SECTIONS_ARGS=""
+          # Buat array untuk menampung argumen yt-dlp
+          YTDLP_ARGS=(
+            --cookies ./cookies.txt
+            --remote-components ejs:github
+            --force-keyframes-at-cuts
+            -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            --merge-output-format mp4
+            -o "downloads/%(title)s.%(ext)s"
+          )
 
           # Jika input sections diisi oleh user
           if [ -n "$RAW_SECTIONS" ]; then
-            # Hapus huruf 's' jika user mengetik '5s-30s' agar menjadi '5-30'
+            # Hapus huruf 's' jika user mengetik '5s-30s'
             CLEANED=$(echo "$RAW_SECTIONS" | sed 's/s//g')
             
-            # Pisahkan berdasarkan koma dan susun menjadi argumen --download-sections "*..."
+            # Pisahkan berdasarkan koma dan tambahkan ke array
             IFS=',' read -ra ADDR <<< "$CLEANED"
             for sec in "${ADDR[@]}"; do
-              # Trim spasi di awal/akhir
               TRIMMED=$(echo "$sec" | xargs)
               if [ -n "$TRIMMED" ]; then
-                SECTIONS_ARGS="$SECTIONS_ARGS --download-sections \"*$TRIMMED\""
+                YTDLP_ARGS+=(--download-sections "*$TRIMMED")
               fi
             done
           fi
 
-          echo "Menjalankan yt-dlp dengan argumen: $SECTIONS_ARGS"
-
-          # Eksekusi yt-dlp dengan opsi potongan waktu dan penyelarasan keyframe
-          eval yt-dlp --cookies ./cookies.txt \
-                   --remote-components ejs:github \
-                   $SECTIONS_ARGS \
-                   --force-keyframes-at-cuts \
-                   -f \"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best\" \
-                   --merge-output-format mp4 \
-                   -o \"downloads/%(title)s.%(ext)s\" \
-                   "\"${{ inputs.url }}\""
+          echo "Menjalankan yt-dlp..."
+          
+          yt-dlp "${YTDLP_ARGS[@]}" "$URL"
 
       - name: Upload Video as Artifact
         uses: actions/upload-artifact@v4
