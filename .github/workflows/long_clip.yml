@@ -1,4 +1,4 @@
-name: Auto Long to Clips
+name: Long to Clips
 
 on:
   workflow_dispatch:
@@ -21,17 +21,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install FFmpeg Binary
+      # Install FFmpeg resmi via apt (stabil & bebas konflik)
+      - name: Install FFmpeg
         run: |
-          mkdir -p ~/.local/bin
-          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
+      # Setup Deno (~2 detik)
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
+      # Install yt-dlp Binary (~2 detik)
       - name: Install yt-dlp Binary
         run: |
           mkdir -p ~/.local/bin
@@ -50,7 +52,7 @@ jobs:
           RAW_SECTIONS: ${{ inputs.sections }}
           URL: ${{ inputs.url }}
         run: |
-          # Buat array untuk menampung argumen yt-dlp
+          # Menyiapkan opsi default yt-dlp menggunakan Bash Array
           YTDLP_ARGS=(
             --cookies ./cookies.txt
             --remote-components ejs:github
@@ -60,12 +62,12 @@ jobs:
             -o "downloads/%(title)s.%(ext)s"
           )
 
-          # Jika input sections diisi oleh user
+          # Jika input sections diisi oleh pengguna
           if [ -n "$RAW_SECTIONS" ]; then
-            # Hapus huruf 's' jika user mengetik '5s-30s'
+            # Hapus huruf 's' jika pengguna menginput format seperti '5s-30s'
             CLEANED=$(echo "$RAW_SECTIONS" | sed 's/s//g')
             
-            # Pisahkan berdasarkan koma dan tambahkan ke array
+            # Pisahkan input berdasarkan koma dan tambahkan ke array YTDLP_ARGS
             IFS=',' read -ra ADDR <<< "$CLEANED"
             for sec in "${ADDR[@]}"; do
               TRIMMED=$(echo "$sec" | xargs)
@@ -77,6 +79,7 @@ jobs:
 
           echo "Menjalankan yt-dlp..."
           
+          # Eksekusi array secara presisi & aman
           yt-dlp "${YTDLP_ARGS[@]}" "$URL"
 
       - name: Upload Video as Artifact
