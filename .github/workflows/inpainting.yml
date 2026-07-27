@@ -1,0 +1,357 @@
+name: Auto IG & Buffer Post
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Masukkan URL Video Media / Instagram'
+        required: true
+        default: ''
+      caption:
+        description: 'Caption opsional (jika kosong, pakai hasil Gemini)'
+        required: false
+        default: ''
+      post_to_buffer:
+        description: 'Langsung upload ke Buffer?'
+        required: true
+        default: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  download-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yt-dlp
+      - name: Create Downloads Cookie File
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
+        run: |
+          mkdir -p downloads
+          echo "$COOKIES_TEXT" > ./cookies.txt
+      - name: Download Video via yt-dlp
+        run: |
+          set -e
+          yt-dlp --cookies ./cookies.txt \
+                 --remote-components ejs:github \
+                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+                 --merge-output-format mp4 \
+                 -o "video_raw.mp4" \
+                 "${{ github.event.inputs.video_url }}"
+      - name: Upload Raw Video Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-video
+          path: video_raw.mp4
+          retention-days: 1
+
+
+extract-frames:
+  needs: download-video
+  runs-on: ubuntu-latest
+
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install FFmpeg Binary
+      run: |
+        mkdir -p ~/.local/bin
+        curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Download Raw Video Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: raw-video
+
+    - name: Extract Frames & Audio
+      run: |
+        set -Eeuo pipefail
+
+        mkdir -p work/frames
+        mkdir -p work/audio
+
+        echo "====================================="
+        echo "Video Information"
+        echo "====================================="
+
+        ffprobe \
+          -v error \
+          -show_entries format=duration \
+          -show_entries stream=width,height,r_frame_rate \
+          -of default=noprint_wrappers=1 \
+          video_raw.mp4
+
+        echo
+        echo "====================================="
+        echo "Extract Frames"
+        echo "====================================="
+
+        ffmpeg \
+          -hide_banner \
+          -loglevel error \
+          -i video_raw.mp4 \
+          -vsync 0 \
+          work/frames/frame_%08d.png
+
+        echo
+        echo "====================================="
+        echo "Extract Audio"
+        echo "====================================="
+
+        ffmpeg \
+          -hide_banner \
+          -loglevel error \
+          -i video_raw.mp4 \
+          -vn \
+          -acodec copy \
+          work/audio/audio.m4a || true
+
+        echo
+        echo "====================================="
+        echo "Frame Count"
+        echo "====================================="
+
+        ls work/frames | wc -l
+
+    - name: Upload Frames
+      uses: actions/upload-artifact@v4
+      with:
+        name: extracted-frames
+        path: work
+        retention-days: 1
+
+
+
+generate-mask:
+  needs: extract-frames
+  runs-on: ubuntu-latest
+
+  steps:
+
+    - uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Dependencies
+      run: |
+        pip install easyocr opencv-python pillow numpy
+
+    - name: Download Frames
+      uses: actions/download-artifact@v4
+      with:
+        name: extracted-frames
+
+    - name: Generate Subtitle Masks
+      run: |
+
+        cat > generate_mask.py << 'PY'
+        import easyocr
+        import cv2
+        import numpy as np
+        from pathlib import Path
+
+        reader = easyocr.Reader(
+            ['ch_sim','en'],
+            gpu=False
+        )
+
+        frame_dir = Path("work/frames")
+        mask_dir = Path("work/masks")
+
+        mask_dir.mkdir(parents=True, exist_ok=True)
+
+        for frame in sorted(frame_dir.glob("*.png")):
+
+            img = cv2.imread(str(frame))
+
+            h, w = img.shape[:2]
+
+            mask = np.zeros((h,w),dtype=np.uint8)
+
+            results = reader.readtext(img)
+
+            for r in results:
+
+                box = r[0]
+
+                xs = [int(p[0]) for p in box]
+                ys = [int(p[1]) for p in box]
+
+                x1=min(xs)
+                y1=min(ys)
+                x2=max(xs)
+                y2=max(ys)
+
+                pad_x=20
+                pad_y=12
+
+                x1=max(0,x1-pad_x)
+                y1=max(0,y1-pad_y)
+
+                x2=min(w,x2+pad_x)
+                y2=min(h,y2+pad_y)
+
+                cv2.rectangle(
+                    mask,
+                    (x1,y1),
+                    (x2,y2),
+                    255,
+                    -1
+                )
+
+            cv2.imwrite(
+                str(mask_dir/frame.name),
+                mask
+            )
+
+        print("Mask generation finished.")
+        PY
+
+        python generate_mask.py
+
+    - name: Upload Masks
+      uses: actions/upload-artifact@v4
+      with:
+        name: subtitle-masks
+        path: work/masks
+        retention-days: 1
+
+
+
+refine-mask:
+  needs: generate-mask
+  runs-on: ubuntu-latest
+
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Dependencies
+      run: |
+        pip install opencv-python numpy pillow
+
+    - name: Download Extracted Frames
+      uses: actions/download-artifact@v4
+      with:
+        name: extracted-frames
+
+    - name: Download Raw Masks
+      uses: actions/download-artifact@v4
+      with:
+        name: subtitle-masks
+
+    - name: Refine Subtitle Masks
+      run: |
+        cat > refine_masks.py << 'PY'
+        import cv2
+        import numpy as np
+        from pathlib import Path
+
+        mask_dir = Path("work/masks")
+        output_dir = Path("work/masks_refined")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for mask_path in sorted(mask_dir.glob("*.png")):
+
+            mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+
+            if mask is None:
+                continue
+
+            h, w = mask.shape
+
+            # Keep only bottom 35% of frame
+            roi = np.zeros_like(mask)
+            roi[int(h * 0.65):, :] = 255
+            mask = cv2.bitwise_and(mask, roi)
+
+            # Binary threshold
+            _, mask = cv2.threshold(mask, 20, 255, cv2.THRESH_BINARY)
+
+            # Remove tiny detections
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+
+            cleaned = np.zeros_like(mask)
+
+            for i in range(1, num_labels):
+                area = stats[i, cv2.CC_STAT_AREA]
+                if area >= 120:
+                    cleaned[labels == i] = 255
+
+            # Close gaps
+            kernel_close = cv2.getStructuringElement(
+                cv2.MORPH_RECT,
+                (25, 9)
+            )
+            cleaned = cv2.morphologyEx(
+                cleaned,
+                cv2.MORPH_CLOSE,
+                kernel_close
+            )
+
+            # Dilate to cover subtitle outline/shadow
+            kernel_dilate = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (17, 17)
+            )
+            cleaned = cv2.dilate(
+                cleaned,
+                kernel_dilate,
+                iterations=2
+            )
+
+            # Feather edges
+            cleaned = cv2.GaussianBlur(
+                cleaned,
+                (9, 9),
+                0
+            )
+
+            cv2.imwrite(
+                str(output_dir / mask_path.name),
+                cleaned
+            )
+
+        print("Mask refinement completed.")
+        PY
+
+        python refine_masks.py
+
+    - name: Upload Refined Masks
+      uses: actions/upload-artifact@v4
+      with:
+        name: refined-masks
+        path: work/masks_refined
+        retention-days: 1
+
+
+
+
+
