@@ -38,8 +38,7 @@ jobs:
 
       - name: Download Shorts with yt-dlp
         run: |
-          yt-dlp --cookies ./cookie.txt \
-                 --remote-components ejs:github \
+          yt-dlp --remote-components ejs:github \
                  -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
                  --merge-output-format mp4 \
                  -o "downloads/%(title)s.%(ext)s" \
@@ -51,3 +50,8 @@ jobs:
           name: youtube-shorts
           path: downloads/*.mp4
           retention-days: 7
+
+
+
+# --cookies ./cookie.txt \
+                 
