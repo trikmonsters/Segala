@@ -84,86 +84,87 @@ jobs:
           EOF
           python transcribe.py
 
-      - name: Translate SRT to English via AI Studio API (curl)
+      - name: Translate SRT to English
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -e -E
-
-          # Pastikan file subtitle ada
-          if [ ! -f "downloads/subtitle_zh.srt" ]; then
-            echo "File downloads/subtitle_zh.srt tidak ditemukan!"
-            exit 1
-          fi
-
-          # Buat file skrip Python sederhana untuk menyiapkan prompt JSON secara aman (escaped characters)
-          python3 -c '
+      
+          python3 << 'PY'
           import json
-
-          with open("downloads/subtitle_zh.srt", "r", encoding="utf-8") as f:
-              zh_srt_content = f.read()
-
-          prompt = f"""You are a professional translator. Below is an SRT subtitle file in Chinese. 
-          Translate all Chinese subtitle lines into clear and natural English.
-          CRITICAL REQUIREMENTS:
-          1. Maintain the EXACT SAME SRT format, sequence numbers, and timestamps.
-          2. DO NOT alter, skip, or merge any timestamp lines (e.g., 00:00:01,000 --> 00:00:04,000).
-          3. Output ONLY the translated SRT text without any markdown code blocks or explanations.
-
-          Chinese SRT Content:
-          {zh_srt_content}"""
-
-          payload = {
-              "model": "models/gemini-3.6-flash",
-              "input": prompt,
-              "generation_config": {
-                  "max_output_tokens": 65536
+      
+          with open("downloads/subtitle_zh.srt","r",encoding="utf-8") as f:
+              srt=f.read()
+      
+          payload={
+              "model":"models/gemini-3.6-flash",
+              "input":f"""You are a professional subtitle translator.
+      
+              Translate this Chinese SRT into English.
+              
+              Rules:
+              - Preserve numbering.
+              - Preserve timestamps exactly.
+              - Translate only subtitle text.
+              - Output ONLY valid SRT.
+              
+              {srt}
+              """,
+              "generation_config":{
+                  "max_output_tokens":65536,
+                  "thinking_level":"medium"
               }
           }
-
-          with open("request.json", "w", encoding="utf-8") as f:
-              json.dump(payload, f, ensure_ascii=False, indent=2)
-          '
-
-          # Eksekusi cURL seperti instruksi AI Studio
-          curl -s -S \
+      
+          with open("request.json","w",encoding="utf-8") as f:
+              json.dump(payload,f,ensure_ascii=False)
+          PY
+      
+          HTTP_CODE=$(curl \
+            -s \
+            -o response.json \
+            -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
             "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
-            -d '@request.json' > response.json
-
-          # Ekstrak hasil teks terjemahan dari respons JSON
-          python3 -c '
-          import json, re
-
-          with open("response.json", "r", encoding="utf-8") as f:
-              res = json.load(f)
-
-          # Mengambil teks dari respons endpoint interactions
-          try:
-              translated_text = ""
-              if "outputs" in res and len(res["outputs"]) > 0:
-                  translated_text = res["outputs"][-1].get("text", "")
-              elif "candidates" in res:
-                  translated_text = res["candidates"][0]["content"]["parts"][0]["text"]
-              else:
-                  print("Full Response Error:", res)
-                  raise ValueError("Format respons tidak dikenali")
-
-              # Bersihkan pembungkus markdown jika ada
-              translated_text = translated_text.strip()
-              if translated_text.startswith("```"):
-                  lines = translated_text.split("\n")
-                  translated_text = "\n".join(lines[1:-1])
-
-              with open("downloads/subtitle_en.srt", "w", encoding="utf-8") as f:
-                  f.write(translated_text)
-              print("Berhasil menerjemahkan subtitle ke English via cURL AI Studio!")
-          except Exception as e:
-              print(f"Error parsing response: {e}")
-              exit(1)
-          '
-
+            -d @request.json)
+      
+          echo "HTTP: $HTTP_CODE"
+      
+          cat response.json
+      
+          test "$HTTP_CODE" = "200"
+      
+          python3 << 'PY'
+          import json
+          import sys
+      
+          with open("response.json","r",encoding="utf-8") as f:
+              res=json.load(f)
+      
+          text=""
+      
+          if "outputs" in res:
+              for o in res["outputs"]:
+                  if "text" in o:
+                      text+=o["text"]
+      
+          if not text and "candidates" in res:
+              text=res["candidates"][0]["content"]["parts"][0]["text"]
+      
+          if not text:
+              print(json.dumps(res,indent=2,ensure_ascii=False))
+              sys.exit(1)
+      
+          if text.startswith("```"):
+              lines=text.splitlines()
+              text="\n".join(lines[1:-1])
+      
+          with open("downloads/subtitle_en.srt","w",encoding="utf-8") as f:
+              f.write(text)
+      
+          print("Done")
+          PY
       - name: Upload Video & Subtitles as Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -172,4 +173,4 @@ jobs:
             downloads/input_video.mp4
             downloads/subtitle_zh.srt
             downloads/subtitle_en.srt
-          retention-days: 7
+          retention-days: 3
