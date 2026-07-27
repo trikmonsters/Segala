@@ -20,7 +20,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
+
       - name: Install FFmpeg Binary
         run: |
           mkdir -p ~/.local/bin
@@ -37,7 +37,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install demucs faster-whisper google-genai
+          pip install demucs faster-whisper
 
       - name: Download Video with yt-dlp
         run: |
@@ -49,7 +49,6 @@ jobs:
 
       - name: Extract Vocals using Demucs
         run: |
-          # Memisahkan vokal dari musik latar agar Whisper tidak halusinasi
           demucs --two-stems=vocals downloads/input_video.mp4 -o separated/
 
       - name: Transcribe Vocals to Chinese SRT (Faster-Whisper)
@@ -59,8 +58,6 @@ jobs:
           import os
 
           vocal_path = "separated/htdemucs/input_video/vocals.wav"
-          
-          # Model medium CPU + VAD filter untuk akurasi tinggi
           model = WhisperModel("medium", device="cpu", compute_type="int8")
 
           segments, info = model.transcribe(
@@ -87,33 +84,26 @@ jobs:
           EOF
           python transcribe.py
 
-      - name: Translate SRT to English via Gemini API
+      - name: Translate SRT to English via AI Studio API (curl)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          cat << 'EOF' > translate_gemini.py
-          import os
-          from google import genai
-          from google.genai import types
+          set -e -E
 
-          def translate_srt():
-              api_key = os.environ.get("GEMINI_API_KEY")
-              if not api_key:
-                  raise ValueError("GEMINI_API_KEY secret is missing in GitHub Secrets!")
+          # Pastikan file subtitle ada
+          if [ ! -f "downloads/subtitle_zh.srt" ]; then
+            echo "File downloads/subtitle_zh.srt tidak ditemukan!"
+            exit 1
+          fi
 
-              client = genai.Client(api_key=api_key)
+          # Buat file skrip Python sederhana untuk menyiapkan prompt JSON secara aman (escaped characters)
+          python3 -c '
+          import json
 
-              srt_path = "downloads/subtitle_zh.srt"
-              output_path = "downloads/subtitle_en.srt"
+          with open("downloads/subtitle_zh.srt", "r", encoding="utf-8") as f:
+              zh_srt_content = f.read()
 
-              if not os.path.exists(srt_path):
-                  print("File subtitle_zh.srt tidak ditemukan.")
-                  return
-
-              with open(srt_path, "r", encoding="utf-8") as f:
-                  zh_srt_content = f.read()
-
-              prompt = f"""You are a professional translator. Below is an SRT subtitle file in Chinese. 
+          prompt = f"""You are a professional translator. Below is an SRT subtitle file in Chinese. 
           Translate all Chinese subtitle lines into clear and natural English.
           CRITICAL REQUIREMENTS:
           1. Maintain the EXACT SAME SRT format, sequence numbers, and timestamps.
@@ -121,30 +111,58 @@ jobs:
           3. Output ONLY the translated SRT text without any markdown code blocks or explanations.
 
           Chinese SRT Content:
-          {zh_srt_content}
-          """
+          {zh_srt_content}"""
 
-              response = client.models.generate_content(
-                  model="gemini-3.5-flash",
-                  contents=prompt,
-                  config=types.GenerateContentConfig(
-                      temperature=0.2,
-                  )
-              )
+          payload = {
+              "model": "models/gemini-3.6-flash",
+              "input": prompt,
+              "generation_config": {
+                  "max_output_tokens": 65536
+              }
+          }
 
-              translated_text = response.text.strip()
+          with open("request.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          '
+
+          # Eksekusi cURL seperti instruksi AI Studio
+          curl -s -S \
+            -X POST \
+            -H "Content-Type: application/json" \
+            "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
+            -d '@request.json' > response.json
+
+          # Ekstrak hasil teks terjemahan dari respons JSON
+          python3 -c '
+          import json, re
+
+          with open("response.json", "r", encoding="utf-8") as f:
+              res = json.load(f)
+
+          # Mengambil teks dari respons endpoint interactions
+          try:
+              translated_text = ""
+              if "outputs" in res and len(res["outputs"]) > 0:
+                  translated_text = res["outputs"][-1].get("text", "")
+              elif "candidates" in res:
+                  translated_text = res["candidates"][0]["content"]["parts"][0]["text"]
+              else:
+                  print("Full Response Error:", res)
+                  raise ValueError("Format respons tidak dikenali")
+
+              # Bersihkan pembungkus markdown jika ada
+              translated_text = translated_text.strip()
               if translated_text.startswith("```"):
-                  translated_text = "\n".join(translated_text.split("\n")[1:-1])
+                  lines = translated_text.split("\n")
+                  translated_text = "\n".join(lines[1:-1])
 
-              with open(output_path, "w", encoding="utf-8") as f:
+              with open("downloads/subtitle_en.srt", "w", encoding="utf-8") as f:
                   f.write(translated_text)
-
-              print("Berhasil menerjemahkan subtitle ke English via Gemini API!")
-
-          if __name__ == "__main__":
-              translate_srt()
-          EOF
-          python translate_gemini.py
+              print("Berhasil menerjemahkan subtitle ke English via cURL AI Studio!")
+          except Exception as e:
+              print(f"Error parsing response: {e}")
+              exit(1)
+          '
 
       - name: Upload Video & Subtitles as Artifact
         uses: actions/upload-artifact@v4
@@ -154,4 +172,4 @@ jobs:
             downloads/input_video.mp4
             downloads/subtitle_zh.srt
             downloads/subtitle_en.srt
-          retention-days: 2
+          retention-days: 7
