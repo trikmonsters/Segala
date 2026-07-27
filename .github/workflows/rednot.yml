@@ -84,87 +84,114 @@ jobs:
           EOF
           python transcribe.py
 
-      - name: Translate SRT to English
+      - name: Translate SRT to English via AI Studio API (curl)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          set -e -E
+          set -Eeuo pipefail
+      
+          if [ ! -f "downloads/subtitle_zh.srt" ]; then
+            echo "File downloads/subtitle_zh.srt tidak ditemukan!"
+            exit 1
+          fi
       
           python3 << 'PY'
           import json
       
-          with open("downloads/subtitle_zh.srt","r",encoding="utf-8") as f:
-              srt=f.read()
+          with open("downloads/subtitle_zh.srt", "r", encoding="utf-8") as f:
+              zh = f.read()
       
-          payload={
-              "model":"models/gemini-3.6-flash",
-              "input":f"""You are a professional subtitle translator.
+          prompt = f"""You are a professional subtitle translator.
       
-              Translate this Chinese SRT into English.
-              
-              Rules:
-              - Preserve numbering.
-              - Preserve timestamps exactly.
-              - Translate only subtitle text.
-              - Output ONLY valid SRT.
-              
-              {srt}
-              """,
-              "generation_config":{
-                  "max_output_tokens":65536,
-                  "thinking_level":"medium"
+          Translate the following Chinese SRT subtitle into fluent, natural English.
+          
+          Rules:
+          - Preserve ALL sequence numbers.
+          - Preserve ALL timestamps exactly.
+          - Translate ONLY subtitle text.
+          - Do NOT merge subtitles.
+          - Do NOT split subtitles.
+          - Do NOT add explanations.
+          - Output ONLY valid SRT.
+          
+          Chinese SRT:
+          
+          {zh}
+          """
+      
+          payload = {
+              "model": "models/gemini-3.6-flash",
+              "input": prompt,
+              "generation_config": {
+                  "max_output_tokens": 65536,
+                  "thinking_level": "medium"
               }
           }
       
-          with open("request.json","w",encoding="utf-8") as f:
-              json.dump(payload,f,ensure_ascii=False)
+          with open("request.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False)
           PY
       
-          HTTP_CODE=$(curl \
-            -s \
-            -o response.json \
-            -w "%{http_code}" \
-            -X POST \
-            -H "Content-Type: application/json" \
-            "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
-            -d @request.json)
+          HTTP_CODE=$(
+            curl \
+              -s \
+              -o response.json \
+              -w "%{http_code}" \
+              -H "Content-Type: application/json" \
+              "https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}" \
+              -d @request.json
+          )
       
-          echo "HTTP: $HTTP_CODE"
+          echo "HTTP : $HTTP_CODE"
       
-          cat response.json
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "API Error"
+            cat response.json
+            exit 1
+          fi
       
-          test "$HTTP_CODE" = "200"
+          RAW=$(jq -r '
+            .steps[]
+            | select(.type=="model_output")
+            | .content[]
+            | select(.type=="text")
+            | .text
+          ' response.json 2>/dev/null)
       
-          python3 << 'PY'
-          import json
-          import sys
+          if [[ -z "$RAW" || "$RAW" == "null" ]]; then
+            RAW=$(jq -r '
+              .candidates[0].content.parts[0].text
+            ' response.json 2>/dev/null)
+          fi
       
-          with open("response.json","r",encoding="utf-8") as f:
-              res=json.load(f)
+          if [[ -z "$RAW" || "$RAW" == "null" ]]; then
+            RAW=$(jq -r '
+              .outputs[-1].text
+            ' response.json 2>/dev/null)
+          fi
       
-          text=""
+          if [[ -z "$RAW" || "$RAW" == "null" ]]; then
+            echo "======================================="
+            echo "No model output."
+            echo "======================================="
+            cat response.json
+            exit 1
+          fi
       
-          if "outputs" in res:
-              for o in res["outputs"]:
-                  if "text" in o:
-                      text+=o["text"]
+          RAW=$(printf "%s" "$RAW" \
+            | sed '1s/^```srt//' \
+            | sed '1s/^```text//' \
+            | sed '1s/^```json//' \
+            | sed '1s/^```//' \
+            | sed '$s/```$//')
       
-          if not text and "candidates" in res:
-              text=res["candidates"][0]["content"]["parts"][0]["text"]
+          printf "%s" "$RAW" > downloads/subtitle_en.srt
       
-          if not text:
-              print(json.dumps(res,indent=2,ensure_ascii=False))
-              sys.exit(1)
-      
-          if text.startswith("```"):
-              lines=text.splitlines()
-              text="\n".join(lines[1:-1])
-      
-          with open("downloads/subtitle_en.srt","w",encoding="utf-8") as f:
-              f.write(text)
-      
-          print("Done")
-          PY
+          echo "======================================="
+          echo "Subtitle translated successfully!"
+          echo "======================================="
+
+    
       - name: Upload Video & Subtitles as Artifact
         uses: actions/upload-artifact@v4
         with:
