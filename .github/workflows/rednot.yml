@@ -1,0 +1,158 @@
+name: Process Video with Whisper & Gemini API
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL Video (RedNote / YouTube)'
+        required: true
+        type: string
+
+jobs:
+  process-video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install FFmpeg Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install yt-dlp Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp
+          chmod +x ~/.local/bin/yt-dlp
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install Python Dependencies
+        run: |
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install demucs faster-whisper google-genai
+
+      - name: Download Video with yt-dlp
+        run: |
+          mkdir -p downloads
+          yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+                 --merge-output-format mp4 \
+                 -o "downloads/input_video.mp4" \
+                 "${{ inputs.url }}"
+
+      - name: Extract Vocals using Demucs
+        run: |
+          # Memisahkan vokal dari musik latar agar Whisper tidak halusinasi
+          demucs --two-stems=vocals downloads/input_video.mp4 -o separated/
+
+      - name: Transcribe Vocals to Chinese SRT (Faster-Whisper)
+        run: |
+          cat << 'EOF' > transcribe.py
+          from faster_whisper import WhisperModel
+          import os
+
+          vocal_path = "separated/htdemucs/input_video/vocals.wav"
+          
+          # Model medium CPU + VAD filter untuk akurasi tinggi
+          model = WhisperModel("medium", device="cpu", compute_type="int8")
+
+          segments, info = model.transcribe(
+              vocal_path,
+              language="zh",
+              vad_filter=True,
+              vad_parameters=dict(min_silence_duration_ms=500)
+          )
+
+          def format_time(seconds):
+              hrs = int(seconds // 3600)
+              mins = int((seconds % 3600) // 60)
+              secs = int(seconds % 60)
+              msecs = int((seconds - int(seconds)) * 1000)
+              return f"{hrs:02d}:{mins:02d}:{secs:02d},{msecs:03d}"
+
+          os.makedirs("downloads", exist_ok=True)
+          with open("downloads/subtitle_zh.srt", "w", encoding="utf-8") as f:
+              for i, segment in enumerate(segments, start=1):
+                  start = format_time(segment.start)
+                  end = format_time(segment.end)
+                  f.write(f"{i}\n{start} --> {end}\n{segment.text.strip()}\n\n")
+          print("Transkripsi bahasa Tionghoa selesai!")
+          EOF
+          python transcribe.py
+
+      - name: Translate SRT to English via Gemini API
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cat << 'EOF' > translate_gemini.py
+          import os
+          from google import genai
+          from google.genai import types
+
+          def translate_srt():
+              api_key = os.environ.get("GEMINI_API_KEY")
+              if not api_key:
+                  raise ValueError("GEMINI_API_KEY secret is missing in GitHub Secrets!")
+
+              client = genai.Client(api_key=api_key)
+
+              srt_path = "downloads/subtitle_zh.srt"
+              output_path = "downloads/subtitle_en.srt"
+
+              if not os.path.exists(srt_path):
+                  print("File subtitle_zh.srt tidak ditemukan.")
+                  return
+
+              with open(srt_path, "r", encoding="utf-8") as f:
+                  zh_srt_content = f.read()
+
+              prompt = f"""You are a professional translator. Below is an SRT subtitle file in Chinese. 
+          Translate all Chinese subtitle lines into clear and natural English.
+          CRITICAL REQUIREMENTS:
+          1. Maintain the EXACT SAME SRT format, sequence numbers, and timestamps.
+          2. DO NOT alter, skip, or merge any timestamp lines (e.g., 00:00:01,000 --> 00:00:04,000).
+          3. Output ONLY the translated SRT text without any markdown code blocks or explanations.
+
+          Chinese SRT Content:
+          {zh_srt_content}
+          """
+
+              response = client.models.generate_content(
+                  model="gemini-2.5-flash",
+                  contents=prompt,
+                  config=types.GenerateContentConfig(
+                      temperature=0.2,
+                  )
+              )
+
+              translated_text = response.text.strip()
+              if translated_text.startswith("```"):
+                  translated_text = "\n".join(translated_text.split("\n")[1:-1])
+
+              with open(output_path, "w", encoding="utf-8") as f:
+                  f.write(translated_text)
+
+              print("Berhasil menerjemahkan subtitle ke English via Gemini API!")
+
+          if __name__ == "__main__":
+              translate_srt()
+          EOF
+          python translate_gemini.py
+
+      - name: Upload Video & Subtitles as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-video-package
+          path: |
+            downloads/input_video.mp4
+            downloads/subtitle_zh.srt
+            downloads/subtitle_en.srt
+          retention-days: 2
