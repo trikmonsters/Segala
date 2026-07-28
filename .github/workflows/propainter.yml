@@ -270,7 +270,7 @@ jobs:
       - name: Configure Kaggle API
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           mkdir -p ~/.kaggle
           cat > ~/.kaggle/kaggle.json <<EOF
@@ -344,7 +344,7 @@ jobs:
       - name: Configure Kaggle API
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           mkdir -p ~/.kaggle
           cat > ~/.kaggle/kaggle.json <<EOF
