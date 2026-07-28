@@ -330,6 +330,9 @@ jobs:
           find kaggle_dataset -maxdepth 3
 
       - name: Upload Dataset to Kaggle
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           kaggle datasets version \
             -p kaggle_dataset \
@@ -395,12 +398,16 @@ jobs:
           cat kaggle_kernel/kernel-metadata.json
 
       - name: Push Kernel to Kaggle
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           kaggle kernels push -p kaggle_kernel
 
       - name: Wait for Kernel to Finish
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           set -e
           SLUG="${KAGGLE_USERNAME}/propainter-auto-inference"
@@ -424,6 +431,7 @@ jobs:
       - name: Download Kernel Output
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           mkdir -p downloaded_output
           kaggle kernels output "${KAGGLE_USERNAME}/propainter-auto-inference" -p downloaded_output
