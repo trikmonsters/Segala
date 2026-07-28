@@ -1,0 +1,453 @@
+name: Auto Remove Subtitle & Watermark (ProPainter)
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'URL video (YouTube/Instagram/dst)'
+        required: true
+        default: ''
+      watermark_static_region:
+        description: >-
+          Opsional. Area watermark logo tetap (bukan teks) format
+          "x1,y1,x2,y2" relatif resolusi asli video. Kosongkan jika tidak ada.
+        required: false
+        default: ''
+      ocr_stride:
+        description: 'Jalankan OCR setiap N frame (lebih besar = lebih cepat, kurang presisi)'
+        required: false
+        default: '3'
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================
+  # 1. Download video sumber via yt-dlp
+  # ============================================================
+  download-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yt-dlp
+
+      - name: Create Downloads Cookie File
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
+        run: |
+          mkdir -p downloads
+          echo "$COOKIES_TEXT" > ./cookies.txt
+
+      - name: Download Video via yt-dlp
+        run: |
+          set -e
+          yt-dlp --cookies ./cookies.txt \
+                 --remote-components ejs:github \
+                 -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+                 --merge-output-format mp4 \
+                 -o "video_raw.mp4" \
+                 "${{ github.event.inputs.video_url }}"
+
+      - name: Upload Raw Video Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-video
+          path: video_raw.mp4
+          retention-days: 1
+
+  # ============================================================
+  # 2. Extract audio + frame dari video
+  # ============================================================
+  extract-media:
+    needs: download-video
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg Binary
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Download Raw Video Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: raw-video
+          path: .
+
+      - name: Extract Audio
+        run: |
+          set -e
+          ffmpeg -y -i video_raw.mp4 -vn -acodec copy audio.aac || \
+          ffmpeg -y -i video_raw.mp4 -vn -acodec aac audio.aac || \
+          echo "Video tidak memiliki audio stream, lanjutkan tanpa audio."
+
+      - name: Extract Frames
+        run: |
+          set -e
+          mkdir -p work/frames
+          ffmpeg -y -i video_raw.mp4 -qscale:v 2 work/frames/frame_%06d.png
+          echo "Jumlah frame: $(ls work/frames | wc -l)"
+
+      - name: Upload Frames Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extracted-frames
+          path: work/frames
+          retention-days: 1
+
+      - name: Upload Audio Artifact
+        if: hashFiles('audio.aac') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: extracted-audio
+          path: audio.aac
+          retention-days: 1
+
+  # ============================================================
+  # 3. Deteksi teks (subtitle/watermark/caption) dengan EasyOCR
+  # ============================================================
+  detect-text:
+    needs: extract-media
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install easyocr opencv-python-headless numpy
+
+      - name: Download Frames Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extracted-frames
+          path: work/frames
+
+      - name: Run OCR Detection
+        run: |
+          python3 scripts/detect_text.py \
+            --frames-dir work/frames \
+            --output work/ocr_boxes.json \
+            --stride "${{ github.event.inputs.ocr_stride }}" \
+            --languages en,id
+
+      - name: Upload OCR Boxes Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr-boxes
+          path: work/ocr_boxes.json
+          retention-days: 1
+
+  # ============================================================
+  # 4. Generate mask dari hasil OCR
+  # ============================================================
+  generate-mask:
+    needs: [extract-media, detect-text]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install opencv-python-headless numpy
+
+      - name: Download Frames Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extracted-frames
+          path: work/frames
+
+      - name: Download OCR Boxes Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ocr-boxes
+          path: work
+
+      - name: Generate Masks
+        run: |
+          python3 scripts/generate_mask.py \
+            --boxes-json work/ocr_boxes.json \
+            --frames-dir work/frames \
+            --output-dir work/masks_raw \
+            --padding 8 \
+            --static-region "${{ github.event.inputs.watermark_static_region }}"
+
+      - name: Upload Raw Masks Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-masks
+          path: work/masks_raw
+          retention-days: 1
+
+  # ============================================================
+  # 5. Refine mask (morphology + temporal smoothing)
+  # ============================================================
+  refine-mask:
+    needs: generate-mask
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install opencv-python-headless numpy
+
+      - name: Download Raw Masks Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: raw-masks
+          path: work/masks_raw
+
+      - name: Refine Masks
+        run: |
+          python3 scripts/refine_mask.py \
+            --input-dir work/masks_raw \
+            --output-dir work/masks_refined \
+            --dilate-kernel 9 \
+            --temporal-window 2
+
+      - name: Upload Refined Masks Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: refined-masks
+          path: work/masks_refined
+          retention-days: 1
+
+  # ============================================================
+  # 6. Siapkan & upload dataset ke Kaggle (frames + refined masks)
+  # ============================================================
+  kaggle-gpu-prepare:
+    needs: [extract-media, refine-mask]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Kaggle CLI
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install kaggle
+
+      - name: Configure Kaggle API
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          cat > ~/.kaggle/kaggle.json <<EOF
+          {
+            "username":"${KAGGLE_USERNAME}",
+            "key":"${KAGGLE_KEY}"
+          }
+          EOF
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Download Frames
+        uses: actions/download-artifact@v4
+        with:
+          name: extracted-frames
+          path: upload/work/frames
+
+      - name: Download Refined Masks
+        uses: actions/download-artifact@v4
+        with:
+          name: refined-masks
+          path: upload/work/masks_refined
+
+      - name: Prepare Kaggle Dataset
+        run: |
+          set -Eeuo pipefail
+          mkdir -p kaggle_dataset
+          cp -r upload/work kaggle_dataset/
+
+          cat > kaggle_dataset/dataset-metadata.json <<EOF
+          {
+            "title":"propainter-input",
+            "id":"${{ secrets.KAGGLE_USERNAME }}/propainter-input",
+            "licenses":[
+              {
+                "name":"CC0-1.0"
+              }
+            ]
+          }
+          EOF
+
+          echo "Dataset Structure"
+          find kaggle_dataset -maxdepth 3
+
+      - name: Upload Dataset to Kaggle
+        run: |
+          kaggle datasets version \
+            -p kaggle_dataset \
+            -m "Auto update from GitHub Actions run ${{ github.run_id }}" \
+            --dir-mode zip \
+            || \
+          kaggle datasets create \
+            -p kaggle_dataset \
+            --dir-mode zip
+
+  # ============================================================
+  # 7. Jalankan inferensi ProPainter di Kaggle GPU (via Kernel API)
+  # ============================================================
+  kaggle-run-inference:
+    needs: kaggle-gpu-prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Kaggle CLI
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install kaggle
+
+      - name: Configure Kaggle API
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          cat > ~/.kaggle/kaggle.json <<EOF
+          {
+            "username":"${KAGGLE_USERNAME}",
+            "key":"${KAGGLE_KEY}"
+          }
+          EOF
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Prepare Kernel Folder
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+        run: |
+          mkdir -p kaggle_kernel
+          cp kaggle/propainter_infer.py kaggle_kernel/
+          sed "s/__KAGGLE_USERNAME__/${KAGGLE_USERNAME}/g" \
+            kaggle/kernel-metadata.template.json > kaggle_kernel/kernel-metadata.json
+          cat kaggle_kernel/kernel-metadata.json
+
+      - name: Push Kernel to Kaggle
+        run: |
+          kaggle kernels push -p kaggle_kernel
+
+      - name: Wait for Kernel to Finish
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+        run: |
+          set -e
+          SLUG="${KAGGLE_USERNAME}/propainter-auto-inference"
+          echo "Menunggu kernel $SLUG selesai..."
+          for i in $(seq 1 660); do
+            STATUS=$(kaggle kernels status "$SLUG" || echo "unknown")
+            echo "[$i] $STATUS"
+            if echo "$STATUS" | grep -qi "complete"; then
+              echo "Kernel selesai."
+              exit 0
+            fi
+            if echo "$STATUS" | grep -qiE "error|cancel"; then
+              echo "Kernel gagal/dibatalkan."
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "Timeout menunggu kernel selesai."
+          exit 1
+
+      - name: Download Kernel Output
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+        run: |
+          mkdir -p downloaded_output
+          kaggle kernels output "${KAGGLE_USERNAME}/propainter-auto-inference" -p downloaded_output
+          find downloaded_output -maxdepth 2
+
+      - name: Upload ProPainter Output Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: propainter-output
+          path: downloaded_output/output.mp4
+          retention-days: 3
+
+  # ============================================================
+  # 8. Whisper transcript + Gemini description + GitHub Release
+  # ============================================================
+  postprocess-release:
+    needs: [kaggle-run-inference]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install faster-whisper google-generativeai
+
+      - name: Download ProPainter Output Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: propainter-output
+          path: .
+
+      - name: Run Postprocess (Whisper + Gemini)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 scripts/postprocess.py \
+            --video output.mp4 \
+            --source-url "${{ github.event.inputs.video_url }}" \
+            --output release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-${{ github.run_id }}
+          name: "Auto Clean Video - Run ${{ github.run_id }}"
+          body_path: release_notes.md
+          files: |
+            output.mp4
+            transcript.txt
