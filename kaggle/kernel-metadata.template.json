@@ -1,0 +1,13 @@
+{
+  "id": "__KAGGLE_USERNAME__/propainter-auto-inference",
+  "title": "propainter-auto-inference",
+  "code_file": "propainter_infer.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": ["__KAGGLE_USERNAME__/propainter-input"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
