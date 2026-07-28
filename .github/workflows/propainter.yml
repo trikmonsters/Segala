@@ -262,6 +262,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate Kaggle Secrets
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
+        run: |
+          if [ -z "$KAGGLE_USERNAME" ]; then
+            echo "::error::Secret KAGGLE_USERNAME kosong/tidak ditemukan. Cek Settings > Secrets and variables > Actions, pastikan nama persis 'KAGGLE_USERNAME' dan tersimpan sebagai Repository secret (bukan Environment secret, kecuali job ini pakai 'environment:')."
+            exit 1
+          fi
+          if [ -z "$KAGGLE_KEY" ]; then
+            echo "::error::Secret KAGGLE_KEY kosong/tidak ditemukan. Cek Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "KAGGLE_USERNAME terisi (panjang: ${#KAGGLE_USERNAME} karakter)."
+
       - name: Install Kaggle CLI
         run: |
           python3 -m pip install --upgrade pip
@@ -335,6 +350,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate Kaggle Secrets
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
+        run: |
+          if [ -z "$KAGGLE_USERNAME" ]; then
+            echo "::error::Secret KAGGLE_USERNAME kosong/tidak ditemukan."
+            exit 1
+          fi
+          if [ -z "$KAGGLE_KEY" ]; then
+            echo "::error::Secret KAGGLE_KEY kosong/tidak ditemukan."
+            exit 1
+          fi
 
       - name: Install Kaggle CLI
         run: |
