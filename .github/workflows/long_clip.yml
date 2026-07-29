@@ -1,5 +1,4 @@
 name: Long to Clips
-
 on:
   workflow_dispatch:
     inputs:
@@ -12,11 +11,9 @@ on:
         required: false
         type: string
         default: ''
-
 jobs:
   download-and-merge:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,51 +43,65 @@ jobs:
           COOKIES_TEXT: ${{ secrets.COOKIE }}
         run: |
           echo "$COOKIES_TEXT" > ./cookies.txt
-
-      - name: Download Sections with yt-dlp
+          
+      - name: Download Sections with yt-dlp (loop per section)
         env:
           RAW_SECTIONS: ${{ inputs.sections }}
           URL: ${{ inputs.url }}
         run: |
+          set -e
           mkdir -p downloads/clips
 
-          YTDLP_ARGS=(
+          YTDLP_BASE_ARGS=(
             --cookies ./cookies.txt
             --remote-components ejs:github
             --force-keyframes-at-cuts
             -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
             --merge-output-format mp4
-            -o "downloads/clips/clip_%(section_number)03d.%(ext)s"
+            --no-continue
+            --force-overwrites
           )
 
-          if [ -n "$RAW_SECTIONS" ]; then
-            CLEANED=$(echo "$RAW_SECTIONS" | sed 's/s//g')
-            IFS=',' read -ra ADDR <<< "$CLEANED"
-            for sec in "${ADDR[@]}"; do
-              TRIMMED=$(echo "$sec" | xargs)
-              if [ -n "$TRIMMED" ]; then
-                YTDLP_ARGS+=(--download-sections "*$TRIMMED")
-              fi
-            done
+          if [ -z "$RAW_SECTIONS" ]; then
+            echo "Tidak ada sections diberikan, download full video sebagai satu clip."
+            yt-dlp "${YTDLP_BASE_ARGS[@]}" \
+              -o "downloads/clips/clip_000.%(ext)s" \
+              "$URL"
+            exit 0
           fi
 
-          echo "Menjalankan yt-dlp..."
-          yt-dlp "${YTDLP_ARGS[@]}" "$URL"
+          CLEANED=$(echo "$RAW_SECTIONS" | sed 's/s//g')
+          IFS=',' read -ra ADDR <<< "$CLEANED"
+
+          i=0
+          for sec in "${ADDR[@]}"; do
+            TRIMMED=$(echo "$sec" | xargs)
+            if [ -n "$TRIMMED" ]; then
+              IDX=$(printf "%03d" "$i")
+              echo "=== [$IDX] Mengunduh section: $TRIMMED ==="
+              yt-dlp "${YTDLP_BASE_ARGS[@]}" \
+                --download-sections "*$TRIMMED" \
+                -o "downloads/clips/clip_${IDX}.%(ext)s" \
+                "$URL"
+              i=$((i+1))
+            fi
+          done
+
+          echo "--- Total clip terunduh: $i ---"
+          ls -la downloads/clips/
 
       # Penggabungan Klip Menjadi 1 Video Utuh Menggunakan FFmpeg
       - name: Merge Clips into One Highlight Video
         run: |
           mkdir -p output
           cd downloads/clips
-
           # Buat file concat.txt berisi daftar seluruh file mp4 yang terurut
+          rm -f concat.txt
           for file in $(ls -1 *.mp4 | sort); do
             echo "file '$PWD/$file'" >> concat.txt
           done
-
           echo "--- Daftar Klip yang Akan Digabung ---"
           cat concat.txt
-
           # Gabungkan klip dengan re-encoding agar transisi audio & video mulus dan tidak corrupt
           ffmpeg -f concat -safe 0 -i concat.txt -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k ../../output/highlight_compilation.mp4
 
@@ -99,4 +110,11 @@ jobs:
         with:
           name: highlight-kill-video
           path: output/highlight_compilation.mp4
-          retention-days: 7
+          retention-days: 2
+
+      - name: Upload Individual Clips as Artifact (opsional, untuk cek per klip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: individual-clips
+          path: downloads/clips/*.mp4
+          retention-days: 2
