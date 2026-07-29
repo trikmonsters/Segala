@@ -26,9 +26,6 @@ jobs:
           python-version: "3.11"
 
       - name: Install Kaggle CLI
-        # Dipin ke 1.6.17 (versi terakhir sebelum CLI rewrite yang ganti
-        # auth jadi OAuth/token tunggal). Versi ini masih pakai kaggle.json
-        # dengan username+key, sesuai secret yang kita pakai di step berikut.
         run: pip install kaggle==1.6.17
 
       - name: Configure Kaggle credentials
@@ -36,11 +33,33 @@ jobs:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
         run: |
+          # Cek dulu secret tidak kosong (tanpa nampilin isinya)
+          if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_KEY" ]; then
+            echo "ERROR: KAGGLE_USERNAME atau KAGGLE_KEY kosong. Cek lagi di Settings > Secrets."
+            exit 1
+          fi
+
+          # Bersihkan whitespace/newline tersembunyi dari hasil copy-paste
+          CLEAN_USERNAME=$(echo -n "$KAGGLE_USERNAME" | tr -d '[:space:]')
+          CLEAN_KEY=$(echo -n "$KAGGLE_KEY" | tr -d '[:space:]')
+
           mkdir -p ~/.kaggle
           cat > ~/.kaggle/kaggle.json <<EOF
-          {"username":"${KAGGLE_USERNAME}","key":"${KAGGLE_KEY}"}
+          {"username":"${CLEAN_USERNAME}","key":"${CLEAN_KEY}"}
           EOF
           chmod 600 ~/.kaggle/kaggle.json
+
+          echo "Panjang username: ${#CLEAN_USERNAME} karakter"
+          echo "Panjang key: ${#CLEAN_KEY} karakter (key Kaggle normalnya 32 karakter)"
+
+      - name: Verify Kaggle authentication
+        run: |
+          # Test ringan: list dataset publik, kalau ini gagal berarti auth-nya
+          # yang bermasalah, bukan soal dataset/kernel spesifik
+          kaggle datasets list -s titanic --max-size 1 || {
+            echo "ERROR: Autentikasi Kaggle gagal. Generate token baru di kaggle.com/settings > API > Create New Token, lalu update secret KAGGLE_KEY."
+            exit 1
+          }
 
       # --- Upload gambar ke Kaggle sebagai Dataset ---
       - name: Prepare dataset folder
