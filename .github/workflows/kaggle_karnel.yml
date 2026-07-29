@@ -1,46 +1,33 @@
-name: Kaggle Kernel Pipeline
-
-# ==========================================================
-# CARA PAKAI:
-# 1. Simpan file ini di repo kamu: .github/workflows/kaggle-pipeline.yml
-# 2. Buat secrets di Settings > Secrets and variables > Actions:
-#    - KAGGLE_USERNAME  -> username kaggle kamu
-#    - KAGGLE_KEY       -> API key dari https://www.kaggle.com/settings (Create New Token)
-# 3. Sesuaikan KERNEL_ID (format: "username/nama-kernel") dan path kernel kamu
-# 4. Push perubahan ke branch main, atau jalankan manual lewat tab Actions
-# ==========================================================
+name: Kaggle Text Detection & Mask Refine Pipeline
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}   # bisa trigger manual dari tab Actions
-  schedule:
-    - cron: "0 3 * * *"   # opsional: jalan otomatis tiap hari jam 03:00 UTC
+  workflow_dispatch: {}
 
 env:
-  KERNEL_ID: "username-kamu/nama-kernel-kamu"   # ganti sesuai kernel di Kaggle
-  KERNEL_DIR: "kaggle_kernel"                   # folder lokal berisi kode kernel
+  KERNEL_ID: "kucingpaskib/propainter"
+  DATASET_ID: "kucingpaskib/text-mask-input"
+  INPUT_IMAGE_PATH: "image.png"                     # file ada di root repo, tanpa folder
+  KERNEL_DIR: "kaggle_kernel"
+  DATASET_DIR: "kaggle_dataset"
 
 jobs:
-  run-kaggle-kernel:
+  run-pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Ambil source code repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 3. Install Kaggle API
       - name: Install Kaggle CLI
         run: pip install --upgrade kaggle
 
-      # 4. Setup kredensial Kaggle dari GitHub Secrets
       - name: Configure Kaggle credentials
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
@@ -52,47 +39,125 @@ jobs:
           EOF
           chmod 600 ~/.kaggle/kaggle.json
 
-      # 5. Buat kernel-metadata.json (metadata wajib untuk push kernel)
-      #    Sesuaikan title, dataset_sources, kernel_type sesuai kebutuhanmu
+      # --- Upload gambar ke Kaggle sebagai Dataset ---
+      - name: Prepare dataset folder
+        run: |
+          mkdir -p ${DATASET_DIR}
+          cp "${{ env.INPUT_IMAGE_PATH }}" ${DATASET_DIR}/
+          cat > ${DATASET_DIR}/dataset-metadata.json <<EOF
+          {
+            "title": "text-mask-input",
+            "id": "${{ env.DATASET_ID }}",
+            "licenses": [{ "name": "CC0-1.0" }]
+          }
+          EOF
+
+      - name: Create or update dataset on Kaggle
+        run: |
+          if kaggle datasets status "${{ env.DATASET_ID }}" > /dev/null 2>&1; then
+            echo "Dataset sudah ada, update versi baru..."
+            kaggle datasets version -p ${DATASET_DIR} -m "update image $(date +%s)" -r zip
+          else
+            echo "Dataset belum ada, membuat baru..."
+            kaggle datasets create -p ${DATASET_DIR} -r zip
+          fi
+
+      # --- Siapkan kernel: metadata + script ---
       - name: Generate kernel-metadata.json
         run: |
           mkdir -p ${KERNEL_DIR}
           cat > ${KERNEL_DIR}/kernel-metadata.json <<EOF
           {
             "id": "${{ env.KERNEL_ID }}",
-            "title": "Automated Pipeline Kernel",
+            "title": "Text Detection and Mask Refine",
             "code_file": "main.py",
             "language": "python",
             "kernel_type": "script",
             "is_private": true,
-            "enable_gpu": false,
+            "enable_gpu": true,
             "enable_internet": true,
-            "dataset_sources": [],
+            "dataset_sources": ["${{ env.DATASET_ID }}"],
             "competition_sources": [],
             "kernel_sources": []
           }
           EOF
 
-      # 6. Pastikan file main.py ada di folder kernel (script yang mau dijalankan di Kaggle)
-      #    Kalau kamu sudah punya file sendiri di repo, hapus step ini dan copy manual.
-      - name: Prepare kernel script (contoh)
+      - name: Generate main.py (PaddleOCR detect + mask refine)
         run: |
-          if [ ! -f "${KERNEL_DIR}/main.py" ]; then
-            cat > ${KERNEL_DIR}/main.py <<'EOF'
-          print("Hello from Kaggle kernel, dijalankan via GitHub Actions!")
-          EOF
-          fi
+          cat > ${KERNEL_DIR}/main.py <<'EOF'
+          import os
+          import sys
+          import subprocess
 
-      # 7. Push kernel ke Kaggle (upload + trigger run)
+          # install paddleocr di environment Kaggle (belum pre-installed)
+          subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                           "paddlepaddle", "paddleocr"], check=True)
+
+          import cv2
+          import numpy as np
+          from paddleocr import PaddleOCR
+
+          INPUT_DIR = "/kaggle/input"
+          OUTPUT_DIR = "/kaggle/working"
+
+          # cari file gambar pertama di dataset input
+          image_path = None
+          for root, dirs, files in os.walk(INPUT_DIR):
+              for f in files:
+                  if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                      image_path = os.path.join(root, f)
+                      break
+              if image_path:
+                  break
+
+          if image_path is None:
+              raise FileNotFoundError("Tidak ada gambar ditemukan di /kaggle/input")
+
+          print(f"Memproses gambar: {image_path}")
+          img = cv2.imread(image_path)
+          h, w = img.shape[:2]
+
+          # 1. Detect text pakai PaddleOCR
+          ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+          result = ocr.ocr(image_path, cls=True)
+
+          # 2. Buat mask awal dari bounding box teks
+          mask = np.zeros((h, w), dtype=np.uint8)
+          for line in result:
+              if line is None:
+                  continue
+              for box_info in line:
+                  box = box_info[0]
+                  pts = np.array(box, dtype=np.int32)
+                  cv2.fillPoly(mask, [pts], 255)
+
+          # 3. Refine mask: dilasi biar nutup tepi huruf + smoothing
+          kernel = np.ones((7, 7), np.uint8)
+          mask_refined = cv2.dilate(mask, kernel, iterations=2)
+          mask_refined = cv2.GaussianBlur(mask_refined, (5, 5), 0)
+          _, mask_refined = cv2.threshold(mask_refined, 127, 255, cv2.THRESH_BINARY)
+
+          # 4. Simpan hasil
+          cv2.imwrite(os.path.join(OUTPUT_DIR, "mask_raw.png"), mask)
+          cv2.imwrite(os.path.join(OUTPUT_DIR, "mask_refined.png"), mask_refined)
+
+          overlay = img.copy()
+          overlay[mask_refined == 255] = (0, 0, 255)
+          blended = cv2.addWeighted(img, 0.7, overlay, 0.3, 0)
+          cv2.imwrite(os.path.join(OUTPUT_DIR, "overlay_preview.png"), blended)
+
+          print("Selesai! Output: mask_raw.png, mask_refined.png, overlay_preview.png")
+          EOF
+
+      # --- Push kernel & jalankan ---
       - name: Push kernel to Kaggle
         run: kaggle kernels push -p ${KERNEL_DIR}
 
-      # 8. Tunggu kernel selesai running di Kaggle
       - name: Wait for kernel to finish
         run: |
           echo "Menunggu kernel selesai dieksekusi di Kaggle..."
           STATUS=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 40); do
             STATUS=$(kaggle kernels status "${{ env.KERNEL_ID }}" | grep -oP '(?<=has status ")[^"]+')
             echo "Status saat ini: $STATUS"
             if [ "$STATUS" == "complete" ]; then
@@ -109,15 +174,13 @@ jobs:
             exit 1
           fi
 
-      # 9. Download output/hasil dari kernel
       - name: Download kernel output
         run: |
           mkdir -p output
           kaggle kernels output "${{ env.KERNEL_ID }}" -p output
 
-      # 10. Upload hasil sebagai artifact GitHub Actions
       - name: Upload output artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kaggle-kernel-output
+          name: text-mask-output
           path: output/
