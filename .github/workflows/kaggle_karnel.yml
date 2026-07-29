@@ -26,7 +26,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install Kaggle CLI
-        run: pip install --upgrade kaggle
+        # Dipin ke 1.6.17 (versi terakhir sebelum CLI rewrite yang ganti
+        # auth jadi OAuth/token tunggal). Versi ini masih pakai kaggle.json
+        # dengan username+key, sesuai secret yang kita pakai di step berikut.
+        run: pip install kaggle==1.6.17
 
       - name: Configure Kaggle credentials
         env:
