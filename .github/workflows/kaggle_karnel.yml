@@ -1,0 +1,123 @@
+name: Kaggle Kernel Pipeline
+
+# ==========================================================
+# CARA PAKAI:
+# 1. Simpan file ini di repo kamu: .github/workflows/kaggle-pipeline.yml
+# 2. Buat secrets di Settings > Secrets and variables > Actions:
+#    - KAGGLE_USERNAME  -> username kaggle kamu
+#    - KAGGLE_KEY       -> API key dari https://www.kaggle.com/settings (Create New Token)
+# 3. Sesuaikan KERNEL_ID (format: "username/nama-kernel") dan path kernel kamu
+# 4. Push perubahan ke branch main, atau jalankan manual lewat tab Actions
+# ==========================================================
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}   # bisa trigger manual dari tab Actions
+  schedule:
+    - cron: "0 3 * * *"   # opsional: jalan otomatis tiap hari jam 03:00 UTC
+
+env:
+  KERNEL_ID: "username-kamu/nama-kernel-kamu"   # ganti sesuai kernel di Kaggle
+  KERNEL_DIR: "kaggle_kernel"                   # folder lokal berisi kode kernel
+
+jobs:
+  run-kaggle-kernel:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Ambil source code repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Install Kaggle API
+      - name: Install Kaggle CLI
+        run: pip install --upgrade kaggle
+
+      # 4. Setup kredensial Kaggle dari GitHub Secrets
+      - name: Configure Kaggle credentials
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
+        run: |
+          mkdir -p ~/.kaggle
+          cat > ~/.kaggle/kaggle.json <<EOF
+          {"username":"${KAGGLE_USERNAME}","key":"${KAGGLE_KEY}"}
+          EOF
+          chmod 600 ~/.kaggle/kaggle.json
+
+      # 5. Buat kernel-metadata.json (metadata wajib untuk push kernel)
+      #    Sesuaikan title, dataset_sources, kernel_type sesuai kebutuhanmu
+      - name: Generate kernel-metadata.json
+        run: |
+          mkdir -p ${KERNEL_DIR}
+          cat > ${KERNEL_DIR}/kernel-metadata.json <<EOF
+          {
+            "id": "${{ env.KERNEL_ID }}",
+            "title": "Automated Pipeline Kernel",
+            "code_file": "main.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": true,
+            "enable_gpu": false,
+            "enable_internet": true,
+            "dataset_sources": [],
+            "competition_sources": [],
+            "kernel_sources": []
+          }
+          EOF
+
+      # 6. Pastikan file main.py ada di folder kernel (script yang mau dijalankan di Kaggle)
+      #    Kalau kamu sudah punya file sendiri di repo, hapus step ini dan copy manual.
+      - name: Prepare kernel script (contoh)
+        run: |
+          if [ ! -f "${KERNEL_DIR}/main.py" ]; then
+            cat > ${KERNEL_DIR}/main.py <<'EOF'
+          print("Hello from Kaggle kernel, dijalankan via GitHub Actions!")
+          EOF
+          fi
+
+      # 7. Push kernel ke Kaggle (upload + trigger run)
+      - name: Push kernel to Kaggle
+        run: kaggle kernels push -p ${KERNEL_DIR}
+
+      # 8. Tunggu kernel selesai running di Kaggle
+      - name: Wait for kernel to finish
+        run: |
+          echo "Menunggu kernel selesai dieksekusi di Kaggle..."
+          STATUS=""
+          for i in $(seq 1 30); do
+            STATUS=$(kaggle kernels status "${{ env.KERNEL_ID }}" | grep -oP '(?<=has status ")[^"]+')
+            echo "Status saat ini: $STATUS"
+            if [ "$STATUS" == "complete" ]; then
+              echo "Kernel selesai dengan sukses."
+              break
+            elif [ "$STATUS" == "error" ] || [ "$STATUS" == "cancelAcknowledged" ]; then
+              echo "Kernel gagal dengan status: $STATUS"
+              exit 1
+            fi
+            sleep 20
+          done
+          if [ "$STATUS" != "complete" ]; then
+            echo "Timeout menunggu kernel selesai."
+            exit 1
+          fi
+
+      # 9. Download output/hasil dari kernel
+      - name: Download kernel output
+        run: |
+          mkdir -p output
+          kaggle kernels output "${{ env.KERNEL_ID }}" -p output
+
+      # 10. Upload hasil sebagai artifact GitHub Actions
+      - name: Upload output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-kernel-output
+          path: output/
