@@ -16,7 +16,18 @@ on:
       ocr_stride:
         description: 'Jalankan OCR setiap N frame (lebih besar = lebih cepat, kurang presisi)'
         required: false
-        default: '3'
+        default: '5'
+      ocr_roi:
+        description: >-
+          Area vertikal yang di-scan OCR, format "top_frac,bottom_frac" (0.0-1.0).
+          Contoh "0.7,1.0" = hanya 30% bagian bawah frame (area subtitle umum).
+          Kosongkan/"0.0,1.0" untuk scan seluruh frame.
+        required: false
+        default: '0.0,1.0'
+      ocr_resize_width:
+        description: 'Downscale lebar frame sebelum OCR untuk mempercepat (0 = tanpa resize, disarankan 800-1000)'
+        required: false
+        default: '960'
 
 permissions:
   contents: write
@@ -154,6 +165,8 @@ jobs:
             --frames-dir work/frames \
             --output work/ocr_boxes.json \
             --stride "${{ github.event.inputs.ocr_stride }}" \
+            --roi "${{ github.event.inputs.ocr_roi }}" \
+            --resize-width "${{ github.event.inputs.ocr_resize_width }}" \
             --languages en,id
 
       - name: Upload OCR Boxes Artifact
@@ -276,6 +289,11 @@ jobs:
             exit 1
           fi
           echo "KAGGLE_USERNAME terisi (panjang: ${#KAGGLE_USERNAME} karakter)."
+          # Simpan ke GITHUB_ENV supaya SEMUA step berikutnya di job ini
+          # otomatis punya KAGGLE_USERNAME/KAGGLE_KEY sebagai env var,
+          # tanpa perlu deklarasi env: berulang di tiap step.
+          echo "KAGGLE_USERNAME=${KAGGLE_USERNAME}" >> "$GITHUB_ENV"
+          echo "KAGGLE_KEY=${KAGGLE_KEY}" >> "$GITHUB_ENV"
 
       - name: Install Kaggle CLI
         run: |
@@ -367,6 +385,8 @@ jobs:
             echo "::error::Secret KAGGLE_KEY kosong/tidak ditemukan."
             exit 1
           fi
+          echo "KAGGLE_USERNAME=${KAGGLE_USERNAME}" >> "$GITHUB_ENV"
+          echo "KAGGLE_KEY=${KAGGLE_KEY}" >> "$GITHUB_ENV"
 
       - name: Install Kaggle CLI
         run: |
