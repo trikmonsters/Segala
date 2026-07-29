@@ -1,27 +1,5 @@
 name: Kaggle Text Detection & Mask Refine Pipeline
 
-# ==========================================================
-# CARA PAKAI (baca sampai habis dulu ya):
-#
-# 1. Buat secrets di Settings > Secrets and variables > Actions:
-#    - KAGGLE_USERNAME
-#    - KAGGLE_KEY
-#    (didapat dari kaggle.com/settings > API > Create New Token)
-#
-# 2. Sudah diisi untuk kamu:
-#    - KERNEL_ID        = "kucingpaskib/propainter"  (kernel yang sudah kamu buat)
-#    - DATASET_ID        = "kucingpaskib/text-mask-input"
-#    - INPUT_IMAGE_PATH = "image.png"  (file ada di ROOT repo, bukan di folder)
-#
-# 3. Dataset dengan DATASET_ID di atas belum ada -> pipeline ini akan
-#    create otomatis saat run pertama.
-#
-# 4. Push ke branch main atau trigger manual lewat tab Actions.
-#
-# HASIL: mask_raw.png, mask_refined.png, overlay_preview.png
-#        bisa didownload di tab Actions > run terakhir > Artifacts
-# ==========================================================
-
 on:
   push:
     branches: [ main ]
@@ -196,24 +174,52 @@ jobs:
 
       - name: Wait for kernel to finish
         run: |
-          echo "Menunggu kernel selesai dieksekusi di Kaggle..."
-          STATUS=""
-          for i in $(seq 1 40); do
-            STATUS=$(kaggle kernels status "${{ env.KERNEL_ID }}" | grep -oP '(?<=has status ")[^"]+')
-            echo "Status saat ini: $STATUS"
-            if [ "$STATUS" == "complete" ]; then
-              echo "Kernel selesai dengan sukses."
-              break
-            elif [ "$STATUS" == "error" ] || [ "$STATUS" == "cancelAcknowledged" ]; then
-              echo "Kernel gagal dengan status: $STATUS"
-              exit 1
-            fi
-            sleep 20
-          done
-          if [ "$STATUS" != "complete" ]; then
-            echo "Timeout menunggu kernel selesai."
-            exit 1
-          fi
+          python3 << 'PYSCRIPT'
+          import subprocess
+          import json
+          import time
+          
+          kernel_id = "${{ env.KERNEL_ID }}"
+          max_attempts = 40
+          wait_seconds = 20
+          
+          for attempt in range(1, max_attempts + 1):
+            try:
+              result = subprocess.run(
+                ["kaggle", "kernels", "status", kernel_id],
+                capture_output=True,
+                text=True,
+                check=True
+              )
+              status_data = json.loads(result.stdout)
+              status = status_data.get("status", "unknown")
+              
+              print(f"Attempt {attempt}/{max_attempts} - Status: {status}")
+              
+              if status == "complete":
+                print("✓ Kernel selesai dengan sukses!")
+                exit(0)
+              elif status in ["error", "cancelAcknowledged"]:
+                print(f"✗ Kernel gagal dengan status: {status}")
+                exit(1)
+              
+              if attempt < max_attempts:
+                time.sleep(wait_seconds)
+            
+            except json.JSONDecodeError:
+              print(f"Warning: Tidak bisa parse response. Raw output:")
+              print(result.stdout)
+              if attempt < max_attempts:
+                time.sleep(wait_seconds)
+            except subprocess.CalledProcessError as e:
+              print(f"Error calling kaggle CLI: {e.stderr}")
+              if attempt < max_attempts:
+                time.sleep(wait_seconds)
+          
+          print("✗ Timeout: Kernel belum selesai setelah 40 attempts.")
+          exit(1)
+          PYSCRIPT
+
 
       - name: Download kernel output
         run: |
