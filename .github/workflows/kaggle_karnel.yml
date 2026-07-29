@@ -1,5 +1,27 @@
 name: Kaggle Text Detection & Mask Refine Pipeline
 
+# ==========================================================
+# CARA PAKAI (baca sampai habis dulu ya):
+#
+# 1. Buat secrets di Settings > Secrets and variables > Actions:
+#    - KAGGLE_USERNAME
+#    - KAGGLE_KEY
+#    (didapat dari kaggle.com/settings > API > Create New Token)
+#
+# 2. Sudah diisi untuk kamu:
+#    - KERNEL_ID        = "kucingpaskib/propainter"  (kernel yang sudah kamu buat)
+#    - DATASET_ID        = "kucingpaskib/text-mask-input"
+#    - INPUT_IMAGE_PATH = "image.png"  (file ada di ROOT repo, bukan di folder)
+#
+# 3. Dataset dengan DATASET_ID di atas belum ada -> pipeline ini akan
+#    create otomatis saat run pertama.
+#
+# 4. Push ke branch main atau trigger manual lewat tab Actions.
+#
+# HASIL: mask_raw.png, mask_refined.png, overlay_preview.png
+#        bisa didownload di tab Actions > run terakhir > Artifacts
+# ==========================================================
+
 on:
   push:
     branches: [ main ]
@@ -26,38 +48,35 @@ jobs:
           python-version: "3.11"
 
       - name: Install Kaggle CLI
-        run: pip install kaggle==1.6.17
+        # Kaggle sekarang pakai sistem API Token baru (KGAT_...) yang butuh
+        # CLI >= 1.8.0. Versi lama (1.6.x) tidak kompatibel dengan token ini.
+        run: pip install --upgrade "kaggle>=1.8.0"
 
       - name: Configure Kaggle credentials
         env:
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_TOKEN }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           # Cek dulu secret tidak kosong (tanpa nampilin isinya)
-          if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_KEY" ]; then
-            echo "ERROR: KAGGLE_USERNAME atau KAGGLE_KEY kosong. Cek lagi di Settings > Secrets."
+          if [ -z "$KAGGLE_API_TOKEN" ]; then
+            echo "ERROR: KAGGLE_API_TOKEN kosong. Cek lagi di Settings > Secrets."
+            echo "Ambil token baru di kaggle.com/settings > API Tokens > Create New Token"
             exit 1
           fi
 
           # Bersihkan whitespace/newline tersembunyi dari hasil copy-paste
-          CLEAN_USERNAME=$(echo -n "$KAGGLE_USERNAME" | tr -d '[:space:]')
-          CLEAN_KEY=$(echo -n "$KAGGLE_KEY" | tr -d '[:space:]')
+          CLEAN_TOKEN=$(echo -n "$KAGGLE_API_TOKEN" | tr -d '[:space:]')
 
           mkdir -p ~/.kaggle
-          cat > ~/.kaggle/kaggle.json <<EOF
-          {"username":"${CLEAN_USERNAME}","key":"${CLEAN_KEY}"}
-          EOF
-          chmod 600 ~/.kaggle/kaggle.json
+          printf '%s' "$CLEAN_TOKEN" > ~/.kaggle/access_token
+          chmod 600 ~/.kaggle/access_token
 
-          echo "Panjang username: ${#CLEAN_USERNAME} karakter"
-          echo "Panjang key: ${#CLEAN_KEY} karakter (key Kaggle normalnya 32 karakter)"
+          echo "Panjang token: ${#CLEAN_TOKEN} karakter"
 
       - name: Verify Kaggle authentication
         run: |
-          # Test ringan: list dataset publik, kalau ini gagal berarti auth-nya
-          # yang bermasalah, bukan soal dataset/kernel spesifik
+          # Test ringan pakai operasi baca dulu
           kaggle datasets list -s titanic --max-size 1 || {
-            echo "ERROR: Autentikasi Kaggle gagal. Generate token baru di kaggle.com/settings > API > Create New Token, lalu update secret KAGGLE_KEY."
+            echo "ERROR: Autentikasi Kaggle gagal. Generate token baru di kaggle.com/settings > API Tokens > Create New Token, lalu update secret KAGGLE_API_TOKEN."
             exit 1
           }
 
