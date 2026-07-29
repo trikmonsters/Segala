@@ -4,24 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'URL YouTube Shorts'
+        description: 'URL YouTube / Shorts'
         required: true
         type: string
       sections:
-        description: 'Potongan Menit (opsional, contoh: 5s-30s, 40s-55s, 79s-83s)'
+        description: 'Potongan Menit (contoh: 03:07-03:23, 06:19-06:29)'
         required: false
         type: string
         default: ''
 
 jobs:
-  download-video:
+  download-and-merge:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Install FFmpeg resmi via apt (stabil & bebas konflik)
+      # Install FFmpeg resmi via apt
       - name: Install FFmpeg
         run: |
           sudo apt-get update
@@ -47,27 +47,24 @@ jobs:
         run: |
           echo "$COOKIES_TEXT" > ./cookies.txt
 
-      - name: Download Shorts with yt-dlp
+      - name: Download Sections with yt-dlp
         env:
           RAW_SECTIONS: ${{ inputs.sections }}
           URL: ${{ inputs.url }}
         run: |
-          # Menyiapkan opsi default yt-dlp menggunakan Bash Array
+          mkdir -p downloads/clips
+
           YTDLP_ARGS=(
             --cookies ./cookies.txt
             --remote-components ejs:github
             --force-keyframes-at-cuts
             -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
             --merge-output-format mp4
-            -o "downloads/%(title)s.%(ext)s"
+            -o "downloads/clips/clip_%(section_number)03d.%(ext)s"
           )
 
-          # Jika input sections diisi oleh pengguna
           if [ -n "$RAW_SECTIONS" ]; then
-            # Hapus huruf 's' jika pengguna menginput format seperti '5s-30s'
             CLEANED=$(echo "$RAW_SECTIONS" | sed 's/s//g')
-            
-            # Pisahkan input berdasarkan koma dan tambahkan ke array YTDLP_ARGS
             IFS=',' read -ra ADDR <<< "$CLEANED"
             for sec in "${ADDR[@]}"; do
               TRIMMED=$(echo "$sec" | xargs)
@@ -78,13 +75,28 @@ jobs:
           fi
 
           echo "Menjalankan yt-dlp..."
-          
-          # Eksekusi array secara presisi & aman
           yt-dlp "${YTDLP_ARGS[@]}" "$URL"
 
-      - name: Upload Video as Artifact
+      # Penggabungan Klip Menjadi 1 Video Utuh Menggunakan FFmpeg
+      - name: Merge Clips into One Highlight Video
+        run: |
+          mkdir -p output
+          cd downloads/clips
+
+          # Buat file concat.txt berisi daftar seluruh file mp4 yang terurut
+          for file in $(ls -1 *.mp4 | sort); do
+            echo "file '$PWD/$file'" >> concat.txt
+          done
+
+          echo "--- Daftar Klip yang Akan Digabung ---"
+          cat concat.txt
+
+          # Gabungkan klip dengan re-encoding agar transisi audio & video mulus dan tidak corrupt
+          ffmpeg -f concat -safe 0 -i concat.txt -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k ../../output/highlight_compilation.mp4
+
+      - name: Upload Highlight Video as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-shorts
-          path: downloads/*.mp4
+          name: highlight-kill-video
+          path: output/highlight_compilation.mp4
           retention-days: 7
