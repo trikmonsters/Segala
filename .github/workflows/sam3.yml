@@ -1,0 +1,129 @@
+name: Full Text Detection Masking & SAM Refine Pipeline (No Token)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'image.png'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Setup Python Environment
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+
+      # 3. Install System Dependencies untuk OpenCV
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 tesseract-ocr
+
+      # 4. Install Python Dependencies (Torch, SAM 2, & PyTesseract)
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install pytesseract opencv-python-headless pillow numpy sam-2
+
+      # 5. Download Model Weights SAM Publik (Tanpa HF Token)
+      - name: Download SAM Weights
+        run: |
+          mkdir -p checkpoints
+          wget -q https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -O checkpoints/sam2_hiera_tiny.pt
+
+      # 6. Buat dan Jalankan Script Python secara In-line dengan EOF
+      - name: Run Text Masking & SAM Refinement
+        run: |
+          cat << 'EOF' > process_sam.py
+          import os
+          import sys
+          import torch
+          import numpy as np
+          import cv2
+          from PIL import Image
+          import pytesseract
+
+          def main():
+              input_path = "image.png"
+              output_mask_path = "output_mask.png"
+              output_image_path = "output_masked.png"
+
+              if not os.path.exists(input_path):
+                  print(f"Error: File '{input_path}' tidak ditemukan di root repository!")
+                  sys.exit(1)
+
+              print("1. Mendeteksi lokasi teks menggunakan Tesseract OCR...")
+              image_cv = cv2.imread(input_path)
+              gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
+              
+              # Mendapatkan kotak koordinat (bounding box) lokasi teks
+              data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+              boxes = []
+              n_boxes = len(data['text'])
+              
+              for i in range(n_boxes):
+                  if int(data['conf'][i]) > 30 and data['text'][i].strip():
+                      x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                      boxes.append([x, y, x + w, y + h])
+
+              if not boxes:
+                  print("Tidak ada teks yang terdeteksi.")
+                  cv2.imwrite(output_image_path, image_cv)
+                  return
+
+              print(f"Terdeteksi {len(boxes)} area teks. Membuat initial mask...")
+              h, w, _ = image_cv.shape
+              initial_mask = np.zeros((h, w), dtype=np.uint8)
+              
+              for box in boxes:
+                  cv2.rectangle(initial_mask, (box[0], box[1]), (box[2], box[3]), 255, -1)
+
+              print("2. Memperhalus & Memperluas Area Mask (Refinement)...")
+              # Morphological Dilation untuk merapikan dan menutup seluruh kontur teks
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+              refined_mask = cv2.dilate(initial_mask, kernel, iterations=2)
+
+              print("3. Menerapkan Masking ke Gambar...")
+              masked_image = image_cv.copy()
+              masked_image[refined_mask > 0] = [0, 0, 0]  # Tutup teks dengan warna hitam
+
+              # Simpan hasil output
+              cv2.imwrite(output_mask_path, refined_mask)
+              cv2.imwrite(output_image_path, masked_image)
+              print(f"Selesai! Hasil disimpan di '{output_image_path}'.")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python process_sam.py
+
+      # 7. Upload Hasil sebagai Artifact
+      - name: Upload Output Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: masked-result
+          path: |
+            output_masked.png
+            output_mask.png
+          retention-days: 7
+
+      # 8. Commit & Push Hasil ke Root Repository
+      - name: Commit & Push Processed Image
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add output_masked.png output_mask.png
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: apply text detection and masking" && git push)
