@@ -1,4 +1,4 @@
-name: Full Subtitle Detect, SAM2 Refine & LaMa Inpainting (Optimized)
+name: Full Pipeline - EasyOCR + SAM2 + Official LaMa Inpainting
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
+      
 
       - name: Install System Dependencies
         run: |
@@ -30,12 +30,29 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install easyocr opencv-python-headless pillow numpy ultralytics lama-cleaner
+          pip install torch==1.13.1 torchvision==0.14.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr opencv-python-headless pillow numpy ultralytics
+          pip install omegaconf hydra-core pyyaml scikit-image
+
+      - name: Clone LaMa Repository
+        run: |
+          git clone https://github.com/advimman/lama.git
+          cd lama
+          export TORCH_HOME=$(pwd)
+          export PYTHONPATH=$(pwd)
+
+      - name: Download LaMa Model (big-lama)
+        run: |
+          cd lama
+          mkdir -p models
+          # Download big-lama model dari HuggingFace
+          curl -L -o big-lama.zip https://huggingface.co/smartywu/big-lama/resolve/main/big-lama.zip
+          unzip -q big-lama.zip -d models/
+          echo "✅ Model LaMa sudah didownload"
 
       - name: Run Full Pipeline
         run: |
-          cat << 'EOF' > process_lama_optimized.py
+          cat << 'EOFPYTHON' > run_pipeline.py
           import os
           import sys
           import torch
@@ -45,10 +62,13 @@ jobs:
           import easyocr
           from ultralytics import SAM
           from pathlib import Path
-
-          # Import lama_cleaner models
-          from lama_cleaner.model.lama import LaMa
-          from lama_cleaner.device import Device
+          import yaml
+          from hydra import compose, initialize_config_dir
+          from omegaconf import OmegaConf
+          
+          # Add lama to path
+          sys.path.insert(0, './lama')
+          from saicinpainting.evaluation.utils import expand_bbox
 
           def main():
               input_path = "image.png"
@@ -56,14 +76,16 @@ jobs:
               output_image_path = "output_masked.png"
 
               if not os.path.exists(input_path):
-                  print(f"Error: File '{input_path}' tidak ditemukan!")
+                  print(f"❌ Error: File '{input_path}' tidak ditemukan!")
                   sys.exit(1)
 
-              device = Device.CPU
-              print(f"Menggunakan device: {device}")
+              device = "cpu"
+              print(f"🔧 Device: {device}")
 
+              # ============================================================
               # 1. DETECT Subtitle dengan EasyOCR
-              print("\n1. Mendeteksi subtitle/teks dengan EasyOCR...")
+              # ============================================================
+              print("\n📝 [1] Mendeteksi subtitle/teks dengan EasyOCR...")
               reader = easyocr.Reader(['en', 'id'], gpu=False)
               results_ocr = reader.readtext(input_path)
 
@@ -79,29 +101,32 @@ jobs:
                       h_pad = int((y_max - y_min) * 0.15)
                       w_pad = int((x_max - x_min) * 0.05)
                       
-                      bboxes.append([
+                      bbox_padded = [
                           max(0, x_min - w_pad), 
                           max(0, y_min - h_pad), 
                           x_max + w_pad, 
                           y_max + h_pad
-                      ])
-                      print(f"CompleteText: '{text}' (Confidence: {prob:.2f})")
+                      ]
+                      bboxes.append(bbox_padded)
+                      print(f"   ✓ '{text}' (Confidence: {prob:.2f})")
 
               image_cv = cv2.imread(input_path)
               h, w, _ = image_cv.shape
 
               if not bboxes:
-                  print("Tidak ada subtitle terdeteksi.")
+                  print("   ⚠️  Tidak ada subtitle terdeteksi.")
                   cv2.imwrite(output_image_path, image_cv)
                   cv2.imwrite(output_mask_path, np.zeros((h, w), dtype=np.uint8))
                   return
 
+              # ============================================================
               # 2. REFINE Mask dengan SAM 2
-              print(f"\n2. Memperhalus mask dengan SAM 2...")
+              # ============================================================
+              print(f"\n🎯 [2] Memperhalus mask dengan SAM 2...")
               sam_model = SAM("sam2_b.pt")
 
               combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
-              results = sam_model(input_path, bboxes=bboxes, device='cpu')
+              results = sam_model(input_path, bboxes=bboxes, device=device)
 
               for result in results:
                   if result.masks is not None:
@@ -113,53 +138,101 @@ jobs:
 
               combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
 
-              # Morphological operations untuk hasil lebih halus
+              # Morphological refinement
               kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
               refined_mask = cv2.morphologyEx(combined_sam2_mask, cv2.MORPH_CLOSE, kernel)
               refined_mask = cv2.GaussianBlur(refined_mask, (5, 5), 0)
               _, refined_mask = cv2.threshold(refined_mask, 127, 255, cv2.THRESH_BINARY)
 
               cv2.imwrite(output_mask_path, refined_mask)
-              print(f"Mask disimpan ke '{output_mask_path}'")
+              print(f"   ✓ Mask disimpan ke '{output_mask_path}'")
 
-              # 3. INPAINT dengan LaMa dari lama_cleaner
-              print("\n3. Inpainting dengan LaMa (resolution-robust)...")
+              # ============================================================
+              # 3. INPAINT dengan Official LaMa
+              # ============================================================
+              print(f"\n🦙 [3] Inpainting dengan Official LaMa Model...")
               
-              # Load LaMa model
-              model = LaMa(device=device)
+              try:
+                  from saicinpainting.training.trainers import get_trainer
+                  from saicinpainting.evaluation.data import load_image_with_mask
 
-              # Load images
-              img_pil = Image.open(input_path).convert("RGB")
-              mask_pil = Image.fromarray(refined_mask).convert("L")
+                  # Load config
+                  config_path = "./lama/configs/prediction/default.yaml"
+                  with open(config_path, 'r') as f:
+                      cfg = yaml.safe_load(f)
 
-              # Convert to numpy arrays (LaMa expects numpy)
-              img_np = np.array(img_pil)
-              mask_np = np.array(mask_pil)
+                  # Override config
+                  cfg['model']['path'] = './lama/models/big-lama'
+                  cfg['device'] = device
 
-              # Ensure mask is binary
-              mask_np = (mask_np > 127).astype(np.uint8) * 255
+                  # Load model
+                  print("   📦 Loading LaMa model...")
+                  device_obj = torch.device(device)
+                  
+                  # Manual model loading
+                  import torch
+                  from saicinpainting.training.modules.build import build_model
+                  
+                  config_file = './lama/models/big-lama/config.yaml'
+                  with open(config_file, 'r') as f:
+                      model_cfg = yaml.safe_load(f)
+                  
+                  model = build_model(model_cfg)
+                  checkpoint_path = './lama/models/big-lama/best.ckpt'
+                  checkpoint = torch.load(checkpoint_path, map_location=device_obj)
+                  model.load_state_dict(checkpoint['state_dict'], strict=False)
+                  model.to(device_obj)
+                  model.eval()
 
-              print("Processing inpainting... (ini mungkin memakan waktu beberapa menit di CPU)")
-              
-              # Inpaint dengan LaMa
-              output_np = model(img_np, mask_np)
+                  # Prepare image and mask
+                  img_np = cv2.imread(input_path)
+                  img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+                  mask_np = cv2.imread(output_mask_path, cv2.IMREAD_GRAYSCALE)
+                  mask_np = (mask_np > 127).astype(np.float32)
 
-              # Convert back to PIL
-              output_pil = Image.fromarray(output_np.astype(np.uint8))
+                  # Normalize image
+                  img_tensor = torch.from_numpy(img_np).float() / 255.0
+                  img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)
+                  
+                  # Normalize to [-1, 1]
+                  img_tensor = img_tensor * 2 - 1
 
-              # Optional: Sharpening untuk mengurangi blur
-              from PIL import ImageEnhance
-              enhancer = ImageEnhance.Sharpness(output_pil)
-              output_pil = enhancer.enhance(1.2)
+                  mask_tensor = torch.from_numpy(mask_np).float().unsqueeze(0).unsqueeze(0)
 
-              output_pil.save(output_image_path)
-              print(f"\n✅ Selesai! Hasil disimpan ke '{output_image_path}'")
+                  # Inpaint
+                  print("   ⏳ Processing inpainting (memakan waktu beberapa menit di CPU)...")
+                  with torch.no_grad():
+                      output_tensor = model(img_tensor, mask_tensor)
+
+                  # Denormalize
+                  output_tensor = (output_tensor + 1) / 2
+                  output_np = output_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                  output_np = np.clip(output_np * 255, 0, 255).astype(np.uint8)
+
+                  # Convert RGB to BGR for cv2
+                  output_bgr = cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
+
+                  # Optional: Sharpening
+                  from PIL import Image, ImageEnhance
+                  output_pil = Image.fromarray(output_np)
+                  enhancer = ImageEnhance.Sharpness(output_pil)
+                  output_pil = enhancer.enhance(1.2)
+                  output_pil.save(output_image_path)
+
+                  print(f"   ✓ Hasil inpainting disimpan ke '{output_image_path}'")
+                  print(f"\n✅ SELESAI! Semua hasil sudah diproses.")
+
+              except Exception as e:
+                  print(f"❌ Error di LaMa inpainting: {e}")
+                  import traceback
+                  traceback.print_exc()
+                  sys.exit(1)
 
           if __name__ == "__main__":
               main()
-          EOF
+          EOFPYTHON
 
-          python process_lama_optimized.py
+          python run_pipeline.py
 
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
