@@ -1,4 +1,4 @@
-name: Full Resolution Robust Subtitle Removal (EasyOCR + SAM2 + Official LaMa)
+name: Full Resolution Subtitle Removal (EasyOCR + SAM2 + Official LaMa)
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
+        
 
       # 3. Install System Dependencies
       - name: Install System Dependencies
@@ -30,14 +30,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgl1 libglib2.0-0 wget unzip
 
-      # 4. Clone Official LaMa Repo & Download Big-LaMa Model
+      # 4. Clone Official LaMa Repo & Download Big-LaMa Weights dari Hugging Face
       - name: Setup Official LaMa Environment
         run: |
           git clone https://github.com/advimman/lama.git
           cd lama
-          # Download Pretrained Model 'big-lama' resmi dari Samsung AI
           mkdir -p checkpoints
-          wget -q https://github.com/advimman/lama/releases/download/v0.1.0/big-lama.zip
+          # Download model big-lama resmi dari Hugging Face Hub (Public Mirror)
+          wget -q https://huggingface.co/anyray/big-lama/resolve/main/big-lama.zip
           unzip -q big-lama.zip -d checkpoints/
           cd ..
 
@@ -46,9 +46,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install easyocr opencv-python-headless pillow numpy ultralytics omegaconf pytorch-lightning hydra-core
+          pip install easyocr opencv-python-headless pillow numpy ultralytics omegaconf pytorch-lightning hydra-core pyyaml
 
-      # 6. Jalankan Script OCR + SAM2 untuk Membuat High-Res Mask
+      # 6. Jalankan Script OCR + SAM2 untuk Membuat Mask Resolusi Tinggi
       - name: Run Subtitle Detection & SAM2 Mask Refine
         run: |
           cat << 'EOF' > generate_mask.py
@@ -64,7 +64,7 @@ jobs:
           def main():
               input_path = "image.png"
               
-              # Buat direktori input khusus untuk LaMa resmi
+              # Buat folder khusus input untuk LaMa resmi
               os.makedirs("lama_input", exist_ok=True)
               
               if not os.path.exists(input_path):
@@ -73,7 +73,6 @@ jobs:
 
               device = "cpu"
               
-              # Save copy image ke folder lama_input
               img_pil = Image.open(input_path).convert("RGB")
               img_pil.save("lama_input/image.png")
               w, h = img_pil.size
@@ -91,7 +90,6 @@ jobs:
                       x_max = int(np.max(pts[:, 0]))
                       y_max = int(np.max(pts[:, 1]))
                       
-                      # Margin padding tipis
                       h_pad = int((y_max - y_min) * 0.15)
                       w_pad = int((x_max - x_min) * 0.05)
                       
@@ -105,7 +103,6 @@ jobs:
 
               if not bboxes:
                   print("Tidak ada subtitle terdeteksi.")
-                  # Buat mask kosong
                   empty_mask = np.zeros((h, w), dtype=np.uint8)
                   cv2.imwrite("lama_input/image_mask.png", empty_mask)
                   return
@@ -126,11 +123,11 @@ jobs:
 
               combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
 
-              # Dilasi tipis untuk mengambil sisa stroke/glow
+              # Dilasi tipis untuk melingkupi stroke huruf
               kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
               refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
 
-              # Format nama file mask sesuai requirement advimman/lama (harus image_mask.png)
+              # Format nama file wajib untuk official LaMa (image_mask.png)
               cv2.imwrite("lama_input/image_mask.png", refined_mask)
               cv2.imwrite("output_mask.png", refined_mask)
               print("Mask resolusi tinggi berhasil dibuat.")
@@ -141,7 +138,7 @@ jobs:
 
           python generate_mask.py
 
-      # 7. Run Official LaMa Inpainting Engine
+      # 7. Run Official LaMa High-Res Inpainting
       - name: Run Official LaMa High-Res Inpainting
         run: |
           export PYTHONPATH=$PYTHONPATH:$(pwd)/lama
@@ -152,8 +149,12 @@ jobs:
             dataset.img_suffix=.png \
             device=cpu
 
-          # Copy hasil akhir ke root dengan nama output_masked.png
-          cp lama_output/image_mask.png output_masked.png || cp image.png output_masked.png
+          # Pindahkan hasil akhir ke root dengan nama output_masked.png
+          if [ -f "lama_output/image_mask.png" ]; then
+            cp lama_output/image_mask.png output_masked.png
+          else
+            cp image.png output_masked.png
+          fi
 
       # 8. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
@@ -164,3 +165,5 @@ jobs:
             output_masked.png
             output_mask.png
           retention-days: 7
+
+    
