@@ -90,20 +90,20 @@ jobs:
           echo "--- Total clip terunduh: $i ---"
           ls -la downloads/clips/
 
-      # Penggabungan Klip Menjadi 1 Video Utuh Menggunakan FFmpeg
       - name: Merge Clips into One Highlight Video
         run: |
           mkdir -p output
           cd downloads/clips
-          # Buat file concat.txt berisi daftar seluruh file mp4 yang terurut
           rm -f concat.txt
           for file in $(ls -1 *.mp4 | sort); do
             echo "file '$PWD/$file'" >> concat.txt
           done
-          echo "--- Daftar Klip yang Akan Digabung ---"
-          cat concat.txt
-          # Gabungkan klip dengan re-encoding agar transisi audio & video mulus dan tidak corrupt
-          ffmpeg -f concat -safe 0 -i concat.txt -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k ../../output/highlight_compilation.mp4
+          
+          # Layout Vertikal dengan Blur Background
+          ffmpeg -f concat -safe 0 -i concat.txt \
+            -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2" \
+            -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k \
+            ../../output/highlight_compilation.mp4
 
       - name: Upload Highlight Video as Artifact
         uses: actions/upload-artifact@v4
