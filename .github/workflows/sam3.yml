@@ -1,4 +1,4 @@
-name: Full Resolution Subtitle Removal (EasyOCR + SAM2 + Official LaMa)
+name: Full Subtitle Detect, SAM2 Refine & LaMa Resolution-Robust Inpaint
 
 on:
   push:
@@ -13,45 +13,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Setup Python Environment
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-        
+    
 
-      # 3. Install System Dependencies
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0 wget unzip
+          sudo apt-get install -y libgl1 libglib2.0-0
 
-      # 4. Clone Official LaMa Repo & Download Big-LaMa Weights dari Hugging Face
-      - name: Setup Official LaMa Environment
-        run: |
-          git clone https://github.com/advimman/lama.git
-          cd lama
-          mkdir -p checkpoints
-          # Download model big-lama resmi dari Hugging Face Hub (Public Mirror)
-          wget -q https://huggingface.co/anyray/big-lama/resolve/main/big-lama.zip
-          unzip -q big-lama.zip -d checkpoints/
-          cd ..
-
-      # 5. Install Python Dependencies
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install easyocr opencv-python-headless pillow numpy ultralytics omegaconf pytorch-lightning hydra-core pyyaml
+          pip install easyocr opencv-python-headless pillow numpy ultralytics omegaconf hydra-core
 
-      # 6. Jalankan Script OCR + SAM2 untuk Membuat Mask Resolusi Tinggi
-      - name: Run Subtitle Detection & SAM2 Mask Refine
+      - name: Run Subtitle Detection, SAM2 Refine & LaMa Inpaint
         run: |
-          cat << 'EOF' > generate_mask.py
+          cat << 'EOF' > process_lama_robust.py
           import os
           import sys
           import torch
@@ -60,24 +44,45 @@ jobs:
           from PIL import Image
           import easyocr
           from ultralytics import SAM
+          import urllib.request
+          import yaml
+          from omegaconf import OmegaConf
+
+          # Download LaMa model files
+          def download_lama_model():
+              model_dir = "lama_models"
+              os.makedirs(model_dir, exist_ok=True)
+              
+              # Download pre-trained weights
+              model_url = "https://huggingface.co/smartywu/lama-cleaner-coarse/resolve/main/lama_mpe.pt"
+              model_path = os.path.join(model_dir, "lama_mpe.pt")
+              
+              if not os.path.exists(model_path):
+                  print(f"Downloading LaMa model... (ini akan memakan waktu)")
+                  urllib.request.urlretrieve(model_url, model_path)
+              
+              return model_path
+
+          # Load custom LaMa model
+          def load_lama_model(model_path, device):
+              model = torch.jit.load(model_path, map_location=device)
+              model.eval()
+              return model
 
           def main():
               input_path = "image.png"
-              
-              # Buat folder khusus input untuk LaMa resmi
-              os.makedirs("lama_input", exist_ok=True)
-              
+              output_mask_path = "output_mask.png"
+              output_image_path = "output_masked.png"
+
               if not os.path.exists(input_path):
                   print(f"Error: File '{input_path}' tidak ditemukan!")
                   sys.exit(1)
 
               device = "cpu"
-              
-              img_pil = Image.open(input_path).convert("RGB")
-              img_pil.save("lama_input/image.png")
-              w, h = img_pil.size
+              print(f"Menggunakan device: {device}")
 
-              print("1. Mendeteksi lokasi subtitle menggunakan EasyOCR...")
+              # 1. DETECT Subtitle dengan EasyOCR
+              print("\n1. Mendeteksi lokasi subtitle/teks dengan EasyOCR...")
               reader = easyocr.Reader(['en', 'id'], gpu=False)
               results_ocr = reader.readtext(input_path)
 
@@ -96,17 +101,21 @@ jobs:
                       bboxes.append([
                           max(0, x_min - w_pad), 
                           max(0, y_min - h_pad), 
-                          min(w, x_max + w_pad), 
-                          min(h, y_max + h_pad)
+                          x_max + w_pad, 
+                          y_max + h_pad
                       ])
-                      print(f"Text terdeteksi: '{text}' (Conf: {prob:.2f})")
+                      print(f"Text: '{text}' (Confidence: {prob:.2f})")
+
+              image_cv = cv2.imread(input_path)
+              h, w, _ = image_cv.shape
 
               if not bboxes:
                   print("Tidak ada subtitle terdeteksi.")
-                  empty_mask = np.zeros((h, w), dtype=np.uint8)
-                  cv2.imwrite("lama_input/image_mask.png", empty_mask)
+                  cv2.imwrite(output_image_path, image_cv)
+                  cv2.imwrite(output_mask_path, np.zeros((h, w), dtype=np.uint8))
                   return
 
+              # 2. REFINE Mask dengan SAM 2
               print(f"\n2. Memperhalus mask dengan SAM 2...")
               sam_model = SAM("sam2_b.pt")
 
@@ -123,47 +132,52 @@ jobs:
 
               combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
 
-              # Dilasi tipis untuk melingkupi stroke huruf
               kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
               refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
 
-              # Format nama file wajib untuk official LaMa (image_mask.png)
-              cv2.imwrite("lama_input/image_mask.png", refined_mask)
-              cv2.imwrite("output_mask.png", refined_mask)
-              print("Mask resolusi tinggi berhasil dibuat.")
+              cv2.imwrite(output_mask_path, refined_mask)
+
+              # 3. INPAINT dengan LaMa Resolution-Robust
+              print("\n3. Inpainting dengan model LaMa resolution-robust...")
+              
+              # Download dan load model
+              model_path = download_lama_model()
+              lama_model = load_lama_model(model_path, device)
+
+              # Normalize input
+              img_np = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
+              img_normalized = img_np.astype(np.float32) / 255.0
+
+              # Prepare mask (normalize ke 0-1)
+              mask_normalized = refined_mask.astype(np.float32) / 255.0
+
+              # Convert ke tensor (batch, channels, height, width)
+              img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
+              mask_tensor = torch.from_numpy(mask_normalized).unsqueeze(0).unsqueeze(0)
+
+              # Process inpainting
+              with torch.no_grad():
+                  output_tensor = lama_model(img_tensor, mask_tensor)
+              
+              # Convert output back to image
+              output_np = output_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+              output_np = (output_np * 255).astype(np.uint8)
+              output_cv = cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
+
+              cv2.imwrite(output_image_path, output_cv)
+              print(f"Selesai! Hasil inpainting disimpan di '{output_image_path}'.")
 
           if __name__ == "__main__":
               main()
           EOF
 
-          python generate_mask.py
+          python process_lama_robust.py
 
-      # 7. Run Official LaMa High-Res Inpainting
-      - name: Run Official LaMa High-Res Inpainting
-        run: |
-          export PYTHONPATH=$PYTHONPATH:$(pwd)/lama
-          python lama/bin/predict.py \
-            model.path=$(pwd)/lama/checkpoints/big-lama \
-            indir=$(pwd)/lama_input \
-            outdir=$(pwd)/lama_output \
-            dataset.img_suffix=.png \
-            device=cpu
-
-          # Pindahkan hasil akhir ke root dengan nama output_masked.png
-          if [ -f "lama_output/image_mask.png" ]; then
-            cp lama_output/image_mask.png output_masked.png
-          else
-            cp image.png output_masked.png
-          fi
-
-      # 8. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: highres-lama-result
+          name: lama-inpainted-result
           path: |
             output_masked.png
             output_mask.png
           retention-days: 7
-
-    
