@@ -1,4 +1,4 @@
-name: Full Text Detection Masking & SAM Refine Pipeline (No Token)
+name: Full Text Detection & Real SAM2 Refine Pipeline
 
 on:
   push:
@@ -22,25 +22,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
 
-      # 3. Install System Dependencies untuk OpenCV (Diperbaiki: libgl1 pengganti libgl1-mesa-glx)
+
+      # 3. Install System Dependencies
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1 libglib2.0-0 tesseract-ocr
 
-      # 4. Install Python Dependencies
+      # 4. Install Python Dependencies (Torch, Ultralytics/SAM2, PyTesseract, OpenCV)
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install pytesseract opencv-python-headless pillow numpy
+          pip install pytesseract opencv-python-headless pillow numpy ultralytics
 
-      # 5. Buat dan Jalankan Script Python secara In-line dengan EOF
-      - name: Run Text Masking & Refinement
+      # 5. Buat dan Jalankan Script Python In-line dengan REAL SAM 2 Refinement
+      - name: Run Text Detection & SAM2 Mask Refinement
         run: |
-          cat << 'EOF' > process_sam.py
+          cat << 'EOF' > process_sam2_refine.py
           import os
           import sys
           import torch
@@ -48,6 +48,7 @@ jobs:
           import cv2
           from PIL import Image
           import pytesseract
+          from ultralytics import SAM
 
           def main():
               input_path = "image.png"
@@ -58,66 +59,76 @@ jobs:
                   print(f"Error: File '{input_path}' tidak ditemukan di root repository!")
                   sys.exit(1)
 
-              print("1. Mendeteksi lokasi teks menggunakan Tesseract OCR...")
+              device = "cuda" if torch.cuda.is_available() else "cpu"
+              print(f"Menggunakan device: {device}")
+
+              # 1. Detect: Mengambil lokasi Bounding Box Teks menggunakan OCR
+              print("1. Mendeteksi lokasi teks (OCR)...")
               image_cv = cv2.imread(input_path)
               gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
               
-              # Mendapatkan koordinat bounding box teks
               data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
-              boxes = []
+              bboxes = []
               n_boxes = len(data['text'])
               
               for i in range(n_boxes):
                   if int(data['conf'][i]) > 30 and data['text'][i].strip():
                       x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                      boxes.append([x, y, x + w, y + h])
+                      # Format xyxy untuk SAM 2 Prompt
+                      bboxes.append([x, y, x + w, y + h])
 
-              if not boxes:
+              if not bboxes:
                   print("Tidak ada teks yang terdeteksi.")
                   cv2.imwrite(output_image_path, image_cv)
                   return
 
-              print(f"Terdeteksi {len(boxes)} area teks. Membuat initial mask...")
+              print(f"Terdeteksi {len(bboxes)} kotak teks. Memuat Model SAM 2...")
+
+              # 2. Load Real SAM 2 Model (Download publik otomatis tanpa HF Token)
+              model = SAM("sam2_b.pt")  # Memuat SAM 2 Base Model
+
               h, w, _ = image_cv.shape
-              initial_mask = np.zeros((h, w), dtype=np.uint8)
-              
-              for box in boxes:
-                  cv2.rectangle(initial_mask, (box[0], box[1]), (box[2], box[3]), 255, -1)
+              combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
 
-              print("2. Memperhalus & Memperluas Area Mask (Refinement)...")
-              # Morphological Dilation untuk merapikan kontur teks
-              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-              refined_mask = cv2.dilate(initial_mask, kernel, iterations=2)
+              # 3. Refine: Kirim Bounding Box OCR ke SAM 2 untuk menghasilkan Mask Presisi
+              print("2. Mengirim Prompt BBox ke SAM 2 untuk Refinement Mask...")
+              results = model(input_path, bboxes=bboxes, device=device)
 
-              print("3. Menerapkan Masking ke Gambar...")
+              for result in results:
+                  if result.masks is not None:
+                      for mask_tensor in result.masks.data:
+                          mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
+                          # Resize mask jika dimensinya berbeda dengan ukuran gambar asli
+                          if mask_np.shape != (h, w):
+                              mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
+                          combined_sam2_mask |= mask_np
+
+              combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
+
+              # 4. Apply Masking
+              print("3. Menerapkan SAM 2 Refined Mask pada Gambar...")
               masked_image = image_cv.copy()
-              masked_image[refined_mask > 0] = [0, 0, 0]  # Tutup teks dengan warna hitam
+              masked_image[combined_sam2_mask > 0] = [0, 0, 0] # Tutup area teks dengan warna hitam
 
-              # Simpan hasil output
-              cv2.imwrite(output_mask_path, refined_mask)
+              # Simpan Output
+              cv2.imwrite(output_mask_path, combined_sam2_mask)
               cv2.imwrite(output_image_path, masked_image)
-              print(f"Selesai! Hasil disimpan di '{output_image_path}'.")
+              print(f"Selesai! Mask presisi SAM 2 disimpan di '{output_image_path}'.")
 
           if __name__ == "__main__":
               main()
           EOF
 
-          python process_sam.py
+          python process_sam2_refine.py
 
       # 6. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: masked-result
+          name: sam2-refined-result
           path: |
             output_masked.png
             output_mask.png
           retention-days: 7
 
-      # 7. Commit & Push Hasil ke Root Repository
-      - name: Commit & Push Processed Image
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add output_masked.png output_mask.png
-          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: apply text detection and masking" && git push)
+  
