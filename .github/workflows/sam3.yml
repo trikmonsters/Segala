@@ -20,38 +20,48 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
+  
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1 libglib2.0-0
 
-      - name: Install Python Dependencies
+      - name: Install Python Dependencies (with NumPy <2 fix)
         run: |
           python -m pip install --upgrade pip setuptools wheel
+          # Pin NumPy to <2 to avoid compatibility issues with EasyOCR
+          pip install "numpy<2"
           pip install torch==1.13.1 torchvision==0.14.1 --index-url https://download.pytorch.org/whl/cpu
-          pip install easyocr opencv-python-headless pillow numpy ultralytics
-          pip install omegaconf hydra-core pyyaml scikit-image
+          pip install easyocr opencv-python-headless pillow ultralytics
+          # LaMa dependencies
+          pip install omegaconf hydra-core pyyaml scikit-image scikit-learn
+          pip install tqdm easydict matplotlib pandas joblib
+          pip install albumentations==0.5.2 hydra-core==1.1.0 pytorch-lightning==1.2.9
+          pip install kornia==0.5.0 webdataset packaging
+          echo "✅ Semua dependencies terinstall"
 
       - name: Clone LaMa Repository
         run: |
           git clone https://github.com/advimman/lama.git
-          cd lama
-          export TORCH_HOME=$(pwd)
-          export PYTHONPATH=$(pwd)
+          cd lama && pwd && ls -la
 
       - name: Download LaMa Model (big-lama)
         run: |
           cd lama
           mkdir -p models
-          # Download big-lama model dari HuggingFace
+          echo "📥 Downloading big-lama model from HuggingFace..."
           curl -L -o big-lama.zip https://huggingface.co/smartywu/big-lama/resolve/main/big-lama.zip
+          echo "📦 Extracting..."
           unzip -q big-lama.zip -d models/
-          echo "✅ Model LaMa sudah didownload"
+          ls -la models/
+          echo "✅ Model LaMa sudah didownload dan diekstrak"
 
       - name: Run Full Pipeline
         run: |
+          export TORCH_HOME=$(pwd)/lama
+          export PYTHONPATH=$(pwd)/lama:$PYTHONPATH
+          
           cat << 'EOFPYTHON' > run_pipeline.py
           import os
           import sys
@@ -61,14 +71,9 @@ jobs:
           from PIL import Image
           import easyocr
           from ultralytics import SAM
-          from pathlib import Path
-          import yaml
-          from hydra import compose, initialize_config_dir
-          from omegaconf import OmegaConf
           
           # Add lama to path
           sys.path.insert(0, './lama')
-          from saicinpainting.evaluation.utils import expand_bbox
 
           def main():
               input_path = "image.png"
@@ -81,6 +86,8 @@ jobs:
 
               device = "cpu"
               print(f"🔧 Device: {device}")
+              print(f"NumPy version: {np.__version__}")
+              print(f"PyTorch version: {torch.__version__}")
 
               # ============================================================
               # 1. DETECT Subtitle dengan EasyOCR
@@ -153,36 +160,32 @@ jobs:
               print(f"\n🦙 [3] Inpainting dengan Official LaMa Model...")
               
               try:
-                  from saicinpainting.training.trainers import get_trainer
-                  from saicinpainting.evaluation.data import load_image_with_mask
-
-                  # Load config
-                  config_path = "./lama/configs/prediction/default.yaml"
-                  with open(config_path, 'r') as f:
-                      cfg = yaml.safe_load(f)
-
-                  # Override config
-                  cfg['model']['path'] = './lama/models/big-lama'
-                  cfg['device'] = device
-
-                  # Load model
-                  print("   📦 Loading LaMa model...")
-                  device_obj = torch.device(device)
-                  
-                  # Manual model loading
-                  import torch
+                  import yaml
                   from saicinpainting.training.modules.build import build_model
-                  
+                  from saicinpainting.evaluation.utils import move_to_device
+
+                  # Load model config
                   config_file = './lama/models/big-lama/config.yaml'
                   with open(config_file, 'r') as f:
                       model_cfg = yaml.safe_load(f)
-                  
+
+                  print("   📦 Building LaMa model...")
                   model = build_model(model_cfg)
+
+                  # Load checkpoint
                   checkpoint_path = './lama/models/big-lama/best.ckpt'
-                  checkpoint = torch.load(checkpoint_path, map_location=device_obj)
-                  model.load_state_dict(checkpoint['state_dict'], strict=False)
-                  model.to(device_obj)
+                  print(f"   📥 Loading checkpoint from {checkpoint_path}...")
+                  checkpoint = torch.load(checkpoint_path, map_location=device)
+                  
+                  if 'state_dict' in checkpoint:
+                      state_dict = checkpoint['state_dict']
+                  else:
+                      state_dict = checkpoint
+
+                  model.load_state_dict(state_dict, strict=False)
+                  model = model.to(device)
                   model.eval()
+                  print("   ✓ Model loaded successfully")
 
                   # Prepare image and mask
                   img_np = cv2.imread(input_path)
@@ -190,17 +193,19 @@ jobs:
                   mask_np = cv2.imread(output_mask_path, cv2.IMREAD_GRAYSCALE)
                   mask_np = (mask_np > 127).astype(np.float32)
 
-                  # Normalize image
+                  # Normalize image to [0, 1]
                   img_tensor = torch.from_numpy(img_np).float() / 255.0
                   img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)
                   
-                  # Normalize to [-1, 1]
+                  # LaMa expects [-1, 1] normalization
                   img_tensor = img_tensor * 2 - 1
-
                   mask_tensor = torch.from_numpy(mask_np).float().unsqueeze(0).unsqueeze(0)
 
+                  img_tensor = img_tensor.to(device)
+                  mask_tensor = mask_tensor.to(device)
+
                   # Inpaint
-                  print("   ⏳ Processing inpainting (memakan waktu beberapa menit di CPU)...")
+                  print("   ⏳ Processing inpainting (bisa memakan waktu di CPU)...")
                   with torch.no_grad():
                       output_tensor = model(img_tensor, mask_tensor)
 
@@ -209,18 +214,15 @@ jobs:
                   output_np = output_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
                   output_np = np.clip(output_np * 255, 0, 255).astype(np.uint8)
 
-                  # Convert RGB to BGR for cv2
-                  output_bgr = cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
-
-                  # Optional: Sharpening
-                  from PIL import Image, ImageEnhance
+                  # Sharpening untuk reduce blur
+                  from PIL import ImageEnhance
                   output_pil = Image.fromarray(output_np)
                   enhancer = ImageEnhance.Sharpness(output_pil)
-                  output_pil = enhancer.enhance(1.2)
+                  output_pil = enhancer.enhance(1.3)
                   output_pil.save(output_image_path)
 
                   print(f"   ✓ Hasil inpainting disimpan ke '{output_image_path}'")
-                  print(f"\n✅ SELESAI! Semua hasil sudah diproses.")
+                  print(f"\n✅ SELESAI! Semua hasil sudah diproses dengan LaMa.")
 
               except Exception as e:
                   print(f"❌ Error di LaMa inpainting: {e}")
