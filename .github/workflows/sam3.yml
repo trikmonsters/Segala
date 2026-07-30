@@ -1,4 +1,4 @@
-name: Full Text Detection & Real SAM2 Refine Pipeline
+name: Full Subtitle Detection & SAM2 Refine Pipeline
 
 on:
   push:
@@ -22,32 +22,32 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      
 
-
-      # 3. Install System Dependencies
+      # 3. Install System Dependencies untuk OpenCV
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0 tesseract-ocr
+          sudo apt-get install -y libgl1 libglib2.0-0
 
-      # 4. Install Python Dependencies (Torch, Ultralytics/SAM2, PyTesseract, OpenCV)
+      # 4. Install Python Dependencies (Torch, EasyOCR, SAM 2 via Ultralytics)
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install pytesseract opencv-python-headless pillow numpy ultralytics
+          pip install easyocr opencv-python-headless pillow numpy ultralytics
 
-      # 5. Buat dan Jalankan Script Python In-line dengan REAL SAM 2 Refinement
-      - name: Run Text Detection & SAM2 Mask Refinement
+      # 5. Buat dan Jalankan Script Python In-line
+      - name: Run Subtitle Masking & SAM2 Refinement
         run: |
-          cat << 'EOF' > process_sam2_refine.py
+          cat << 'EOF' > process_subtitle_sam2.py
           import os
           import sys
           import torch
           import numpy as np
           import cv2
           from PIL import Image
-          import pytesseract
+          import easyocr
           from ultralytics import SAM
 
           def main():
@@ -62,73 +62,94 @@ jobs:
               device = "cuda" if torch.cuda.is_available() else "cpu"
               print(f"Menggunakan device: {device}")
 
-              # 1. Detect: Mengambil lokasi Bounding Box Teks menggunakan OCR
-              print("1. Mendeteksi lokasi teks (OCR)...")
-              image_cv = cv2.imread(input_path)
-              gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
-              
-              data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+              # 1. Detect Subtitle menggunakan EasyOCR
+              print("1. Mendeteksi subtitle menggunakan EasyOCR...")
+              reader = easyocr.Reader(['en', 'id'], gpu=False) # Mendukung Bahasa Inggris & Indonesia
+              results_ocr = reader.readtext(input_path)
+
               bboxes = []
-              n_boxes = len(data['text'])
-              
-              for i in range(n_boxes):
-                  if int(data['conf'][i]) > 30 and data['text'][i].strip():
-                      x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                      # Format xyxy untuk SAM 2 Prompt
-                      bboxes.append([x, y, x + w, y + h])
+              for (bbox, text, prob) in results_ocr:
+                  if prob > 0.15: # Threshold disesuaikan agar subtitle halus/kecil tetap terbaca
+                      # Konversi polygon koordinat EasyOCR [top-left, top-right, bottom-right, bottom-left] ke xyxy
+                      pts = np.array(bbox, dtype=np.int32)
+                      x_min = int(np.min(pts[:, 0]))
+                      y_min = int(np.min(pts[:, 1]))
+                      x_max = int(np.max(pts[:, 0]))
+                      y_max = int(np.max(pts[:, 1]))
+                      
+                      # Berikan sedikit margin pad (padding) di sekitar subtitle
+                      h_pad = int((y_max - y_min) * 0.1)
+                      w_pad = int((x_max - x_min) * 0.05)
+                      
+                      bboxes.append([
+                          max(0, x_min - w_pad), 
+                          max(0, y_min - h_pad), 
+                          x_max + w_pad, 
+                          y_max + h_pad
+                      ])
+                      print(f"Subtitle terdeteksi: '{text}' (Conf: {prob:.2f})")
+
+              image_cv = cv2.imread(input_path)
+              h, w, _ = image_cv.shape
 
               if not bboxes:
-                  print("Tidak ada teks yang terdeteksi.")
+                  print("Peringatan: Tidak ada subtitle/teks yang terdeteksi.")
                   cv2.imwrite(output_image_path, image_cv)
+                  cv2.imwrite(output_mask_path, np.zeros((h, w), dtype=np.uint8))
                   return
 
-              print(f"Terdeteksi {len(bboxes)} kotak teks. Memuat Model SAM 2...")
+              # 2. Memuat Model SAM 2 (Otomatis download tanpa token)
+              print(f"\n2. Memuat Model SAM 2 untuk memperhalus mask pada {len(bboxes)} area subtitle...")
+              model = SAM("sam2_b.pt")
 
-              # 2. Load Real SAM 2 Model (Download publik otomatis tanpa HF Token)
-              model = SAM("sam2_b.pt")  # Memuat SAM 2 Base Model
-
-              h, w, _ = image_cv.shape
               combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
 
-              # 3. Refine: Kirim Bounding Box OCR ke SAM 2 untuk menghasilkan Mask Presisi
-              print("2. Mengirim Prompt BBox ke SAM 2 untuk Refinement Mask...")
+              # 3. Refine: Kirim Bounding Box Subtitle ke SAM 2
               results = model(input_path, bboxes=bboxes, device=device)
 
               for result in results:
                   if result.masks is not None:
                       for mask_tensor in result.masks.data:
                           mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
-                          # Resize mask jika dimensinya berbeda dengan ukuran gambar asli
                           if mask_np.shape != (h, w):
                               mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
                           combined_sam2_mask |= mask_np
 
               combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
 
-              # 4. Apply Masking
-              print("3. Menerapkan SAM 2 Refined Mask pada Gambar...")
-              masked_image = image_cv.copy()
-              masked_image[combined_sam2_mask > 0] = [0, 0, 0] # Tutup area teks dengan warna hitam
+              # 4. Dilasi Tambahan (Opsional) untuk memastikan outline / bayangan subtitle ikut ter-masking
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+              refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
 
-              # Simpan Output
-              cv2.imwrite(output_mask_path, combined_sam2_mask)
+              # 5. Terapkan Masking ke Gambar
+              masked_image = image_cv.copy()
+              masked_image[refined_mask > 0] = [0, 0, 0] # Tutup area subtitle dengan warna hitam
+
+              # Simpan Hasil Output
+              cv2.imwrite(output_mask_path, refined_mask)
               cv2.imwrite(output_image_path, masked_image)
-              print(f"Selesai! Mask presisi SAM 2 disimpan di '{output_image_path}'.")
+              print(f"\nSelesai! Subtitle berhasil di-masking & di-refine ke '{output_image_path}'.")
 
           if __name__ == "__main__":
               main()
           EOF
 
-          python process_sam2_refine.py
+          python process_subtitle_sam2.py
 
       # 6. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sam2-refined-result
+          name: subtitle-masked-result
           path: |
             output_masked.png
             output_mask.png
           retention-days: 7
 
-  
+      # 7. Commit & Push Hasil ke Root Repository
+      - name: Commit & Push Processed Image
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add output_masked.png output_mask.png
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: mask and refine subtitles with EasyOCR and SAM2" && git push)
