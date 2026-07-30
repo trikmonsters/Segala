@@ -22,29 +22,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      
 
-
-      # 3. Install System Dependencies untuk OpenCV
+      # 3. Install System Dependencies untuk OpenCV (Diperbaiki: libgl1 pengganti libgl1-mesa-glx)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 tesseract-ocr
+          sudo apt-get install -y libgl1 libglib2.0-0 tesseract-ocr
 
-      # 4. Install Python Dependencies (Torch, SAM 2, & PyTesseract)
+      # 4. Install Python Dependencies
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install pytesseract opencv-python-headless pillow numpy sam-2
+          pip install pytesseract opencv-python-headless pillow numpy
 
-      # 5. Download Model Weights SAM Publik (Tanpa HF Token)
-      - name: Download SAM Weights
-        run: |
-          mkdir -p checkpoints
-          wget -q https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -O checkpoints/sam2_hiera_tiny.pt
-
-      # 6. Buat dan Jalankan Script Python secara In-line dengan EOF
-      - name: Run Text Masking & SAM Refinement
+      # 5. Buat dan Jalankan Script Python secara In-line dengan EOF
+      - name: Run Text Masking & Refinement
         run: |
           cat << 'EOF' > process_sam.py
           import os
@@ -68,7 +62,7 @@ jobs:
               image_cv = cv2.imread(input_path)
               gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
               
-              # Mendapatkan kotak koordinat (bounding box) lokasi teks
+              # Mendapatkan koordinat bounding box teks
               data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
               boxes = []
               n_boxes = len(data['text'])
@@ -91,7 +85,7 @@ jobs:
                   cv2.rectangle(initial_mask, (box[0], box[1]), (box[2], box[3]), 255, -1)
 
               print("2. Memperhalus & Memperluas Area Mask (Refinement)...")
-              # Morphological Dilation untuk merapikan dan menutup seluruh kontur teks
+              # Morphological Dilation untuk merapikan kontur teks
               kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
               refined_mask = cv2.dilate(initial_mask, kernel, iterations=2)
 
@@ -110,7 +104,7 @@ jobs:
 
           python process_sam.py
 
-      # 7. Upload Hasil sebagai Artifact
+      # 6. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -120,7 +114,7 @@ jobs:
             output_mask.png
           retention-days: 7
 
-      # 8. Commit & Push Hasil ke Root Repository
+      # 7. Commit & Push Hasil ke Root Repository
       - name: Commit & Push Processed Image
         run: |
           git config --global user.name "github-actions[bot]"
