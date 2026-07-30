@@ -1,4 +1,4 @@
-name: Full Subtitle Detect, SAM2 Refine & Simple LaMa AI Pipeline
+name: Full Subtitle Detect, SAM2 Refine & Fixed LaMa AI Pipeline
 
 on:
   push:
@@ -23,7 +23,6 @@ jobs:
         with:
           python-version: '3.10'
         
-
       # 3. Install System Dependencies untuk OpenCV
       - name: Install System Dependencies
         run: |
@@ -37,10 +36,10 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install easyocr opencv-python-headless pillow numpy ultralytics simple-lama-inpainting
 
-      # 5. Buat dan Jalankan Script Python secara In-line dengan EOF
-      - name: Run Subtitle Detection, SAM2 Refine & LaMa AI Inpaint
+      # 5. Buat dan Jalankan Script Python secara In-line
+      - name: Run Subtitle Detection, SAM2 Refine & Fixed LaMa Inpaint
         run: |
-          cat << 'EOF' > process_lama.py
+          cat << 'EOF' > process_lama_fixed.py
           import os
           import sys
           import torch
@@ -60,6 +59,7 @@ jobs:
                   print(f"Error: File '{input_path}' tidak ditemukan di root repository!")
                   sys.exit(1)
 
+              # Pastikan PyTorch memaksa seluruh pembacaan model di CPU
               device = "cpu"
               print(f"Menggunakan device: {device}")
 
@@ -77,7 +77,7 @@ jobs:
                       x_max = int(np.max(pts[:, 0]))
                       y_max = int(np.max(pts[:, 1]))
                       
-                      # Tambahkan margin padding agar stroke / glow subtitle terjangkau sempurna
+                      # Tambahkan margin padding agar area teks & stroke terjangkau sempurna
                       h_pad = int((y_max - y_min) * 0.15)
                       w_pad = int((x_max - x_min) * 0.05)
                       
@@ -122,8 +122,18 @@ jobs:
               # Simpan mask biner
               cv2.imwrite(output_mask_path, refined_mask)
 
-              # 3. DRAW / INPAINT: Rekonstruksi Latar Belakang dengan Model AI LaMa
+              # 3. DRAW / INPAINT: Rekonstruksi Latar Belakang dengan Model AI LaMa (CPU Fix)
               print("\n3. Memuat Model AI LaMa untuk merekonstruksi latar belakang...")
+              
+              # Monkey-patching torch.jit.load untuk selalu mengarahkan tensor CUDA ke CPU
+              orig_jit_load = torch.jit.load
+              def jit_load_cpu_override(*args, **kwargs):
+                  kwargs['map_location'] = torch.device('cpu')
+                  return orig_jit_load(*args, **kwargs)
+              
+              torch.jit.load = jit_load_cpu_override
+
+              # Memuat SimpleLama setelah patch map_location=cpu
               simple_lama = SimpleLama()
               
               img_pil = Image.open(input_path).convert("RGB")
@@ -140,7 +150,7 @@ jobs:
               main()
           EOF
 
-          python process_lama.py
+          python process_lama_fixed.py
 
       # 6. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
