@@ -23,7 +23,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-        
+  
 
       # 3. Install System Dependencies
       - name: Install System Dependencies
@@ -141,12 +141,21 @@ jobs:
       #    doesn't silently pull a mismatched/CUDA build over it.
       - name: Install LaMa Dependencies
         run: |
-          # lama_repo/requirements.txt was written for the NumPy 1.x era.
-          # scikit-image==0.17.2 (and other old pins in that file) fail to
-          # build against NumPy 2.x inside pip's isolated build sandbox, so
-          # we pin numpy back down and disable build isolation first.
-          pip install "numpy<2" Cython wheel setuptools
-          pip install --no-build-isolation -r lama_repo/requirements.txt
+          # lama_repo/requirements.txt pins exact package versions from the
+          # 2020 / NumPy-1.x era. Several (scikit-image==0.17.2 in
+          # particular) rely on numpy.distutils and fail to build against
+          # modern setuptools/NumPy 2. Forcing NumPy back to 1.x isn't a
+          # clean fix either — opencv-python-headless (installed earlier)
+          # now hard-requires numpy>=2, so that just trades a build error
+          # for a runtime conflict.
+          #
+          # Instead we strip the exact version pins and let pip resolve
+          # current, prebuilt-wheel versions of each package — we don't need
+          # the literal 2020 versions, just ones that work with today's
+          # NumPy/Python.
+          sed -i -E 's/==[^[:space:]]+//' lama_repo/requirements.txt
+          cat lama_repo/requirements.txt
+          pip install -r lama_repo/requirements.txt
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --force-reinstall
           pip install wldhx.yadisk-direct
 
