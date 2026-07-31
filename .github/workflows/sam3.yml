@@ -24,7 +24,6 @@ jobs:
         with:
           python-version: '3.10'
 
-
       # 3. Install System Dependencies
       - name: Install System Dependencies
         run: |
@@ -141,18 +140,6 @@ jobs:
       #    doesn't silently pull a mismatched/CUDA build over it.
       - name: Install LaMa Dependencies
         run: |
-          # lama_repo/requirements.txt pins exact package versions from the
-          # 2020 / NumPy-1.x era. Several (scikit-image==0.17.2 in
-          # particular) rely on numpy.distutils and fail to build against
-          # modern setuptools/NumPy 2. Forcing NumPy back to 1.x isn't a
-          # clean fix either — opencv-python-headless (installed earlier)
-          # now hard-requires numpy>=2, so that just trades a build error
-          # for a runtime conflict.
-          #
-          # Instead we strip the exact version pins and let pip resolve
-          # current, prebuilt-wheel versions of each package — we don't need
-          # the literal 2020 versions, just ones that work with today's
-          # NumPy/Python.
           sed -i -E 's/==[^[:space:]]+//' lama_repo/requirements.txt
           cat lama_repo/requirements.txt
           pip install -r lama_repo/requirements.txt
@@ -164,13 +151,14 @@ jobs:
           # version lama was actually written against; it's pure Python so
           # it doesn't hit the build-isolation problems scikit-image had.
           pip install "albumentations==0.5.2" "imgaug>=0.4.0"
+          # imgaug (pulled in above for albumentations' legacy IAA*
+          # transforms) calls np.sctypes, which NumPy 2.0 removed entirely —
+          # imgaug hasn't been updated since 2020 and will never support
+          # NumPy 2. The newest opencv-python-headless releases hard-require
+          # numpy>=2, so pin an older 4.x build too; none of what we call
+          # (imread/cvtColor/resize/dilate/getStructuringElement) needs 5.x.
+          pip install "numpy<2" "opencv-python-headless<5"
 
-      # 8. Download the real big-lama checkpoint (config + weights), not a
-      #    single traced .pt file. Official distribution lives on Yandex
-      #    Disk; wldhx.yadisk-direct resolves it to a direct download URL.
-      #    NOTE: this is the same link the authors' own Colab notebook uses.
-      #    If it ever goes stale, grab the current share link from
-      #    https://github.com/advimman/lama#inference- and swap it in below.
       - name: Download big-lama checkpoint
         run: |
           set -e
