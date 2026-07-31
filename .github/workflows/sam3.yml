@@ -1,4 +1,4 @@
-name: Full Pipeline - EasyOCR + SAM2 + Official LaMa Inpainting
+name: Full Subtitle Detect, SAM2 Refine & Resolution-Robust LaMa Inpaint
 
 on:
   push:
@@ -11,107 +11,58 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
+    timeout-minutes: 60   # refine=True is CPU-heavy, give it room
 
     steps:
+      # 1. Checkout repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 2. Setup Python Environment
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      
 
+      # 3. Install System Dependencies
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0
+          sudo apt-get install -y libgl1 libglib2.0-0 unzip
 
-      - name: Install PyTorch 2.3.1 + Dependencies (NumPy 2.x Compatible)
+      # 4. Install Python Dependencies for detection/mask refinement
+      - name: Install Detection/SAM2 Dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          
-          # PyTorch 2.3.1 officially supports NumPy 2.x
-          pip install torch==2.3.1 torchvision==0.18.1 \
-            --index-url https://download.pytorch.org/whl/cpu
-          
-          # Install all dependencies (NumPy will be auto-installed with latest stable)
-          pip install \
-            easyocr \
-            opencv-python-headless \
-            pillow \
-            ultralytics \
-            omegaconf \
-            hydra-core \
-            pyyaml \
-            scikit-image \
-            scikit-learn \
-            tqdm \
-            easydict \
-            matplotlib \
-            pandas \
-            joblib \
-            albumentations==0.5.2 \
-            pytorch-lightning==1.3.8 \
-            kornia==0.6.11 \
-            webdataset \
-            packaging
-          
-          # Verify versions
-          echo "✅ Environment setup completed:"
-          python -c "import numpy as np; import torch; print(f'NumPy: {np.__version__}'); print(f'PyTorch: {torch.__version__}')"
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr opencv-python-headless pillow numpy ultralytics
 
-      - name: Clone LaMa Repository
+      # 5. Detect subtitle + refine mask with SAM2 (same as before, but write
+      #    output in the naming convention the official lama repo expects)
+      - name: Run Subtitle Detection & SAM2 Mask Refine
         run: |
-          git clone https://github.com/advimman/lama.git
-          cd lama && pwd && ls -la
-
-      - name: Download LaMa Model (big-lama)
-        run: |
-          cd lama
-          mkdir -p models
-          echo "📥 Downloading big-lama model from HuggingFace..."
-          curl -L -o big-lama.zip https://huggingface.co/smartywu/big-lama/resolve/main/big-lama.zip
-          echo "📦 Extracting..."
-          unzip -q big-lama.zip -d models/
-          ls -la models/
-          echo "✅ LaMa model downloaded and extracted"
-
-      - name: Run Full Pipeline
-        run: |
-          export TORCH_HOME=$(pwd)/lama
-          export PYTHONPATH=$(pwd)/lama:$PYTHONPATH
-          
-          cat << 'EOFPYTHON' > run_pipeline.py
+          cat << 'EOF' > detect_and_mask.py
           import os
           import sys
-          import torch
           import numpy as np
           import cv2
-          from PIL import Image, ImageEnhance
           import easyocr
           from ultralytics import SAM
-          
-          # Add lama to path
-          sys.path.insert(0, './lama')
 
           def main():
               input_path = "image.png"
-              output_mask_path = "output_mask.png"
-              output_image_path = "output_masked.png"
+              indir = "lama_input"
+              os.makedirs(indir, exist_ok=True)
 
               if not os.path.exists(input_path):
-                  print(f"❌ Error: File '{input_path}' tidak ditemukan!")
+                  print(f"Error: File '{input_path}' tidak ditemukan di root repository!")
                   sys.exit(1)
 
               device = "cpu"
-              print(f"🔧 Device: {device}")
-              print(f"NumPy version: {np.__version__}")
-              print(f"PyTorch version: {torch.__version__}")
+              print(f"Menggunakan device: {device}")
 
-              # ============================================================
-              # 1. DETECT Subtitle dengan EasyOCR
-              # ============================================================
-              print("\n📝 [1] Mendeteksi subtitle/teks dengan EasyOCR...")
+              print("\n1. Mendeteksi lokasi subtitle/teks dengan EasyOCR...")
               reader = easyocr.Reader(['en', 'id'], gpu=False)
               results_ocr = reader.readtext(input_path)
 
@@ -123,32 +74,28 @@ jobs:
                       y_min = int(np.min(pts[:, 1]))
                       x_max = int(np.max(pts[:, 0]))
                       y_max = int(np.max(pts[:, 1]))
-                      
+
                       h_pad = int((y_max - y_min) * 0.15)
                       w_pad = int((x_max - x_min) * 0.05)
-                      
-                      bbox_padded = [
-                          max(0, x_min - w_pad), 
-                          max(0, y_min - h_pad), 
-                          x_max + w_pad, 
+
+                      bboxes.append([
+                          max(0, x_min - w_pad),
+                          max(0, y_min - h_pad),
+                          x_max + w_pad,
                           y_max + h_pad
-                      ]
-                      bboxes.append(bbox_padded)
-                      print(f"   ✓ '{text}' (Confidence: {prob:.2f})")
+                      ])
+                      print(f"Text terdeteksi: '{text}' (Confidence: {prob:.2f})")
 
               image_cv = cv2.imread(input_path)
               h, w, _ = image_cv.shape
 
               if not bboxes:
-                  print("   ⚠️  Tidak ada subtitle terdeteksi.")
-                  cv2.imwrite(output_image_path, image_cv)
-                  cv2.imwrite(output_mask_path, np.zeros((h, w), dtype=np.uint8))
-                  return
+                  print("Tidak ada subtitle terdeteksi. Menyalin gambar asli sebagai output.")
+                  cv2.imwrite("output_masked.png", image_cv)
+                  cv2.imwrite("output_mask.png", np.zeros((h, w), dtype=np.uint8))
+                  sys.exit(0)
 
-              # ============================================================
-              # 2. REFINE Mask dengan SAM 2
-              # ============================================================
-              print(f"\n🎯 [2] Memperhalus mask dengan SAM 2...")
+              print(f"\n2. Memperhalus mask dengan SAM 2...")
               sam_model = SAM("sam2_b.pt")
 
               combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
@@ -164,95 +111,68 @@ jobs:
 
               combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
 
-              # Morphological refinement
-              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-              refined_mask = cv2.morphologyEx(combined_sam2_mask, cv2.MORPH_CLOSE, kernel)
-              refined_mask = cv2.GaussianBlur(refined_mask, (5, 5), 0)
-              _, refined_mask = cv2.threshold(refined_mask, 127, 255, cv2.THRESH_BINARY)
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+              refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
 
-              cv2.imwrite(output_mask_path, refined_mask)
-              print(f"   ✓ Mask disimpan ke '{output_mask_path}'")
+              # Keep a copy at repo root too, for the artifact upload step
+              cv2.imwrite("output_mask.png", refined_mask)
 
-              # ============================================================
-              # 3. INPAINT dengan Official LaMa
-              # ============================================================
-              print(f"\n🦙 [3] Inpainting dengan Official LaMa Model...")
-              
-              try:
-                  import yaml
-                  from saicinpainting.training.modules.build import build_model
+              # Official lama predict.py pairs files by name: "image.png" +
+              # "image_mask000.png" living together in the same indir.
+              cv2.imwrite(os.path.join(indir, "image.png"), image_cv)
+              cv2.imwrite(os.path.join(indir, "image_mask000.png"), refined_mask)
 
-                  # Load model config
-                  config_file = './lama/models/big-lama/config.yaml'
-                  with open(config_file, 'r') as f:
-                      model_cfg = yaml.safe_load(f)
-
-                  print("   📦 Building LaMa model...")
-                  model = build_model(model_cfg)
-
-                  # Load checkpoint
-                  checkpoint_path = './lama/models/big-lama/best.ckpt'
-                  print(f"   📥 Loading checkpoint from {checkpoint_path}...")
-                  checkpoint = torch.load(checkpoint_path, map_location=device)
-                  
-                  if 'state_dict' in checkpoint:
-                      state_dict = checkpoint['state_dict']
-                  else:
-                      state_dict = checkpoint
-
-                  model.load_state_dict(state_dict, strict=False)
-                  model = model.to(device)
-                  model.eval()
-                  print("   ✓ Model loaded successfully")
-
-                  # Prepare image and mask
-                  img_np = cv2.imread(input_path)
-                  img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
-                  mask_np = cv2.imread(output_mask_path, cv2.IMREAD_GRAYSCALE)
-                  mask_np = (mask_np > 127).astype(np.float32)
-
-                  # Normalize image to [0, 1]
-                  img_tensor = torch.from_numpy(img_np).float() / 255.0
-                  img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)
-                  
-                  # LaMa expects [-1, 1] normalization
-                  img_tensor = img_tensor * 2 - 1
-                  mask_tensor = torch.from_numpy(mask_np).float().unsqueeze(0).unsqueeze(0)
-
-                  img_tensor = img_tensor.to(device)
-                  mask_tensor = mask_tensor.to(device)
-
-                  # Inpaint
-                  print("   ⏳ Processing inpainting (bisa memakan waktu di CPU)...")
-                  with torch.no_grad():
-                      output_tensor = model(img_tensor, mask_tensor)
-
-                  # Denormalize
-                  output_tensor = (output_tensor + 1) / 2
-                  output_np = output_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
-                  output_np = np.clip(output_np * 255, 0, 255).astype(np.uint8)
-
-                  # Sharpening untuk reduce blur
-                  output_pil = Image.fromarray(output_np)
-                  enhancer = ImageEnhance.Sharpness(output_pil)
-                  output_pil = enhancer.enhance(1.3)
-                  output_pil.save(output_image_path)
-
-                  print(f"   ✓ Hasil inpainting disimpan ke '{output_image_path}'")
-                  print(f"\n✅ SELESAI! Semua hasil sudah diproses dengan LaMa.")
-
-              except Exception as e:
-                  print(f"❌ Error di LaMa inpainting: {e}")
-                  import traceback
-                  traceback.print_exc()
-                  sys.exit(1)
+              print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa resolution-robust refine.")
 
           if __name__ == "__main__":
               main()
-          EOFPYTHON
+          EOF
 
-          python run_pipeline.py
+          python detect_and_mask.py
 
+      # 6. Clone the official advimman/lama repo (this is the actual
+      #    resolution-robust implementation, not the pip wrapper)
+      - name: Clone official LaMa repository
+        run: |
+          git clone https://github.com/advimman/lama.git lama_repo
+
+      # 7. Install LaMa's own dependencies. We already have a CPU torch/
+      #    torchvision installed above; reinstall it last so requirements.txt
+      #    doesn't silently pull a mismatched/CUDA build over it.
+      - name: Install LaMa Dependencies
+        run: |
+          pip install -r lama_repo/requirements.txt
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --force-reinstall
+          pip install wldhx.yadisk-direct
+
+      # 8. Download the real big-lama checkpoint (config + weights), not a
+      #    single traced .pt file. Official distribution lives on Yandex
+      #    Disk; wldhx.yadisk-direct resolves it to a direct download URL.
+      #    NOTE: this is the same link the authors' own Colab notebook uses.
+      #    If it ever goes stale, grab the current share link from
+      #    https://github.com/advimman/lama#inference- and swap it in below.
+      - name: Download big-lama checkpoint
+        run: |
+          curl -L $(yadisk-direct https://disk.yandex.ru/d/ouP6l8VJ0HpMZg) -o big-lama.zip
+          unzip -o big-lama.zip -d .
+          ls -la big-lama
+
+      # 9. Run resolution-robust inpainting via refine=True
+      - name: Run LaMa Inpainting (refine=True)
+        run: |
+          export TORCH_HOME=$(pwd)
+          export PYTHONPATH=$(pwd)/lama_repo
+          python3 lama_repo/bin/predict.py \
+            model.path=$(pwd)/big-lama \
+            indir=$(pwd)/lama_input \
+            outdir=$(pwd)/lama_output \
+            dataset.img_suffix=.png \
+            refine=True
+
+          # Normalize output filename for the artifact step
+          cp lama_output/image.png output_masked.png
+
+      # 10. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
