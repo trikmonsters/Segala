@@ -11,7 +11,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # refine=True is CPU-heavy, give it room
+    timeout-minutes: 240
 
     steps:
       # 1. Checkout repository
