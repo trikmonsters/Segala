@@ -23,7 +23,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
+        
 
       # 3. Install System Dependencies
       - name: Install System Dependencies
@@ -141,7 +141,12 @@ jobs:
       #    doesn't silently pull a mismatched/CUDA build over it.
       - name: Install LaMa Dependencies
         run: |
-          pip install -r lama_repo/requirements.txt
+          # lama_repo/requirements.txt was written for the NumPy 1.x era.
+          # scikit-image==0.17.2 (and other old pins in that file) fail to
+          # build against NumPy 2.x inside pip's isolated build sandbox, so
+          # we pin numpy back down and disable build isolation first.
+          pip install "numpy<2" Cython wheel setuptools
+          pip install --no-build-isolation -r lama_repo/requirements.txt
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --force-reinstall
           pip install wldhx.yadisk-direct
 
