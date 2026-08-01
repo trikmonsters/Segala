@@ -11,7 +11,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # refine=True is CPU-heavy, give it room
+    timeout-minutes: 60   # generous buffer for CPU-only inference
 
     steps:
       # 1. Checkout repository
@@ -23,6 +23,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+  
 
       # 3. Install System Dependencies
       - name: Install System Dependencies
@@ -117,11 +118,13 @@ jobs:
               cv2.imwrite("output_mask.png", refined_mask)
 
               # Official lama predict.py pairs files by name: "image.png" +
-              # "image_mask000.png" living together in the same indir.
+              # "image_mask.png" living together in the same indir (this
+              # exact naming is confirmed working via the authors' own
+              # Colab notebook).
               cv2.imwrite(os.path.join(indir, "image.png"), image_cv)
-              cv2.imwrite(os.path.join(indir, "image_mask000.png"), refined_mask)
+              cv2.imwrite(os.path.join(indir, "image_mask.png"), refined_mask)
 
-              print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa resolution-robust refine.")
+              print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa (big-lama, resolution-robust).")
 
           if __name__ == "__main__":
               main()
@@ -134,12 +137,18 @@ jobs:
       - name: Clone official LaMa repository
         run: |
           git clone https://github.com/advimman/lama.git lama_repo
+          
+          sed -i \
+            "s/torch.load(path, map_location=map_location)/torch.load(path, map_location=map_location, weights_only=False)/" \
+            lama_repo/saicinpainting/training/trainers/__init__.py
+          grep -n "torch.load" lama_repo/saicinpainting/training/trainers/__init__.py
 
       # 7. Install LaMa's own dependencies. We already have a CPU torch/
       #    torchvision installed above; reinstall it last so requirements.txt
       #    doesn't silently pull a mismatched/CUDA build over it.
       - name: Install LaMa Dependencies
         run: |
+          
           sed -i -E 's/==[^[:space:]]+//' lama_repo/requirements.txt
           cat lama_repo/requirements.txt
           pip install -r lama_repo/requirements.txt
@@ -151,12 +160,6 @@ jobs:
           # version lama was actually written against; it's pure Python so
           # it doesn't hit the build-isolation problems scikit-image had.
           pip install "albumentations==0.5.2" "imgaug>=0.4.0"
-          # imgaug (pulled in above for albumentations' legacy IAA*
-          # transforms) calls np.sctypes, which NumPy 2.0 removed entirely —
-          # imgaug hasn't been updated since 2020 and will never support
-          # NumPy 2. The newest opencv-python-headless releases hard-require
-          # numpy>=2, so pin an older 4.x build too; none of what we call
-          # (imread/cvtColor/resize/dilate/getStructuringElement) needs 5.x.
           pip install "numpy<2" "opencv-python-headless<5"
 
       - name: Download big-lama checkpoint
@@ -180,17 +183,23 @@ jobs:
           unzip -o big-lama.zip -d .
           ls -la big-lama
 
-      # 9. Run resolution-robust inpainting via refine=True
-      - name: Run LaMa Inpainting (refine=True)
+      # 9. Run resolution-robust LaMa inpainting
+      - name: Run LaMa Inpainting
         run: |
           export TORCH_HOME=$(pwd)
           export PYTHONPATH=$(pwd)/lama_repo
+          # NOTE: no refine=True here. The authors' own reference notebook
+          # (advimman/lama) runs plain predict.py with no refine flag —
+          # "resolution-robust" is a property of the FFC architecture and
+          # training curriculum itself, not something the refine flag turns
+          # on. refine=True is a separate, optional feature for images too
+          # large to fit in memory at once (tiled multi-scale inference),
+          # and it pulls in kornia in a code path we don't need here.
           python3 lama_repo/bin/predict.py \
             model.path=$(pwd)/big-lama \
             indir=$(pwd)/lama_input \
             outdir=$(pwd)/lama_output \
-            dataset.img_suffix=.png \
-            refine=True
+            dataset.img_suffix=.png
 
           # Normalize output filename for the artifact step
           cp lama_output/image.png output_masked.png
