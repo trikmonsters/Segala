@@ -115,7 +115,6 @@ jobs:
 
           python detect_and_mask.py
 
-      # 6. Run Inpainting using FLUX via HF Space API
       - name: Run FLUX Inpainting
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -130,36 +129,41 @@ jobs:
               mask_path = "output_mask.png"
               output_path = "output_masked.png"
 
-              # Jika mask kosong / tidak ada area terdeteksi
               if not os.path.exists(mask_path):
                   print("Mask tidak ditemukan, menyalin gambar asli.")
                   shutil.copy(image_path, output_path)
                   return
 
-              print("Mengirim request ke FLUX Inpainting HF Space...")
-              
-              # Menggunakan Hugging Face Token jika tersedia
               hf_token = os.getenv("HF_TOKEN")
+              space_name = "ameerazam08/FLUX.1-dev-Inpainting-Model-Beta-GPU"
+
+              print(f"Mengirim request ke HF Space: {space_name}...")
               
-              # Inisialisasi Gradio Client ke HF Space FLUX Fill / Inpaint
-              client = Client("fffiloni/FLUX.1-Fill-dev", token=hf_token)
+              try:
+                  client = Client(space_name, token=hf_token if hf_token else None)
 
-              result = client.predict(
-                  image={"background": handle_file(image_path), "layers": [handle_file(mask_path)]},
-                  prompt="clean background, highly detailed, seamless texture, high quality, photorealistic",
-                  seed=0,
-                  randomize_seed=True,
-                  api_name="/infer"
-              )
+                  # Mengirimkan dict berisi background & mask layer ke Space
+                  result = client.predict(
+                      input_image={
+                          "background": handle_file(image_path),
+                          "layers": [handle_file(mask_path)]
+                      },
+                      prompt="clean background, highly detailed, seamless texture, photorealistic",
+                      api_name="/predict"
+                  )
 
-              # 'result' biasanya mengembalikan path lokal file gambar hasil dari Gradio API
-              if isinstance(result, tuple):
-                  result_file = result[0]
-              else:
-                  result_file = result
+                  # Menangani output format (tuple/list/string) dari Gradio API
+                  if isinstance(result, (list, tuple)):
+                      result_file = result[0]
+                  else:
+                      result_file = result
 
-              shutil.copy(result_file, output_path)
-              print(f"Hasil FLUX berhasil disimpan ke {output_path}")
+                  shutil.copy(result_file, output_path)
+                  print(f"Berhasil! Hasil FLUX disimpan ke {output_path}")
+
+              except Exception as e:
+                  print(f"Error saat memproses via FLUX Space: {e}")
+                  raise e
 
           if __name__ == "__main__":
               run_flux()
@@ -167,7 +171,7 @@ jobs:
 
           python flux_inpaint.py
 
-      # 7. Upload Hasil sebagai Artifact
+          
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
