@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'image.png'
+      - 'foto.jpg'
   workflow_dispatch:
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
           from ultralytics import SAM
 
           def main():
-              input_path = "image.png"
+              input_path = "foto.jpg"
               indir = "lama_input"
               os.makedirs(indir, exist_ok=True)
 
@@ -116,11 +116,11 @@ jobs:
               # Keep a copy at repo root too, for the artifact upload step
               cv2.imwrite("output_mask.png", refined_mask)
 
-              # Official lama predict.py pairs files by name: "image.png" +
+              # Official lama predict.py pairs files by name: "foto.jpg" +
               # "image_mask.png" living together in the same indir (this
               # exact naming is confirmed working via the authors' own
               # Colab notebook).
-              cv2.imwrite(os.path.join(indir, "image.png"), image_cv)
+              cv2.imwrite(os.path.join(indir, "foto.jpg"), image_cv)
               cv2.imwrite(os.path.join(indir, "image_mask.png"), refined_mask)
 
               print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa (big-lama, resolution-robust).")
@@ -154,18 +154,7 @@ jobs:
       #    doesn't silently pull a mismatched/CUDA build over it.
       - name: Install LaMa Dependencies
         run: |
-          # lama_repo/requirements.txt pins exact package versions from the
-          # 2020 / NumPy-1.x era. Several (scikit-image==0.17.2 in
-          # particular) rely on numpy.distutils and fail to build against
-          # modern setuptools/NumPy 2. Forcing NumPy back to 1.x isn't a
-          # clean fix either — opencv-python-headless (installed earlier)
-          # now hard-requires numpy>=2, so that just trades a build error
-          # for a runtime conflict.
-          #
-          # Instead we strip the exact version pins and let pip resolve
-          # current, prebuilt-wheel versions of each package — we don't need
-          # the literal 2020 versions, just ones that work with today's
-          # NumPy/Python.
+          
           sed -i -E 's/==[^[:space:]]+//' lama_repo/requirements.txt
           cat lama_repo/requirements.txt
           pip install -r lama_repo/requirements.txt
