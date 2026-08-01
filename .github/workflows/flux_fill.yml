@@ -123,48 +123,60 @@ jobs:
           import os
           import shutil
           from gradio_client import Client, handle_file
-
+          
           def run_flux():
               image_path = "foto.jpg"
               mask_path = "output_mask.png"
               output_path = "output_masked.png"
-
+          
               if not os.path.exists(mask_path):
                   print("Mask tidak ditemukan, menyalin gambar asli.")
                   shutil.copy(image_path, output_path)
                   return
-
+          
               hf_token = os.getenv("HF_TOKEN")
-              space_name = "ameerazam08/FLUX.1-dev-Inpainting-Model-Beta-GPU"
-
-              print(f"Mengirim request ke HF Space: {space_name}...")
-              
-              try:
-                  client = Client(space_name, token=hf_token if hf_token else None)
-
-                  # Mengirimkan dict berisi background & mask layer ke Space
-                  result = client.predict(
-                      input_image={
-                          "background": handle_file(image_path),
-                          "layers": [handle_file(mask_path)]
-                      },
-                      prompt="clean background, highly detailed, seamless texture, photorealistic",
-                      api_name="/predict"
-                  )
-
-                  # Menangani output format (tuple/list/string) dari Gradio API
-                  if isinstance(result, (list, tuple)):
-                      result_file = result[0]
-                  else:
-                      result_file = result
-
-                  shutil.copy(result_file, output_path)
-                  print(f"Berhasil! Hasil FLUX disimpan ke {output_path}")
-
-              except Exception as e:
-                  print(f"Error saat memproses via FLUX Space: {e}")
-                  raise e
-
+          
+              # Daftar Space FLUX Fill/Inpaint publik sebagai fallback jika ada yang 404/offline
+              spaces_to_try = [
+                  "black-forest-labs/FLUX.1-Fill-dev",
+                  "multimodalart/FLUX.1-Fill-dev",
+                  "fal/flux-fill-dev"
+              ]
+          
+              client = None
+              selected_space = None
+          
+              for space in spaces_to_try:
+                  try:
+                      print(f"Mencoba terhubung ke HF Space: {space}...")
+                      client = Client(space, token=hf_token if hf_token else None)
+                      selected_space = space
+                      break
+                  except Exception as e:
+                      print(f"Gagal terhubung ke {space}: {e}")
+          
+              if not client:
+                  raise RuntimeError("Semua Space HF FLUX yang dicoba tidak tersedia atau offline.")
+          
+              print(f"Berhasil terhubung ke {selected_space}. Memproses inpainting...")
+          
+              # Panggil fungsi inferensi
+              result = client.predict(
+                  image={"background": handle_file(image_path), "layers": [handle_file(mask_path)]},
+                  prompt="clean background, seamlessly filled, photo realistic, high detail",
+                  seed=0,
+                  randomize_seed=True,
+                  api_name="/infer"
+              )
+          
+              if isinstance(result, tuple):
+                  result_file = result[0]
+              else:
+                  result_file = result
+          
+              shutil.copy(result_file, output_path)
+              print(f"Hasil FLUX berhasil disimpan ke {output_path}")
+          
           if __name__ == "__main__":
               run_flux()
           EOF
