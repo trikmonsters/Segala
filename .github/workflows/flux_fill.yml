@@ -1,0 +1,178 @@
+name: Subtitle Detect, SAM2 Refine & FLUX Inpaint
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'foto.jpg'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # Berkurang drastis karena inpainting dilakukan di cloud HF
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Setup Python Environment
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. Install System Dependencies
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0
+
+      # 4. Install Python Dependencies
+      - name: Install Detection & API Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr opencv-python-headless pillow numpy ultralytics gradio_client
+
+      # 5. Detect subtitle + refine mask with SAM2
+      - name: Run Subtitle Detection & SAM2 Mask Refine
+        run: |
+          cat << 'EOF' > detect_and_mask.py
+          import os
+          import sys
+          import numpy as np
+          import cv2
+          import easyocr
+          from ultralytics import SAM
+
+          def main():
+              input_path = "foto.jpg"
+              if not os.path.exists(input_path):
+                  print(f"Error: File '{input_path}' tidak ditemukan!")
+                  sys.exit(1)
+
+              print("\n1. Mendeteksi lokasi subtitle/teks dengan EasyOCR...")
+              reader = easyocr.Reader(['en', 'id'], gpu=False)
+              results_ocr = reader.readtext(input_path)
+
+              bboxes = []
+              for (bbox, text, prob) in results_ocr:
+                  if prob > 0.15:
+                      pts = np.array(bbox, dtype=np.int32)
+                      x_min = int(np.min(pts[:, 0]))
+                      y_min = int(np.min(pts[:, 1]))
+                      x_max = int(np.max(pts[:, 0]))
+                      y_max = int(np.max(pts[:, 1]))
+
+                      h_pad = int((y_max - y_min) * 0.15)
+                      w_pad = int((x_max - x_min) * 0.05)
+
+                      bboxes.append([
+                          max(0, x_min - w_pad),
+                          max(0, y_min - h_pad),
+                          x_max + w_pad,
+                          y_max + h_pad
+                      ])
+                      print(f"Text terdeteksi: '{text}' (Confidence: {prob:.2f})")
+
+              image_cv = cv2.imread(input_path)
+              h, w, _ = image_cv.shape
+
+              if not bboxes:
+                  print("Tidak ada subtitle terdeteksi. Menyalin gambar asli sebagai output.")
+                  cv2.imwrite("output_masked.png", image_cv)
+                  cv2.imwrite("output_mask.png", np.zeros((h, w), dtype=np.uint8))
+                  sys.exit(0)
+
+              print(f"\n2. Memperhalus mask dengan SAM 2...")
+              sam_model = SAM("sam2_b.pt")
+
+              combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
+              results = sam_model(input_path, bboxes=bboxes, device="cpu")
+
+              for result in results:
+                  if result.masks is not None:
+                      for mask_tensor in result.masks.data:
+                          mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
+                          if mask_np.shape != (h, w):
+                              mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
+                          combined_sam2_mask |= mask_np
+
+              combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
+
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+              refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
+
+              cv2.imwrite("output_mask.png", refined_mask)
+              print("Mask berhasil dibuat: output_mask.png")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python detect_and_mask.py
+
+      # 6. Run Inpainting using FLUX via HF Space API
+      - name: Run FLUX Inpainting
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cat << 'EOF' > flux_inpaint.py
+          import os
+          import shutil
+          from gradio_client import Client, handle_file
+
+          def run_flux():
+              image_path = "foto.jpg"
+              mask_path = "output_mask.png"
+              output_path = "output_masked.png"
+
+              # Jika mask kosong / tidak ada area terdeteksi
+              if not os.path.exists(mask_path):
+                  print("Mask tidak ditemukan, menyalin gambar asli.")
+                  shutil.copy(image_path, output_path)
+                  return
+
+              print("Mengirim request ke FLUX Inpainting HF Space...")
+              
+              # Menggunakan Hugging Face Token jika tersedia
+              hf_token = os.getenv("HF_TOKEN")
+              
+              # Inisialisasi Gradio Client ke HF Space FLUX Fill / Inpaint
+              client = Client("fffiloni/FLUX.1-Fill-dev", hf_token=hf_token)
+
+              result = client.predict(
+                  image={"background": handle_file(image_path), "layers": [handle_file(mask_path)]},
+                  prompt="clean background, highly detailed, seamless texture, high quality, photorealistic",
+                  seed=0,
+                  randomize_seed=True,
+                  api_name="/infer"
+              )
+
+              # 'result' biasanya mengembalikan path lokal file gambar hasil dari Gradio API
+              if isinstance(result, tuple):
+                  result_file = result[0]
+              else:
+                  result_file = result
+
+              shutil.copy(result_file, output_path)
+              print(f"Hasil FLUX berhasil disimpan ke {output_path}")
+
+          if __name__ == "__main__":
+              run_flux()
+          EOF
+
+          python flux_inpaint.py
+
+      # 7. Upload Hasil sebagai Artifact
+      - name: Upload Output Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux-inpainted-result
+          path: |
+            output_masked.png
+            output_mask.png
+          retention-days: 3
