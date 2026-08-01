@@ -37,8 +37,7 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install easyocr opencv-python-headless pillow numpy ultralytics
 
-      # 5. Detect subtitle + refine mask with SAM2 (same as before, but write
-      #    output in the naming convention the official lama repo expects)
+      # 5. Detect subtitle + refine mask with SAM2
       - name: Run Subtitle Detection & SAM2 Mask Refine
         run: |
           cat << 'EOF' > detect_and_mask.py
@@ -113,17 +112,14 @@ jobs:
               kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
               refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
 
-              # Keep a copy at repo root too, for the artifact upload step
+              # Simpan copy mask ke root repository
               cv2.imwrite("output_mask.png", refined_mask)
 
-              # Official lama predict.py pairs files by name: "foto.jpg" +
-              # "image_mask.png" living together in the same indir (this
-              # exact naming is confirmed working via the authors' own
-              # Colab notebook).
+              # Pasangan nama file disesuaikan khusus untuk foto.jpg
               cv2.imwrite(os.path.join(indir, "foto.jpg"), image_cv)
-              cv2.imwrite(os.path.join(indir, "image_mask.png"), refined_mask)
+              cv2.imwrite(os.path.join(indir, "foto_mask.png"), refined_mask)
 
-              print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa (big-lama, resolution-robust).")
+              print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa.")
 
           if __name__ == "__main__":
               main()
@@ -131,55 +127,28 @@ jobs:
 
           python detect_and_mask.py
 
-      # 6. Clone the official advimman/lama repo (this is the actual
-      #    resolution-robust implementation, not the pip wrapper)
+      # 6. Clone official LaMa repository
       - name: Clone official LaMa repository
         run: |
           git clone https://github.com/advimman/lama.git lama_repo
-          # PyTorch 2.6+ flipped torch.load's default to weights_only=True.
-          # saicinpainting's load_checkpoint() calls torch.load(path,
-          # map_location=map_location) with no weights_only argument, and
-          # the big-lama checkpoint pickles a
-          # pytorch_lightning.callbacks.model_checkpoint.ModelCheckpoint
-          # object that isn't on the safe-globals allowlist. We trust this
-          # checkpoint (it's the official pretrained weights), so patch the
-          # call to explicitly opt back in to full unpickling.
+          # Patch torch.load untuk kompatibilitas PyTorch 2.6+
           sed -i \
             "s/torch.load(path, map_location=map_location)/torch.load(path, map_location=map_location, weights_only=False)/" \
             lama_repo/saicinpainting/training/trainers/__init__.py
           grep -n "torch.load" lama_repo/saicinpainting/training/trainers/__init__.py
 
-      # 7. Install LaMa's own dependencies. We already have a CPU torch/
-      #    torchvision installed above; reinstall it last so requirements.txt
-      #    doesn't silently pull a mismatched/CUDA build over it.
+      # 7. Install LaMa Dependencies
       - name: Install LaMa Dependencies
         run: |
-          
           sed -i -E 's/==[^[:space:]]+//' lama_repo/requirements.txt
           cat lama_repo/requirements.txt
           pip install -r lama_repo/requirements.txt
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --force-reinstall
           pip install wldhx.yadisk-direct
-          # saicinpainting/training/data/aug.py imports DualIAATransform,
-          # IAAAffine2, IAAPerspective2 — legacy imgaug-wrapper transforms
-          # that modern albumentations (1.0+) removed. Pin back to the
-          # version lama was actually written against; it's pure Python so
-          # it doesn't hit the build-isolation problems scikit-image had.
           pip install "albumentations==0.5.2" "imgaug>=0.4.0"
-          # imgaug (pulled in above for albumentations' legacy IAA*
-          # transforms) calls np.sctypes, which NumPy 2.0 removed entirely —
-          # imgaug hasn't been updated since 2020 and will never support
-          # NumPy 2. The newest opencv-python-headless releases hard-require
-          # numpy>=2, so pin an older 4.x build too; none of what we call
-          # (imread/cvtColor/resize/dilate/getStructuringElement) needs 5.x.
           pip install "numpy<2" "opencv-python-headless<5"
 
-      # 8. Download the real big-lama checkpoint (config + weights), not a
-      #    single traced .pt file. Official distribution lives on Yandex
-      #    Disk; wldhx.yadisk-direct resolves it to a direct download URL.
-      #    NOTE: this is the same link the authors' own Colab notebook uses.
-      #    If it ever goes stale, grab the current share link from
-      #    https://github.com/advimman/lama#inference- and swap it in below.
+      # 8. Download big-lama checkpoint
       - name: Download big-lama checkpoint
         run: |
           set -e
@@ -193,8 +162,6 @@ jobs:
               curl -fL --retry 3 -o big-lama.zip "$DIRECT_URL"
             else
               echo "ERROR: Tidak berhasil mengunduh checkpoint big-lama dari mirror manapun."
-              echo "Kemungkinan Yandex Disk memblokir IP GitHub Actions, atau link sudah kedaluwarsa."
-              echo "Cek issue terbaru di https://github.com/advimman/lama/issues untuk link mirror yang masih aktif, lalu update URL di step ini."
               exit 1
             fi
           fi
@@ -206,26 +173,17 @@ jobs:
         run: |
           export TORCH_HOME=$(pwd)
           export PYTHONPATH=$(pwd)/lama_repo
-          # NOTE: no refine=True here. The authors' own reference notebook
-          # (advimman/lama) runs plain predict.py with no refine flag —
-          # "resolution-robust" is a property of the FFC architecture and
-          # training curriculum itself, not something the refine flag turns
-          # on. refine=True is a separate, optional feature for images too
-          # large to fit in memory at once (tiled multi-scale inference),
-          # and it pulls in kornia in a code path we don't need here.
           python3 lama_repo/bin/predict.py \
             model.path=$(pwd)/big-lama \
             indir=$(pwd)/lama_input \
             outdir=$(pwd)/lama_output \
-            dataset.img_suffix=.png
+            dataset.img_suffix=.jpg
 
           echo "Isi lama_output/ :"
           ls -la lama_output/
-          # predict.py names each output after the MASK filename (not the
-          # original image filename) — confirmed by the reference notebook,
-          # which reads its result back as "{name}_mask.png". Our mask is
-          # "image_mask.png", so the output lands at lama_output/image_mask.png.
-          cp lama_output/image_mask.png output_masked.png
+          
+          # Karena mask dinamai foto_mask.png, LaMa akan menyimpan hasil ke lama_output/foto_mask.png
+          cp lama_output/foto_mask.png output_masked.png
 
       # 10. Upload Hasil sebagai Artifact
       - name: Upload Output Artifacts
