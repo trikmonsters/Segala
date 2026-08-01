@@ -124,6 +124,11 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          # 6. Run Inpainting using FLUX via HF Space API
+      - name: Run FLUX Inpainting
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
           cat << 'EOF' > flux_inpaint.py
           import os
           import shutil
@@ -147,20 +152,26 @@ jobs:
               try:
                   client = Client(space_name, token=hf_token if hf_token else None)
 
-                  # Mengirim gambar & mask sebagai dictionary sesuai skema Gradio ImageEditor
+                  # Format dict untuk komponen ImageEditor Gradio
                   image_data = {
                       "background": handle_file(image_path),
                       "layers": [handle_file(mask_path)]
                   }
                   
                   prompt_text = "clean background, seamlessly filled, photo realistic, high detail"
+                  negative_prompt = "text, watermark, low quality, blurry, artifacts, distortion"
 
                   print("Memproses inpainting...")
                   
-                  # Mengirim positional arguments ke fn_index=0 agar tidak terkendala nama parameter
+                  # Mengirimkan seluruh argumen yang dibutuhkan oleh endpoint
                   result = client.predict(
-                      image_data,     # Argumen ke-1: Gambar & Mask (ImageEditor)
-                      prompt_text,    # Argumen ke-2: Prompt Teks
+                      image_data,         # Argumen 1: dict Image & Mask
+                      prompt_text,        # Argumen 2: Prompt
+                      negative_prompt,    # Argumen 3: Negative Prompt
+                      30,                 # Argumen 4: num_inference_steps (int)
+                      7.5,                # Argumen 5: guidance_scale (float)
+                      0,                  # Argumen 6: seed (int)
+                      True,               # Argumen 7: randomize_seed (bool)
                       fn_index=0
                   )
 
