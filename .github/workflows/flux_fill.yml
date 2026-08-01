@@ -142,7 +142,7 @@ jobs:
               hf_token = os.getenv("HF_TOKEN")
               
               # Inisialisasi Gradio Client ke HF Space FLUX Fill / Inpaint
-              client = Client("fffiloni/FLUX.1-Fill-dev", hf_token=hf_token)
+              client = Client("fffiloni/FLUX.1-Fill-dev", token=hf_token)
 
               result = client.predict(
                   image={"background": handle_file(image_path), "layers": [handle_file(mask_path)]},
