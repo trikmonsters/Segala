@@ -11,7 +11,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # video jauh lebih berat dari image, sesuaikan sesuai panjang video
+    timeout-minutes: 360   # video jauh lebih berat dari image, sesuaikan sesuai panjang video
 
     steps:
       # 1. Checkout repository
