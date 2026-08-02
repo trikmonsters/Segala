@@ -1,6 +1,8 @@
 name: Detect and Crop Video Edge
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -19,149 +21,114 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg libsm6 libxext6 libxrender-dev libgomp1
+        sudo apt-get install -y ffmpeg
         
     - name: Install Python dependencies
       run: |
-        pip install ultralytics opencv-python-headless numpy
+        pip install opencv-python-headless numpy
         
     - name: Run detection and crop
       run: |
         python << 'EOF'
         import cv2
         import numpy as np
-        from ultralytics import YOLO
         import os
         import subprocess
 
-        def detect_video_edge_and_crop(input_path, output_path, model='yolov8n.pt'):
+        def find_video_borders(input_path):
             """
-            Detect video content edges and crop only the video portion
-            NO PADDING - Exact crop based on detection
+            Find the actual video content borders by detecting where pixels start changing
             """
-            # Load YOLO model
-            model = YOLO(model)
-            
-            # Open video
             cap = cv2.VideoCapture(input_path)
             
             if not cap.isOpened():
                 print(f"Error: Could not open video {input_path}")
-                return False
+                return None
             
-            # Get video properties
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
-            print(f"Video info: {width}x{height}, {total_frames} frames")
+            print(f"Video: {width}x{height}, {total_frames} frames")
             
-            # Collect crop coordinates from multiple frames
-            crop_coords_list = []
+            # Collect border positions from multiple frames
+            all_borders = []
             
-            # Sample frames to find consistent video area
-            frame_count = 0
-            sample_frames = min(30, total_frames)
+            # Sample frames (first, middle, last)
+            sample_positions = [0, total_frames // 4, total_frames // 2, 3 * total_frames // 4, total_frames - 1]
             
-            while frame_count < sample_frames:
+            for pos in sample_positions:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
                 ret, frame = cap.read()
                 if not ret:
-                    break
+                    continue
                 
-                # Detect objects in frame
-                results = model(frame)
-                
-                if len(results) > 0 and len(results[0].boxes) > 0:
-                    boxes = results[0].boxes.xyxy.cpu().numpy()
-                    
-                    # Get the largest detection (likely the main video content)
-                    if len(boxes) > 0:
-                        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-                        largest_box = boxes[np.argmax(areas)]
-                        
-                        x1, y1, x2, y2 = largest_box
-                        crop_coords_list.append((int(x1), int(y1), int(x2), int(y2)))
-                
-                frame_count += 1
-            
-            cap.release()
-            
-            if not crop_coords_list:
-                print("No objects detected. Using fallback edge detection.")
-                return detect_edge_fallback(input_path, output_path)
-            
-            # Calculate average crop coordinates
-            avg_x1 = int(np.mean([c[0] for c in crop_coords_list]))
-            avg_y1 = int(np.mean([c[1] for c in crop_coords_list]))
-            avg_x2 = int(np.mean([c[2] for c in crop_coords_list]))
-            avg_y2 = int(np.mean([c[3] for c in crop_coords_list]))
-            
-            # NO PADDING - Exact crop coordinates
-            x1 = avg_x1
-            y1 = avg_y1
-            x2 = avg_x2
-            y2 = avg_y2
-            
-            print(f"Detected video area (EXACT): ({x1}, {y1}) to ({x2}, {y2})")
-            
-            # Crop the video
-            return crop_video(input_path, output_path, x1, y1, x2, y2)
-
-        def detect_edge_fallback(input_path, output_path):
-            """
-            Fallback method: Use edge detection to find content boundaries
-            NO PADDING - Exact crop based on detection
-            """
-            cap = cv2.VideoCapture(input_path)
-            
-            # Sample frames for edge detection
-            edges_list = []
-            
-            for _ in range(10):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # Convert to grayscale
+                # Convert to grayscale for easier analysis
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 
-                # Apply Gaussian blur
-                blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+                # Find top border
+                top = 0
+                for y in range(height):
+                    # Check if row has significant pixel variation (not solid color)
+                    row = gray[y, :]
+                    if np.std(row) > 10:  # Significant variation means content
+                        top = y
+                        break
                 
-                # Detect edges
-                edges = cv2.Canny(blurred, 50, 150)
+                # Find bottom border
+                bottom = height - 1
+                for y in range(height - 1, -1, -1):
+                    row = gray[y, :]
+                    if np.std(row) > 10:
+                        bottom = y
+                        break
                 
-                # Find non-zero points
-                points = cv2.findNonZero(edges)
-                if points is not None:
-                    x, y, w, h = cv2.boundingRect(points)
-                    edges_list.append((x, y, x + w, y + h))
+                # Find left border
+                left = 0
+                for x in range(width):
+                    col = gray[:, x]
+                    if np.std(col) > 10:
+                        left = x
+                        break
+                
+                # Find right border
+                right = width - 1
+                for x in range(width - 1, -1, -1):
+                    col = gray[:, x]
+                    if np.std(col) > 10:
+                        right = x
+                        break
+                
+                all_borders.append((left, top, right, bottom))
+                print(f"Frame {pos}: Borders ({left}, {top}, {right}, {bottom})")
             
             cap.release()
             
-            if not edges_list:
-                print("Could not detect edges. Using full video.")
-                return False
+            if not all_borders:
+                print("No content detected")
+                return None
             
-            # Average the edge detection results
-            avg_x1 = int(np.mean([e[0] for e in edges_list]))
-            avg_y1 = int(np.mean([e[1] for e in edges_list]))
-            avg_x2 = int(np.mean([e[2] for e in edges_list]))
-            avg_y2 = int(np.mean([e[3] for e in edges_list]))
+            # Calculate average borders
+            avg_left = int(np.mean([b[0] for b in all_borders]))
+            avg_top = int(np.mean([b[1] for b in all_borders]))
+            avg_right = int(np.mean([b[2] for b in all_borders]))
+            avg_bottom = int(np.mean([b[3] for b in all_borders]))
             
-            # NO PADDING - Exact crop coordinates
-            x1 = avg_x1
-            y1 = avg_y1
-            x2 = avg_x2
-            y2 = avg_y2
+            # Add small margin to avoid cutting content
+            margin = 5
+            left = max(0, avg_left - margin)
+            top = max(0, avg_top - margin)
+            right = min(width, avg_right + margin)
+            bottom = min(height, avg_bottom + margin)
             
-            print(f"Edge detection found area (EXACT): ({x1}, {y1}) to ({x2}, {y2})")
+            print(f"\nFinal crop coordinates: ({left}, {top}, {right}, {bottom})")
+            print(f"Crop size: {right-left}x{bottom-top}")
             
-            return crop_video(input_path, output_path, x1, y1, x2, y2)
+            return (left, top, right, bottom)
 
         def crop_video(input_path, output_path, x1, y1, x2, y2):
             """
-            Crop video using ffmpeg for better quality
+            Crop video using ffmpeg
             """
             crop_width = x2 - x1
             crop_height = y2 - y1
@@ -192,32 +159,20 @@ jobs:
                 print(f"Error: Input file {input_file} not found")
                 return
             
-            print(f"Processing video: {input_file}")
+            print("Starting video border detection...")
+            crop_coords = find_video_borders(input_file)
             
-            # Try YOLO detection first
-            success = detect_video_edge_and_crop(input_file, output_file)
-            
-            if success:
-                print("Video cropping completed successfully!")
-                print(f"Output: {output_file}")
-            else:
-                print("Failed to crop video")
-                # Try with a different YOLO model
-                print("Retrying with YOLOv8m model...")
-                success = detect_video_edge_and_crop(input_file, output_file, model='yolov8m.pt')
+            if crop_coords:
+                x1, y1, x2, y2 = crop_coords
+                success = crop_video(input_file, output_file, x1, y1, x2, y2)
                 
                 if success:
-                    print("Video cropping completed successfully with YOLOv8m!")
+                    print("Video cropping completed successfully!")
+                    print(f"Output: {output_file}")
                 else:
-                    print("Failed to crop video with all methods")
-                    # Try with edge detection only
-                    print("Retrying with edge detection only...")
-                    success = detect_edge_fallback(input_file, output_file)
-                    
-                    if success:
-                        print("Video cropping completed successfully with edge detection!")
-                    else:
-                        print("Failed to crop video with all methods")
+                    print("Failed to crop video")
+            else:
+                print("Could not find video content borders")
 
         if __name__ == "__main__":
             main()
@@ -228,8 +183,3 @@ jobs:
       with:
         name: cropped-video
         path: output_cropped.mp4
-        
-    - name: Check file existence
-      run: |
-        echo "Checking output files:"
-        ls -la *.mp4 || echo "No MP4 files found"
