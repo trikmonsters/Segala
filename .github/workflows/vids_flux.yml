@@ -1,0 +1,320 @@
+name: Flux Remove Subtitle
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'video.mp4'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60   # video jauh lebih berat dari image, sesuaikan sesuai panjang video
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Setup Python
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. System deps (ffmpeg wajib untuk extract/reassemble video)
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libgl1 libglib2.0-0
+
+      # 4. Python deps
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr opencv-python-headless pillow numpy ultralytics gradio_client
+
+      # 5. Extract frames + audio dari video
+      - name: Extract Frames & Audio
+        run: |
+          mkdir -p frames masks output_frames
+          FPS=$(ffprobe -v 0 -of csv=p=0 -select_streams v:0 -show_entries stream=r_frame_rate video.mp4)
+          echo "Detected FPS: $FPS"
+          echo "$FPS" > fps.txt
+          ffmpeg -y -i video.mp4 -qscale:v 2 frames/frame_%06d.png
+          # Ambil audio asli (jika ada) untuk dipasang kembali nanti
+          ffmpeg -y -i video.mp4 -vn -acodec copy audio.aac || echo "Tidak ada audio track, skip."
+
+      # 6. Deteksi subtitle/watermark per frame + temporal smoothing box + refine mask SAM
+      - name: Detect Subtitle/Watermark & Build Temporally-Smoothed Masks
+        run: |
+          cat << 'EOF' > detect_and_mask.py
+          import os, glob, json
+          import numpy as np
+          import cv2
+          import easyocr
+          from ultralytics import SAM
+
+          def iou(a, b):
+              ax1, ay1, ax2, ay2 = a
+              bx1, by1, bx2, by2 = b
+              ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+              ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+              iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+              inter = iw * ih
+              area_a = (ax2 - ax1) * (ay2 - ay1)
+              area_b = (bx2 - bx1) * (by2 - by1)
+              union = area_a + area_b - inter
+              return inter / union if union > 0 else 0
+
+          def smooth_boxes(curr, prev, alpha=0.6):
+              """Exponential smoothing antar frame berdasarkan IoU match,
+              supaya box tidak 'goyang' antar frame -> mengurangi flicker di tepi mask."""
+              if not prev:
+                  return curr
+              smoothed = []
+              used_prev = set()
+              for c in curr:
+                  best_iou, best_idx = 0, -1
+                  for i, p in enumerate(prev):
+                      if i in used_prev:
+                          continue
+                      score = iou(c, p)
+                      if score > best_iou:
+                          best_iou, best_idx = score, i
+                  if best_iou > 0.3:
+                      p = prev[best_idx]
+                      used_prev.add(best_idx)
+                      blended = [
+                          alpha * c[k] + (1 - alpha) * p[k] for k in range(4)
+                      ]
+                      smoothed.append([int(v) for v in blended])
+                  else:
+                      smoothed.append(c)
+              return smoothed
+
+          def main():
+              frame_paths = sorted(glob.glob("frames/frame_*.png"))
+              if not frame_paths:
+                  print("Tidak ada frame ditemukan!")
+                  return
+
+              reader = easyocr.Reader(['en', 'id'], gpu=False)
+              sam_model = SAM("sam2_b.pt")
+
+              prev_boxes = []
+              all_boxes_per_frame = []
+
+              # --- Pass 1: deteksi + temporal box smoothing ---
+              for fp in frame_paths:
+                  results_ocr = reader.readtext(fp)
+                  h_img, w_img = cv2.imread(fp).shape[:2]
+                  curr_boxes = []
+                  for (bbox, text, prob) in results_ocr:
+                      if prob > 0.15:
+                          pts = np.array(bbox, dtype=np.int32)
+                          x_min, y_min = int(np.min(pts[:, 0])), int(np.min(pts[:, 1]))
+                          x_max, y_max = int(np.max(pts[:, 0])), int(np.max(pts[:, 1]))
+                          h_pad = int((y_max - y_min) * 0.15)
+                          w_pad = int((x_max - x_min) * 0.05)
+                          curr_boxes.append([
+                              max(0, x_min - w_pad), max(0, y_min - h_pad),
+                              min(w_img, x_max + w_pad), min(h_img, y_max + h_pad)
+                          ])
+
+                  # TODO: watermark umumnya bukan teks biasa (logo/gambar semi-transparan).
+                  # Jika watermark tidak selalu tertangkap OCR, tambahkan di sini deteksi
+                  # tambahan (mis. template matching terhadap crop watermark referensi,
+                  # atau model deteksi logo kecil yang di-finetune). Union-kan hasilnya
+                  # ke curr_boxes sebelum smoothing di bawah.
+
+                  curr_boxes = smooth_boxes(curr_boxes, prev_boxes)
+                  prev_boxes = curr_boxes
+                  all_boxes_per_frame.append(curr_boxes)
+
+              with open("boxes.json", "w") as f:
+                  json.dump(all_boxes_per_frame, f)
+
+              # --- Pass 2: SAM refine per frame + temporal mask smoothing (union t-1,t,t+1) ---
+              raw_masks = []
+              for fp, boxes in zip(frame_paths, all_boxes_per_frame):
+                  img = cv2.imread(fp)
+                  h, w = img.shape[:2]
+                  if not boxes:
+                      raw_masks.append(np.zeros((h, w), dtype=np.uint8))
+                      continue
+                  combined = np.zeros((h, w), dtype=np.uint8)
+                  results = sam_model(fp, bboxes=boxes, device="cpu")
+                  for result in results:
+                      if result.masks is not None:
+                          for mt in result.masks.data:
+                              m = mt.cpu().numpy().astype(np.uint8)
+                              if m.shape != (h, w):
+                                  m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+                              combined |= m
+                  raw_masks.append((combined * 255).astype(np.uint8))
+
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+              n = len(raw_masks)
+              for i in range(n):
+                  window = [raw_masks[j] for j in (i - 1, i, i + 1) if 0 <= j < n]
+                  fused = window[0].copy()
+                  for m in window[1:]:
+                      fused = cv2.bitwise_or(fused, m)
+                  fused = cv2.dilate(fused, kernel, iterations=1)
+                  out_path = f"masks/frame_{i+1:06d}.png"
+                  cv2.imwrite(out_path, fused)
+
+              print(f"Selesai. {n} mask frame dibuat di masks/")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python detect_and_mask.py
+
+      # 7. Inpainting per-frame dengan FLUX via HF Space (sesuai budget: gratis, CPU-only di runner)
+      #    Catatan: karena FLUX diproses independen tiap frame, ada langkah tambahan
+      #    (step 7b) untuk meredam flicker/bayangan secara CPU-only pakai optical flow blending.
+      - name: Run FLUX Inpainting per Frame
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cat << 'EOF' > flux_inpaint_video.py
+          import os, glob, shutil, time
+          from gradio_client import Client, handle_file
+
+          def main():
+              frame_paths = sorted(glob.glob("frames/frame_*.png"))
+              mask_paths = sorted(glob.glob("masks/frame_*.png"))
+              os.makedirs("inpainted_frames", exist_ok=True)
+
+              hf_token = os.getenv("HF_TOKEN")
+              space_name = "ameerazam08/FLUX.1-dev-Inpainting-Model-Beta-GPU"
+              client = Client(space_name, token=hf_token if hf_token else None)
+
+              prompt_text = "clean background, seamlessly filled, photo realistic, high detail"
+              negative_prompt = "text, watermark, low quality, blurry, artifacts, distortion"
+              strength_value = 0.85
+
+              import cv2
+              import numpy as np
+
+              for fp, mp in zip(frame_paths, mask_paths):
+                  out_path = os.path.join("inpainted_frames", os.path.basename(fp))
+                  mask_img = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
+
+                  # Kalau mask kosong (tidak ada subtitle/watermark terdeteksi di frame ini),
+                  # skip panggilan API -> hemat kuota Space gratis, copy frame asli saja.
+                  if mask_img is None or np.count_nonzero(mask_img) == 0:
+                      shutil.copy(fp, out_path)
+                      continue
+
+                  image_data = {
+                      "background": handle_file(fp),
+                      "layers": [handle_file(mp)]
+                  }
+
+                  try:
+                      result = client.predict(
+                          image_data,
+                          prompt_text,
+                          negative_prompt,
+                          strength_value,
+                          fn_index=0
+                      )
+                      result_file = result[0] if isinstance(result, (list, tuple)) else result
+                      shutil.copy(result_file, out_path)
+                      print(f"OK: {fp}")
+                  except Exception as e:
+                      print(f"Gagal inpaint {fp}: {e} -- fallback ke frame asli")
+                      shutil.copy(fp, out_path)
+
+                  # Jeda kecil supaya tidak membanjiri Space gratis (hindari rate limit/queue penuh)
+                  time.sleep(0.5)
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python flux_inpaint_video.py
+
+      # 7b. Temporal blending pasca-FLUX (CPU-only, pakai optical flow) untuk meredam
+      #     flicker/bayangan akibat tiap panggilan FLUX yang independen antar frame.
+      - name: Temporal Consistency Post-Processing
+        run: |
+          cat << 'EOF' > temporal_blend.py
+          import glob, os
+          import cv2
+          import numpy as np
+
+          def main():
+              inpainted = sorted(glob.glob("inpainted_frames/frame_*.png"))
+              masks = sorted(glob.glob("masks/frame_*.png"))
+              os.makedirs("output_frames", exist_ok=True)
+
+              prev_frame = None
+              prev_out = None
+
+              for i, (ip, mp) in enumerate(zip(inpainted, masks)):
+                  curr = cv2.imread(ip)
+                  mask = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
+                  mask_bin = (mask > 0).astype(np.uint8)
+
+                  if prev_frame is None or np.count_nonzero(mask_bin) == 0:
+                      out = curr
+                  else:
+                      prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                      curr_gray = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
+                      flow = cv2.calcOpticalFlowFarneback(
+                          prev_gray, curr_gray, None,
+                          0.5, 3, 15, 3, 5, 1.2, 0
+                      )
+                      h, w = curr_gray.shape
+                      grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
+                      map_x = (grid_x + flow[..., 0]).astype(np.float32)
+                      map_y = (grid_y + flow[..., 1]).astype(np.float32)
+                      warped_prev = cv2.remap(prev_out, map_x, map_y, cv2.INTER_LINEAR)
+
+                      mask_3c = cv2.merge([mask_bin] * 3).astype(np.float32)
+                      blended = (0.5 * curr.astype(np.float32) +
+                                 0.5 * warped_prev.astype(np.float32))
+                      out = (curr.astype(np.float32) * (1 - mask_3c) +
+                             blended * mask_3c).astype(np.uint8)
+
+                  out_path = f"output_frames/frame_{i+1:06d}.png"
+                  cv2.imwrite(out_path, out)
+                  prev_frame = curr
+                  prev_out = out
+
+              print(f"Selesai. {len(inpainted)} frame diblend di output_frames/")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python temporal_blend.py
+
+      # 8. Reassemble frame hasil FLUX + temporal blending jadi video, lalu pasang audio asli
+      - name: Reassemble Video & Mux Audio Back
+        run: |
+          FPS=$(cat fps.txt)
+          ffmpeg -y -framerate "$FPS" -i output_frames/frame_%06d.png -pix_fmt yuv420p output_video_noaudio.mp4
+
+          if [ -f audio.aac ]; then
+            ffmpeg -y -i output_video_noaudio.mp4 -i audio.aac -c:v copy -c:a copy -shortest output_final.mp4
+          else
+            cp output_video_noaudio.mp4 output_final.mp4
+          fi
+
+      - name: Upload Output Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-subtitle-watermark-removed
+          path: |
+            output_final.mp4
+            boxes.json
+          retention-days: 3
