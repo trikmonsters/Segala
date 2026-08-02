@@ -1,17 +1,22 @@
-name: Full Subtitle Detect, SAM2 Refine & Resolution-Robust LaMa Inpaint
+name: Subtitle Detect, SAM2 Refine & Resolution-Robust LaMa Inpaint (Image/Video)
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'foto.jpg'
+      - 'image.png'
   workflow_dispatch:
+    inputs:
+      test_seconds:
+        description: 'Proses hanya N detik pertama vids.mp4 untuk testing. Isi 0 (atau kosongkan) untuk proses FULL video.'
+        required: false
+        default: '10'
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # generous buffer for CPU-only inference
+    timeout-minutes: 350   # mendekati batas hard-limit 360 menit (6 jam) di GitHub-hosted runner
 
     steps:
       # 1. Checkout repository
@@ -24,11 +29,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 3. Install System Dependencies
+      # 3. Install System Dependencies (ffmpeg ditambahkan untuk extract/reassemble video)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0 unzip
+          sudo apt-get install -y libgl1 libglib2.0-0 unzip ffmpeg
 
       # 4. Install Python Dependencies for detection/mask refinement
       - name: Install Detection/SAM2 Dependencies
@@ -37,33 +42,73 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install easyocr opencv-python-headless pillow numpy ultralytics
 
-      # 5. Detect subtitle + refine mask with SAM2
-      - name: Run Subtitle Detection & SAM2 Mask Refine
+      # 5. Siapkan frame input: kalau vids.mp4 ada, extract semua frame + audio
+      #    lewat ffmpeg (dengan opsi trim untuk testing). Kalau tidak ada,
+      #    fallback ke mode single-image lama (image.png -> 1 frame).
+      - name: Prepare Input Frames
+        run: |
+          set -e
+          mkdir -p frames_in
+
+          if [ -f "vids.mp4" ]; then
+            echo "video" > mode.txt
+            echo "vids.mp4 ditemukan. Mode: VIDEO."
+
+            TEST_SECONDS="${{ github.event.inputs.test_seconds }}"
+            INPUT_VIDEO="vids.mp4"
+            if [ -n "$TEST_SECONDS" ] && [ "$TEST_SECONDS" != "0" ]; then
+              echo "Mode TEST: memproses $TEST_SECONDS detik pertama saja."
+              ffmpeg -y -i vids.mp4 -t "$TEST_SECONDS" -c copy vids_trimmed.mp4
+              INPUT_VIDEO="vids_trimmed.mp4"
+            else
+              echo "Mode FULL: memproses seluruh durasi video."
+            fi
+
+            # Simpan fps asli persis (termasuk fraksional seperti 30000/1001)
+            # supaya video hasil re-assemble kecepatannya identik.
+            FPS=$(ffprobe -v 0 -of csv=p=0 -select_streams v:0 -show_entries stream=r_frame_rate "$INPUT_VIDEO")
+            echo "$FPS" > fps.txt
+            echo "FPS terdeteksi: $FPS"
+
+            ffmpeg -y -i "$INPUT_VIDEO" frames_in/frame_%06d.png
+
+            # Extract audio track kalau ada, untuk dipasang lagi nanti.
+            ffmpeg -y -i "$INPUT_VIDEO" -vn -acodec copy audio_orig.aac \
+              || echo "Tidak ada audio track (atau gagal extract) — video hasil akan tanpa audio."
+
+          elif [ -f "image.png" ]; then
+            echo "image" > mode.txt
+            echo "vids.mp4 tidak ditemukan. Mode: SINGLE IMAGE (image.png)."
+            cp image.png frames_in/frame_000001.png
+
+          else
+            echo "Error: vids.mp4 atau image.png tidak ditemukan di root repo!"
+            exit 1
+          fi
+
+          echo "Total frame yang akan diproses: $(ls frames_in | wc -l)"
+
+      # 6. Detect subtitle + refine mask dengan SAM2, untuk SETIAP frame.
+      #    Model EasyOCR & SAM2 dimuat SEKALI saja lalu dipakai berulang untuk
+      #    semua frame (biar tidak reload berkali-kali per frame).
+      - name: Run Subtitle Detection & SAM2 Mask Refine (per frame)
         run: |
           cat << 'EOF' > detect_and_mask.py
           import os
           import sys
+          import glob
+          import time
           import numpy as np
           import cv2
           import easyocr
           from ultralytics import SAM
 
-          def main():
-              input_path = "foto.jpg"
-              indir = "lama_input"
-              os.makedirs(indir, exist_ok=True)
+          def process_frame(frame_path, reader, sam_model, indir):
+              name = os.path.splitext(os.path.basename(frame_path))[0]
+              image_cv = cv2.imread(frame_path)
+              h, w, _ = image_cv.shape
 
-              if not os.path.exists(input_path):
-                  print(f"Error: File '{input_path}' tidak ditemukan di root repository!")
-                  sys.exit(1)
-
-              device = "cpu"
-              print(f"Menggunakan device: {device}")
-
-              print("\n1. Mendeteksi lokasi subtitle/teks dengan EasyOCR...")
-              reader = easyocr.Reader(['en', 'id'], gpu=False)
-              results_ocr = reader.readtext(input_path)
-
+              results_ocr = reader.readtext(frame_path)
               bboxes = []
               for (bbox, text, prob) in results_ocr:
                   if prob > 0.15:
@@ -73,8 +118,8 @@ jobs:
                       x_max = int(np.max(pts[:, 0]))
                       y_max = int(np.max(pts[:, 1]))
 
-                      h_pad = int((y_max - y_min) * 0.15)
-                      w_pad = int((x_max - x_min) * 0.05)
+                      h_pad = int((y_max - y_min) * 0.30)
+                      w_pad = int((x_max - x_min) * 0.15)
 
                       bboxes.append([
                           max(0, x_min - w_pad),
@@ -82,44 +127,61 @@ jobs:
                           x_max + w_pad,
                           y_max + h_pad
                       ])
-                      print(f"Text terdeteksi: '{text}' (Confidence: {prob:.2f})")
-
-              image_cv = cv2.imread(input_path)
-              h, w, _ = image_cv.shape
 
               if not bboxes:
-                  print("Tidak ada subtitle terdeteksi. Menyalin gambar asli sebagai output.")
-                  cv2.imwrite("output_masked.png", image_cv)
-                  cv2.imwrite("output_mask.png", np.zeros((h, w), dtype=np.uint8))
-                  sys.exit(0)
+                  refined_mask = np.zeros((h, w), dtype=np.uint8)
+              else:
+                  combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
+                  results = sam_model(frame_path, bboxes=bboxes, device="cpu", verbose=False)
 
-              print(f"\n2. Memperhalus mask dengan SAM 2...")
-              sam_model = SAM("sam2_b.pt")
+                  for result in results:
+                      if result.masks is not None:
+                          for mask_tensor in result.masks.data:
+                              mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
+                              if mask_np.shape != (h, w):
+                                  mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
+                              combined_sam2_mask |= mask_np
 
-              combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
-              results = sam_model(input_path, bboxes=bboxes, device=device)
+                  combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
+                  kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+                  refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=2)
 
-              for result in results:
-                  if result.masks is not None:
-                      for mask_tensor in result.masks.data:
-                          mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
-                          if mask_np.shape != (h, w):
-                              mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
-                          combined_sam2_mask |= mask_np
+              # Official lama predict.py pairs files by name: "<name>.png" +
+              # "<name>_mask.png" living together in the same indir.
+              cv2.imwrite(os.path.join(indir, f"{name}.png"), image_cv)
+              cv2.imwrite(os.path.join(indir, f"{name}_mask.png"), refined_mask)
+              return len(bboxes)
 
-              combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
+          def main():
+              frames_dir = "frames_in"
+              indir = "lama_input"
+              os.makedirs(indir, exist_ok=True)
 
-              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-              refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=1)
+              frame_paths = sorted(glob.glob(os.path.join(frames_dir, "*.png")))
+              if not frame_paths:
+                  print("Error: tidak ada frame ditemukan di frames_in/")
+                  sys.exit(1)
 
-              # Simpan copy mask ke root repository
-              cv2.imwrite("output_mask.png", refined_mask)
+              total = len(frame_paths)
+              print(f"Total frame yang akan diproses: {total}")
+              print("Memuat model EasyOCR & SAM2 (sekali saja untuk semua frame)...")
+              reader = easyocr.Reader(['en', 'id'], gpu=False)
+              sam_model = SAM("sam2_l.pt")
 
-              # Pasangan nama file disesuaikan khusus untuk foto.jpg
-              cv2.imwrite(os.path.join(indir, "foto.jpg"), image_cv)
-              cv2.imwrite(os.path.join(indir, "foto_mask.png"), refined_mask)
+              t_start = time.time()
+              n_with_text = 0
+              for i, frame_path in enumerate(frame_paths, 1):
+                  t0 = time.time()
+                  n_boxes = process_frame(frame_path, reader, sam_model, indir)
+                  if n_boxes > 0:
+                      n_with_text += 1
+                  elapsed = time.time() - t0
+                  print(f"[{i}/{total}] {os.path.basename(frame_path)} - {n_boxes} teks terdeteksi - {elapsed:.2f}s")
 
-              print("\nMask siap di 'lama_input/' untuk diproses oleh LaMa.")
+              total_elapsed = time.time() - t_start
+              avg = total_elapsed / total
+              print(f"\nSelesai deteksi+mask untuk {total} frame dalam {total_elapsed:.1f}s (rata-rata {avg:.2f}s/frame).")
+              print(f"Frame dengan subtitle terdeteksi: {n_with_text}/{total}")
 
           if __name__ == "__main__":
               main()
@@ -127,28 +189,54 @@ jobs:
 
           python detect_and_mask.py
 
-      # 6. Clone official LaMa repository
+      # 7. Clone the official advimman/lama repo (implementasi resmi, bukan
+      #    pip wrapper simple_lama_inpainting)
       - name: Clone official LaMa repository
         run: |
           git clone https://github.com/advimman/lama.git lama_repo
-          # Patch torch.load untuk kompatibilitas PyTorch 2.6+
+          # PyTorch 2.6+ flipped torch.load's default to weights_only=True.
+          # saicinpainting's load_checkpoint() calls torch.load(path,
+          # map_location=map_location) with no weights_only argument, dan
+          # checkpoint big-lama mem-pickle objek
+          # pytorch_lightning.callbacks.model_checkpoint.ModelCheckpoint yang
+          # tidak ada di safe-globals allowlist. Kita percaya checkpoint ini
+          # (bobot resmi pretrained), jadi patch supaya eksplisit
+          # weights_only=False.
           sed -i \
             "s/torch.load(path, map_location=map_location)/torch.load(path, map_location=map_location, weights_only=False)/" \
             lama_repo/saicinpainting/training/trainers/__init__.py
           grep -n "torch.load" lama_repo/saicinpainting/training/trainers/__init__.py
 
-      # 7. Install LaMa Dependencies
+      # 8. Install LaMa's own dependencies.
       - name: Install LaMa Dependencies
         run: |
+          # lama_repo/requirements.txt pin versi persis dari era 2020/NumPy 1.x.
+          # Beberapa (scikit-image==0.17.2 khususnya) pakai numpy.distutils dan
+          # gagal build lawan setuptools/NumPy 2 modern. Kita strip pin versi
+          # persisnya dan biarkan pip resolve versi modern yang kompatibel.
           sed -i -E 's/==[^[:space:]]+//' lama_repo/requirements.txt
           cat lama_repo/requirements.txt
           pip install -r lama_repo/requirements.txt
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --force-reinstall
           pip install wldhx.yadisk-direct
+          # saicinpainting/training/data/aug.py mengimpor DualIAATransform,
+          # IAAAffine2, IAAPerspective2 — legacy imgaug-wrapper transforms
+          # yang sudah dihapus di albumentations modern (1.0+). Pin balik ke
+          # versi yang lama pakai; ini pure Python jadi tidak kena masalah
+          # build-isolation seperti scikit-image.
           pip install "albumentations==0.5.2" "imgaug>=0.4.0"
+          # saicinpainting/evaluation/refinement.py (jalur refine=True) pakai
+          # API kornia versi lama. kornia modern (1.x+) sudah banyak berubah
+          # struktur/nama fungsinya, jadi pin balik ke versi yang lama
+          # dipakai lama, sama seperti fix albumentations di atas.
+          pip install "kornia==0.5.0"
+          # imgaug (lewat albumentations di atas) masih pakai np.sctypes,
+          # yang dihapus total di NumPy 2.0. opencv-python-headless terbaru
+          # hard-require numpy>=2, jadi pin versi 4.x yang lebih lama juga.
           pip install "numpy<2" "opencv-python-headless<5"
 
-      # 8. Download big-lama checkpoint
+      # 9. Download checkpoint big-lama asli (config + weights, bukan file
+      #    .pt tunggal). Coba mirror Hugging Face dulu, fallback ke Yandex Disk.
       - name: Download big-lama checkpoint
         run: |
           set -e
@@ -162,35 +250,65 @@ jobs:
               curl -fL --retry 3 -o big-lama.zip "$DIRECT_URL"
             else
               echo "ERROR: Tidak berhasil mengunduh checkpoint big-lama dari mirror manapun."
+              echo "Cek issue terbaru di https://github.com/advimman/lama/issues untuk link mirror aktif."
               exit 1
             fi
           fi
           unzip -o big-lama.zip -d .
           ls -la big-lama
 
-      # 9. Run resolution-robust LaMa inpainting
-      - name: Run LaMa Inpainting
+      # 10. Jalankan LaMa SEKALI untuk seluruh dataset frame (model dimuat
+      #     sekali, lalu iterasi semua pasangan image+mask di lama_input/).
+      - name: Run LaMa Inpainting (batch semua frame)
         run: |
           export TORCH_HOME=$(pwd)
           export PYTHONPATH=$(pwd)/lama_repo
+          echo "Jumlah pasangan frame yang akan di-inpaint: $(ls lama_input/*.png | grep -v _mask | wc -l)"
+          # refine=True diaktifkan lagi: ini mekanisme LaMa untuk hasil tajam
+          # (bukan blur/smudge) di resolusi tinggi & area mask besar/kompleks
+          # — persis kasus yang kita alami di frame video ini. Konsekuensinya
+          # waktu proses per-frame naik.
           python3 lama_repo/bin/predict.py \
             model.path=$(pwd)/big-lama \
             indir=$(pwd)/lama_input \
             outdir=$(pwd)/lama_output \
-            dataset.img_suffix=.jpg
+            dataset.img_suffix=.png \
+            refine=True
+          echo "Isi lama_output/ (contoh 5 file pertama):"
+          ls lama_output/ | head -5
 
-          echo "Isi lama_output/ :"
-          ls -la lama_output/
-          
-          # Karena mask dinamai foto_mask.png, LaMa akan menyimpan hasil ke lama_output/foto_mask.png
-          cp lama_output/foto_mask.png output_masked.png
+      # 11. Reassemble: gabungkan frame hasil inpaint jadi video (+ audio
+      #     asli kalau ada), atau kalau mode single-image, cukup salin hasil.
+      - name: Reassemble Output
+        run: |
+          set -e
+          MODE=$(cat mode.txt)
+          if [ "$MODE" = "video" ]; then
+            FPS=$(cat fps.txt)
+            echo "Menggabungkan kembali frame menjadi video (fps=$FPS)..."
+            if [ -f audio_orig.aac ]; then
+              ffmpeg -y -framerate "$FPS" -i lama_output/frame_%06d_mask.png -i audio_orig.aac \
+                -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest output_video.mp4
+            else
+              ffmpeg -y -framerate "$FPS" -i lama_output/frame_%06d_mask.png \
+                -c:v libx264 -pix_fmt yuv420p output_video.mp4
+            fi
+            echo "Video hasil:"
+            ls -la output_video.mp4
+          else
+            cp lama_output/frame_000001_mask.png output_masked.png
+            cp lama_input/frame_000001_mask.png output_mask.png
+            echo "Gambar hasil: output_masked.png"
+          fi
 
-      # 10. Upload Hasil sebagai Artifact
+      # 12. Upload hasil sebagai artifact (video ATAU gambar, tergantung mode)
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lama-inpainted-result
+          name: subtitle-removed-result
           path: |
+            output_video.mp4
             output_masked.png
             output_mask.png
           retention-days: 7
+          if-no-files-found: ignore
