@@ -11,7 +11,7 @@ on:
       test_seconds:
         description: 'Proses hanya N detik pertama vids.mp4 untuk testing. Isi 0 (atau kosongkan) untuk proses FULL video.'
         required: false
-        default: '10'
+        default: '5'
 
 jobs:
   run-pipeline:
@@ -91,7 +91,18 @@ jobs:
       # 6. Detect subtitle + refine mask dengan SAM2, untuk SETIAP frame.
       #    Model EasyOCR & SAM2 dimuat SEKALI saja lalu dipakai berulang untuk
       #    semua frame (biar tidak reload berkali-kali per frame).
-      - name: Run Subtitle Detection & SAM2 Mask Refine (per frame)
+      #
+      #    Dijalankan 2 tahap:
+      #    Tahap 1: OCR di semua frame, simpan bounding box mentah per frame
+      #             (data ringan, cuma koordinat, bukan mask penuh).
+      #    Tahap 2: untuk tiap frame, gabungkan (union) box dari beberapa
+      #             frame TETANGGA (window ±TEMPORAL_WINDOW), baru jalankan
+      #             SAM2 pakai gabungan box itu. Ini bikin mask lebih stabil
+      #             antar-frame — kalau OCR sempat miss di 1 frame tapi kena
+      #             di frame sebelah/sesudahnya, area itu tetap ke-cover,
+      #             jadi nggak ada mask yang tiba-tiba muncul/hilang tiap
+      #             frame (itu yang menyebabkan flicker).
+      - name: Run Subtitle Detection & SAM2 Mask Refine (per frame, temporal-stabilized)
         run: |
           cat << 'EOF' > detect_and_mask.py
           import os
@@ -103,13 +114,19 @@ jobs:
           import easyocr
           from ultralytics import SAM
 
-          def process_frame(frame_path, reader, sam_model, indir):
-              name = os.path.splitext(os.path.basename(frame_path))[0]
+          # Window temporal: ambil deteksi dari frame ini +/- N frame
+          # tetangga sebelum digabung. Makin besar = makin stabil tapi makin
+          # "menahan" mask lebih lama dari yang seharusnya kalau teks
+          # beneran hilang. 2-3 biasanya pas untuk video 24-30fps.
+          TEMPORAL_WINDOW = 2
+
+          def detect_boxes(frame_path, reader):
+              """Tahap 1: deteksi teks mentah di 1 frame, return list bbox
+              [x1,y1,x2,y2] (sudah dikasih padding kecil)."""
               image_cv = cv2.imread(frame_path)
               h, w, _ = image_cv.shape
-
               results_ocr = reader.readtext(frame_path)
-              bboxes = []
+              boxes = []
               for (bbox, text, prob) in results_ocr:
                   if prob > 0.15:
                       pts = np.array(bbox, dtype=np.int32)
@@ -117,40 +134,59 @@ jobs:
                       y_min = int(np.min(pts[:, 1]))
                       x_max = int(np.max(pts[:, 0]))
                       y_max = int(np.max(pts[:, 1]))
-
                       h_pad = int((y_max - y_min) * 0.30)
                       w_pad = int((x_max - x_min) * 0.15)
-
-                      bboxes.append([
+                      boxes.append([
                           max(0, x_min - w_pad),
                           max(0, y_min - h_pad),
-                          x_max + w_pad,
-                          y_max + h_pad
+                          min(w, x_max + w_pad),
+                          min(h, y_max + h_pad),
                       ])
+              return boxes, (h, w)
 
-              if not bboxes:
-                  refined_mask = np.zeros((h, w), dtype=np.uint8)
-              else:
-                  combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
-                  results = sam_model(frame_path, bboxes=bboxes, device="cpu", verbose=False)
+          def merge_boxes(boxes, x_pad=5, y_pad=5):
+              """Gabungkan box yang tumpang tindih/berdekatan jadi 1 box
+              (union rectangle), supaya SAM2 tidak diproses berkali-kali
+              untuk box yang sebenarnya area yang sama."""
+              if not boxes:
+                  return []
+              boxes = [list(b) for b in boxes]
+              merged = True
+              while merged:
+                  merged = False
+                  for i in range(len(boxes)):
+                      for j in range(i + 1, len(boxes)):
+                          a, b = boxes[i], boxes[j]
+                          ax1, ay1, ax2, ay2 = a[0] - x_pad, a[1] - y_pad, a[2] + x_pad, a[3] + y_pad
+                          bx1, by1, bx2, by2 = b[0], b[1], b[2], b[3]
+                          if not (bx2 < ax1 or bx1 > ax2 or by2 < ay1 or by1 > ay2):
+                              boxes[i] = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                              boxes.pop(j)
+                              merged = True
+                              break
+                      if merged:
+                          break
+              return boxes
 
-                  for result in results:
-                      if result.masks is not None:
-                          for mask_tensor in result.masks.data:
-                              mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
-                              if mask_np.shape != (h, w):
-                                  mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
-                              combined_sam2_mask |= mask_np
+          def make_mask(frame_path, boxes, sam_model, h, w):
+              """Tahap 2: dari box (hasil gabungan window temporal), jalankan
+              SAM2 di frame ini untuk dapat mask presisi."""
+              if not boxes:
+                  return np.zeros((h, w), dtype=np.uint8)
 
-                  combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
-                  kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-                  refined_mask = cv2.dilate(combined_sam2_mask, kernel, iterations=2)
+              combined_sam2_mask = np.zeros((h, w), dtype=np.uint8)
+              results = sam_model(frame_path, bboxes=boxes, device="cpu", verbose=False)
+              for result in results:
+                  if result.masks is not None:
+                      for mask_tensor in result.masks.data:
+                          mask_np = mask_tensor.cpu().numpy().astype(np.uint8)
+                          if mask_np.shape != (h, w):
+                              mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
+                          combined_sam2_mask |= mask_np
 
-              # Official lama predict.py pairs files by name: "<name>.png" +
-              # "<name>_mask.png" living together in the same indir.
-              cv2.imwrite(os.path.join(indir, f"{name}.png"), image_cv)
-              cv2.imwrite(os.path.join(indir, f"{name}_mask.png"), refined_mask)
-              return len(bboxes)
+              combined_sam2_mask = (combined_sam2_mask * 255).astype(np.uint8)
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+              return cv2.dilate(combined_sam2_mask, kernel, iterations=2)
 
           def main():
               frames_dir = "frames_in"
@@ -163,25 +199,58 @@ jobs:
                   sys.exit(1)
 
               total = len(frame_paths)
-              print(f"Total frame yang akan diproses: {total}")
+              print(f"Total frame: {total}")
               print("Memuat model EasyOCR & SAM2 (sekali saja untuk semua frame)...")
               reader = easyocr.Reader(['en', 'id'], gpu=False)
               sam_model = SAM("sam2_l.pt")
 
-              t_start = time.time()
-              n_with_text = 0
+              # --- Tahap 1: OCR mentah di semua frame ---
+              print("\n[Tahap 1/2] Deteksi teks mentah di semua frame...")
+              t1 = time.time()
+              all_boxes = []   # all_boxes[i] = list bbox di frame ke-i
+              frame_shape = None
               for i, frame_path in enumerate(frame_paths, 1):
-                  t0 = time.time()
-                  n_boxes = process_frame(frame_path, reader, sam_model, indir)
-                  if n_boxes > 0:
-                      n_with_text += 1
-                  elapsed = time.time() - t0
-                  print(f"[{i}/{total}] {os.path.basename(frame_path)} - {n_boxes} teks terdeteksi - {elapsed:.2f}s")
+                  boxes, shape = detect_boxes(frame_path, reader)
+                  all_boxes.append(boxes)
+                  frame_shape = shape
+                  if i % 25 == 0 or i == total:
+                      print(f"  OCR [{i}/{total}] selesai")
+              print(f"Tahap 1 selesai dalam {time.time() - t1:.1f}s")
 
-              total_elapsed = time.time() - t_start
+              # --- Tahap 2: gabungkan window temporal + SAM2 per frame ---
+              print("\n[Tahap 2/2] SAM2 mask (pakai gabungan window temporal +/-"
+                    f"{TEMPORAL_WINDOW} frame) + tulis pasangan image/mask...")
+              t2 = time.time()
+              n_with_text = 0
+              for i, frame_path in enumerate(frame_paths):
+                  t0 = time.time()
+                  lo = max(0, i - TEMPORAL_WINDOW)
+                  hi = min(total, i + TEMPORAL_WINDOW + 1)
+                  window_boxes = []
+                  for j in range(lo, hi):
+                      window_boxes.extend(all_boxes[j])
+                  merged = merge_boxes(window_boxes)
+
+                  h, w = frame_shape
+                  refined_mask = make_mask(frame_path, merged, sam_model, h, w)
+                  if merged:
+                      n_with_text += 1
+
+                  name = os.path.splitext(os.path.basename(frame_path))[0]
+                  image_cv = cv2.imread(frame_path)
+                  cv2.imwrite(os.path.join(indir, f"{name}.png"), image_cv)
+                  cv2.imwrite(os.path.join(indir, f"{name}_mask.png"), refined_mask)
+
+                  elapsed = time.time() - t0
+                  idx = i + 1
+                  if idx % 10 == 0 or idx == total:
+                      print(f"  [{idx}/{total}] {os.path.basename(frame_path)} - {len(merged)} box (gabungan window) - {elapsed:.2f}s")
+
+              total_elapsed = time.time() - t2
               avg = total_elapsed / total
-              print(f"\nSelesai deteksi+mask untuk {total} frame dalam {total_elapsed:.1f}s (rata-rata {avg:.2f}s/frame).")
-              print(f"Frame dengan subtitle terdeteksi: {n_with_text}/{total}")
+              print(f"\nTahap 2 selesai dalam {total_elapsed:.1f}s (rata-rata {avg:.2f}s/frame).")
+              print(f"Frame dengan mask (setelah gabungan window): {n_with_text}/{total}")
+              print(f"\nTOTAL waktu deteksi+mask (tahap 1+2): {time.time() - t1:.1f}s")
 
           if __name__ == "__main__":
               main()
@@ -268,12 +337,17 @@ jobs:
           # (bukan blur/smudge) di resolusi tinggi & area mask besar/kompleks
           # — persis kasus yang kita alami di frame video ini. Konsekuensinya
           # waktu proses per-frame naik.
+          # refine=True defaultnya diset untuk GPU (refiner.gpu_ids berisi
+          # id GPU seperti "0,1"). Runner ini CPU-only (tidak ada CUDA), jadi
+          # kita override gpu_ids jadi kosong supaya refine_predict pakai
+          # devices=[cpu] alih-alih coba .to('cuda') dan crash.
           python3 lama_repo/bin/predict.py \
             model.path=$(pwd)/big-lama \
             indir=$(pwd)/lama_input \
             outdir=$(pwd)/lama_output \
             dataset.img_suffix=.png \
-            refine=True
+            refine=True \
+            refiner.gpu_ids=''
           echo "Isi lama_output/ (contoh 5 file pertama):"
           ls lama_output/ | head -5
 
