@@ -115,16 +115,8 @@ jobs:
 
           python detect_and_mask.py
 
-      - name: Run FLUX Inpainting
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          # 6. Run Inpainting using FLUX via HF Space API
-      - name: Run FLUX Inpainting
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          # 6. Run Inpainting using FLUX via HF Space API
+
+          
       - name: Run FLUX Inpainting
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -152,26 +144,20 @@ jobs:
               try:
                   client = Client(space_name, token=hf_token if hf_token else None)
 
-                  # Format dict untuk komponen ImageEditor Gradio
-                  image_data = {
-                      "background": handle_file(image_path),
-                      "layers": [handle_file(mask_path)]
-                  }
-                  
-                  prompt_text = "clean background, seamlessly filled, photo realistic, high detail"
-                  negative_prompt = "text, watermark, low quality, blurry, artifacts, distortion"
-
-                  print("Memproses inpainting...")
-                  
-                  # Mengirimkan seluruh argumen yang dibutuhkan oleh endpoint
+                  # Mengirimkan data sebagai dictionary kwargs lengkap
+                  # Keterangan:
+                  # - input_image: dict dengan background & mask layer
+                  # - prompt: instruksi penggantian/pembersihan
+                  # - negative_prompt: hal yang dihindari
+                  # - strength: kekuatan inpainting (0.0 - 1.0, misal: 0.85)
                   result = client.predict(
-                      image_data,         # Argumen 1: dict Image & Mask
-                      prompt_text,        # Argumen 2: Prompt
-                      negative_prompt,    # Argumen 3: Negative Prompt
-                      30,                 # Argumen 4: num_inference_steps (int)
-                      7.5,                # Argumen 5: guidance_scale (float)
-                      0,                  # Argumen 6: seed (int)
-                      True,               # Argumen 7: randomize_seed (bool)
+                      input_image={
+                          "background": handle_file(image_path),
+                          "layers": [handle_file(mask_path)]
+                      },
+                      prompt="clean background, seamlessly filled, photo realistic, high detail",
+                      negative_prompt="text, watermark, low quality, blurry, artifacts, distortion",
+                      strength=0.85,
                       fn_index=0
                   )
 
