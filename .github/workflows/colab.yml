@@ -1,76 +1,80 @@
-name: Run Code on Google Colab GPU
+name: Run AI job on Colab GPU
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
-  workflow_dispatch: # Memungkinkan Anda memicu manual dari tombol di GitHub UI
+    branches: [main]
 
 jobs:
-  execute-on-colab:
-    runs-on: ubuntu-latest
-
+  run-on-colab:
+    runs-on: ubuntu-latest   # Colab CLI hanya support Linux & macOS
     steps:
-    # 1. Ambil kode dari repositori GitHub Anda
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    # 2. Setup Python di lingkungan GitHub Actions runner (Sudah diperbaiki)
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    # 3. Autentikasi ke Google Cloud Platform (GCP)
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Install uv & Colab CLI
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv tool install google-colab-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-    # 4. Instal Google Colab CLI resmi
-    - name: Install Google Colab CLI
-      run: |
-        pip install google-colab-cli
+      - name: Restore Colab auth token (dari secret, hasil login manual sekali)
+        env:
+          COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
+        run: |
+          mkdir -p ~/.config/colab-cli
+          echo "$COLAB_TOKEN_JSON_B64" | base64 -d > ~/.config/colab-cli/token.json
 
-    - name: Run Script on Colab GPU
-      run: |
-        # Membuat file train.py langsung di runner untuk memastikan file pasti ada
-        cat << 'EOF' > train.py
-        import torch
-        import time
+      - name: Buat requirements.txt (inline, EOF)
+        run: |
+          cat > requirements.txt << 'EOF'
+          torch
+          transformers
+          accelerate
+          EOF
 
-        print("=== Memulai Pengecekan Hardware di Colab ===")
-        gpu_tersedia = torch.cuda.is_available()
-        print(f"Apakah GPU Terdeteksi? {gpu_tersedia}")
+      - name: Buat train.py (inline, EOF)
+        run: |
+          cat > train.py << 'EOF'
+          import torch
 
-        if gpu_tersedia:
-            nama_gpu = torch.cuda.get_device_name(0)
-            print(f"Model GPU: {nama_gpu}")
-            x = torch.randn(5000, 5000, device="cuda")
-            y = torch.randn(5000, 5000, device="cuda")
-            z = torch.matmul(x, y)
-            torch.cuda.synchronize()
-            with open("hasil_output.txt", "w") as f:
-                f.write(f"Eksekusi Sukses menggunakan GPU: {nama_gpu}\n")
-        else:
-            print("GPU tidak terdeteksi!")
-            with open("hasil_output.txt", "w") as f:
-                f.write("Eksekusi gagal menggunakan GPU.\n")
-        EOF
+          def main():
+              print("CUDA available:", torch.cuda.is_available())
+              if torch.cuda.is_available():
+                  print("GPU:", torch.cuda.get_device_name(0))
 
-        # Menjalankan colab setelah file dipastikan terbuat
-        colab run --gpu T4 train.py --keep -s sesi-otomatisasi
-        
-    # 6. Unduh file hasil output dari dalam virtual machine Colab ke GitHub runner
-    - name: Download Results from Colab
-      run: |
-        colab download -s sesi-otomatisasi hasil_output.txt ./hasil_output.txt
+              # ganti bagian ini dengan job AI kamu yang sesungguhnya
+              x = torch.rand(3, 3, device="cuda" if torch.cuda.is_available() else "cpu")
+              y = x @ x
+              print("Hasil hitung tensor:")
+              print(y)
 
-    # 7. Tampilkan isi file teks hasil di log GitHub Actions
-    - name: Display Output Log
-      run: cat ./hasil_output.txt
+              with open("output.txt", "w") as f:
+                  f.write(str(y.tolist()))
 
-    # 8. Hancurkan sesi runtime Colab agar unit komputasi (quota) Anda tidak terus berkurang
-    - name: Terminate Colab Session
-      if: always()
-      run: |
-        colab stop -s sesi-otomatisasi
+          if __name__ == "__main__":
+              main()
+          EOF
+
+      - name: Provision GPU, jalankan script, ambil hasil, matikan VM
+        run: |
+          colab new -s ciJob --gpu T4
+          colab install -s ciJob -r requirements.txt
+          colab exec -s ciJob -f train.py
+          colab download -s ciJob output.txt ./output.txt
+          colab log -s ciJob -o run_log.ipynb
+          colab stop -s ciJob
+
+      - name: Upload hasil sebagai artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: colab-output
+          path: |
+            output.txt
+            run_log.ipynb
