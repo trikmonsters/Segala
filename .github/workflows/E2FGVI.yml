@@ -1,0 +1,245 @@
+name: (E2FGVI) Realistic Video Watermark Removal
+
+on:
+    paths:
+      - 'video.mp4'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libgl1 libglib2.0-0
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install easyocr opencv-python-headless pillow numpy ultralytics onnxruntime
+
+      - name: Download E2FGVI Model
+        run: |
+          mkdir -p models
+          curl -L -o models/e2fgvi.onnx https://huggingface.co/onnx-community/e2fgvi-hq/resolve/main/model.onnx || \
+          wget -O models/e2fgvi.onnx https://huggingface.co/qualcomm/E2FGVI/resolve/main/e2fgvi.onnx
+
+      - name: Extract Frames & Audio
+        run: |
+          mkdir -p frames masks output_frames
+          FPS=$(ffprobe -v 0 -of csv=p=0 -select_streams v:0 -show_entries stream=r_frame_rate video.mp4)
+          echo "Detected FPS: $FPS"
+          echo "$FPS" > fps.txt
+          ffmpeg -y -i video.mp4 -qscale:v 2 frames/frame_%06d.png
+          ffmpeg -y -i video.mp4 -vn -acodec copy audio.aac || echo "Tidak ada audio track, skip."
+
+      - name: Detect Subtitle/Watermark & Build Precise Masks
+        env:
+          PYTHONWARNINGS: "ignore"
+        run: |
+          cat << 'EOF' > detect_and_mask.py
+          import os, glob, json
+          import numpy as np
+          import cv2
+          import easyocr
+          from ultralytics import SAM
+
+          def iou(a, b):
+              ax1, ay1, ax2, ay2 = a
+              bx1, by1, bx2, by2 = b
+              ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+              ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+              iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+              inter = iw * ih
+              area_a = (ax2 - ax1) * (ay2 - ay1)
+              area_b = (bx2 - bx1) * (by2 - by1)
+              union = area_a + area_b - inter
+              return inter / union if union > 0 else 0
+
+          def smooth_boxes(curr, prev, alpha=0.6):
+              if not prev:
+                  return curr
+              smoothed = []
+              used_prev = set()
+              for c in curr:
+                  best_iou, best_idx = 0, -1
+                  for i, p in enumerate(prev):
+                      if i in used_prev:
+                          continue
+                      score = iou(c, p)
+                      if score > best_iou:
+                          best_iou, best_idx = score, i
+                  if best_iou > 0.3:
+                      p = prev[best_idx]
+                      used_prev.add(best_idx)
+                      blended = [
+                          alpha * c[k] + (1 - alpha) * p[k] for k in range(4)
+                      ]
+                      smoothed.append([int(v) for v in blended])
+                  else:
+                      smoothed.append(c)
+              return smoothed
+
+          def main():
+              frame_paths = sorted(glob.glob("frames/frame_*.png"))
+              if not frame_paths:
+                  print("Tidak ada frame ditemukan!")
+                  return
+
+              reader = easyocr.Reader(['en', 'id'], gpu=False)
+              sam_model = SAM("sam2_b.pt")
+
+              prev_boxes = []
+              all_boxes_per_frame = []
+
+              for fp in frame_paths:
+                  results_ocr = reader.readtext(fp)
+                  h_img, w_img = cv2.imread(fp).shape[:2]
+                  curr_boxes = []
+                  for (bbox, text, prob) in results_ocr:
+                      if prob > 0.15:
+                          pts = np.array(bbox, dtype=np.int32)
+                          x_min, y_min = int(np.min(pts[:, 0])), int(np.min(pts[:, 1]))
+                          x_max, y_max = int(np.max(pts[:, 0])), int(np.max(pts[:, 1]))
+                          # Pad presisi agar mask tidak terlalu lebar mengenai warna sekitar
+                          h_pad = int((y_max - y_min) * 0.05)
+                          w_pad = int((x_max - x_min) * 0.02)
+                          curr_boxes.append([
+                              max(0, x_min - w_pad), max(0, y_min - h_pad),
+                              min(w_img, x_max + w_pad), min(h_img, y_max + h_pad)
+                          ])
+
+                  curr_boxes = smooth_boxes(curr_boxes, prev_boxes)
+                  prev_boxes = curr_boxes
+                  all_boxes_per_frame.append(curr_boxes)
+
+              raw_masks = []
+              for fp, boxes in zip(frame_paths, all_boxes_per_frame):
+                  img = cv2.imread(fp)
+                  h, w = img.shape[:2]
+                  if not boxes:
+                      raw_masks.append(np.zeros((h, w), dtype=np.uint8))
+                      continue
+                  combined = np.zeros((h, w), dtype=np.uint8)
+                  results = sam_model(fp, bboxes=boxes, device="cpu")
+                  for result in results:
+                      if result.masks is not None:
+                          for mt in result.masks.data:
+                              m = mt.cpu().numpy().astype(np.uint8)
+                              if m.shape != (h, w):
+                                  m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+                              combined |= m
+                  raw_masks.append((combined * 255).astype(np.uint8))
+
+              # Dilatasi minimal (2x2) agar garis batas objek sekitar tidak termakan mask
+              kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+              for i, raw_mask in enumerate(raw_masks):
+                  refined = cv2.dilate(raw_mask, kernel, iterations=1)
+                  out_path = f"masks/frame_{i+1:06d}.png"
+                  cv2.imwrite(out_path, refined)
+
+              print(f"Selesai. {len(raw_masks)} mask frame dibuat.")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python detect_and_mask.py
+
+      - name: Run High-Precision E2FGVI Inpainting
+        env:
+          PYTHONWARNINGS: "ignore"
+        run: |
+          cat << 'EOF' > e2fgvi_inpaint.py
+          import os, glob
+          import cv2
+          import numpy as np
+          import onnxruntime as ort
+
+          def main():
+              model_path = "models/e2fgvi.onnx"
+              if not os.path.exists(model_path):
+                  print("Model E2FGVI tidak ditemukan!")
+                  return
+
+              session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+              input_names = [inp.name for inp in session.get_inputs()]
+              output_name = session.get_outputs()[0].name
+
+              frame_paths = sorted(glob.glob("frames/frame_*.png"))
+              mask_paths = sorted(glob.glob("masks/frame_*.png"))
+              os.makedirs("output_frames", exist_ok=True)
+
+              for fp, mp in zip(frame_paths, mask_paths):
+                  out_path = os.path.join("output_frames", os.path.basename(fp))
+                  frame = cv2.imread(fp)
+                  mask = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
+
+                  if mask is None or np.count_nonzero(mask) == 0:
+                      cv2.imwrite(out_path, frame)
+                      continue
+
+                  h, w = frame.shape[:2]
+                  img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                  mask_bin = (mask > 0).astype(np.float32)
+
+                  img_t = np.transpose(img_rgb, (2, 0, 1))[None, ...]
+                  mask_t = mask_bin[None, None, ...]
+
+                  inputs = {input_names[0]: img_t, input_names[1]: mask_t}
+                  res = session.run([output_name], inputs)[0]
+
+                  res_img = np.clip(res[0], 0, 1) * 255.0
+                  res_img = np.transpose(res_img.astype(np.uint8), (1, 2, 0))
+                  res_bgr = cv2.cvtColor(res_img, cv2.COLOR_RGB2RGB if res_img.shape[-1]==3 else cv2.COLOR_RGBA2BGR)
+                  res_bgr = cv2.cvtColor(res_img, cv2.COLOR_RGB2BGR)
+
+                  # Hanya ganti piksel di dalam mask, biarkan piksel luar 100% asli dan tajam
+                  mask_3c = cv2.merge([mask_bin] * 3).astype(np.uint8)
+                  final_frame = np.where(mask_3c == 1, res_bgr, frame)
+
+                  cv2.imwrite(out_path, final_frame)
+
+              print("Selesai inpainting presisi tinggi dengan E2FGVI.")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python e2fgvi_inpaint.py
+
+      - name: Reassemble Video & Mux Audio Back
+        run: |
+          FPS=$(cat fps.txt)
+
+          ffmpeg -y -framerate "$FPS" -i output_frames/frame_%06d.png \
+            -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+            -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
+            output_video_noaudio.mp4
+
+          if [ -s audio.aac ]; then
+            ffmpeg -y -i output_video_noaudio.mp4 -i audio.aac \
+              -c:v copy -c:a aac -shortest output_final.mp4
+          else
+            cp output_video_noaudio.mp4 output_final.mp4
+          fi
+
+      - name: Upload Output Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-subtitle-watermark-removed
+          path: |
+            output_final.mp4
+          retention-days: 3
