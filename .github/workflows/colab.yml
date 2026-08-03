@@ -22,12 +22,12 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
 
-          # Install Colab CLI standar
+          # Install Colab CLI bawaan
           uv tool install google-colab-cli
 
-          # Perbaikan khusus untuk bug AttributeError: module 'jupyter_kernel_client' has no attribute 'KernelClient'
+          # Tembak venv uv dengan uv pip install (tanpa butuh pip)
           COLAB_VENV="$HOME/.local/share/uv/tools/google-colab-cli"
-          "$COLAB_VENV/bin/python" -m pip install "git+https://github.com/googlecolab/jupyter-kernel-client.git" --force-reinstall
+          uv pip install --python "$COLAB_VENV" "git+https://github.com/googlecolab/jupyter-kernel-client.git"
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
@@ -70,7 +70,7 @@ jobs:
 
       - name: Provision GPU, jalankan script, ambil hasil, matikan VM
         run: |
-          # Jaminan sesi di-stop jika terjadi kegagalan di tengah eksekusi
+          # Jaminan sesi di-stop jika terjadi kesalahan agar tidak menggantung
           trap 'colab stop -s ciJob || true' EXIT
 
           colab new -s ciJob --gpu T4
