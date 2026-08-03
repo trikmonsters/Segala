@@ -21,8 +21,20 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
-          uv tool install google-colab-cli
+
+          # Bersihkan cache uv supaya tidak menarik resolusi/paket lama yang basi
+          uv cache clean
+
+          # Install fresh, paksa reinstall semua dependency (termasuk jupyter-kernel-client)
+          uv tool install google-colab-cli --reinstall --force
+
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Debug - cek versi jupyter_kernel_client yang benar-benar terpasang
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          COLAB_TOOL_DIR="$HOME/.local/share/uv/tools/google-colab-cli"
+          "$COLAB_TOOL_DIR/bin/python" -c "import jupyter_kernel_client; print('path:', jupyter_kernel_client.__file__); print('has KernelClient:', hasattr(jupyter_kernel_client, 'KernelClient'))"
 
       - name: Restore Colab auth token (dari secret, hasil login manual sekali)
         env:
