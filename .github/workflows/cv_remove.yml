@@ -186,13 +186,20 @@ jobs:
 
           python fast_inpaint_video.py
 
-      - name: Reassemble Video & Mux Audio Back
+      - name: Reassemble Video & Mux Audio Back (Fixed Compatibility)
         run: |
           FPS=$(cat fps.txt)
-          ffmpeg -y -framerate "$FPS" -i output_frames/frame_%06d.png -pix_fmt yuv420p output_video_noaudio.mp4
 
-          if [ -f audio.aac ]; then
-            ffmpeg -y -i output_video_noaudio.mp4 -i audio.aac -c:v copy -c:a copy -shortest output_final.mp4
+          # 1. Rakit frame ke MP4 dengan codec H.264 standar & pastikan dimensi genap (pad=ceil...)
+          ffmpeg -y -framerate "$FPS" -i output_frames/frame_%06d.png \
+            -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+            -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
+            output_video_noaudio.mp4
+
+          # 2. Gabungkan audio asli jika ada dan ukurannya > 0 bytes
+          if [ -s audio.aac ]; then
+            ffmpeg -y -i output_video_noaudio.mp4 -i audio.aac \
+              -c:v copy -c:a aac -shortest output_final.mp4
           else
             cp output_video_noaudio.mp4 output_final.mp4
           fi
