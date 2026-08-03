@@ -1,6 +1,7 @@
 name: (E2FGVI) Realistic Video Watermark Removal
 
 on:
+  push:
     paths:
       - 'video.mp4'
   workflow_dispatch:
