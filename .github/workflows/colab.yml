@@ -1,0 +1,54 @@
+name: Run Code on Google Colab GPU
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Memungkinkan Anda memicu manual dari tombol di GitHub UI
+
+jobs:
+  execute-on-colab:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Ambil kode dari repositori GitHub Anda
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # 2. Setup Python di lingkungan GitHub Actions runner
+    - name: Set up Python
+      uses: actions/uses/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    # 3. Autentikasi ke Google Cloud Platform (GCP)
+    # Catatan: Colab CLI menggunakan Application Default Credentials (ADC) untuk login aman tanpa interaksi browser
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    # 4. Instal Google Colab CLI resmi
+    - name: Install Google Colab CLI
+      run: |
+        pip install google-colab-cli
+
+    # 5. Jalankan skrip di Colab dengan parameter `--gpu T4`
+    # Perintah 'colab run' otomatis memesan VM, menyalin train.py ke sana, mengeksekusinya, dan menghancurkan VM setelah selesai
+    - name: Run Script on Colab GPU
+      run: |
+        colab run --gpu T4 train.py --keep -s sesi-otomatisasi
+
+    # 6. Unduh file hasil output dari dalam virtual machine Colab ke GitHub runner
+    - name: Download Results from Colab
+      run: |
+        colab download -s sesi-otomatisasi hasil_output.txt ./hasil_output.txt
+
+    # 7. Tampilkan isi file teks hasil di log GitHub Actions
+    - name: Display Output Log
+      run: cat ./hasil_output.txt
+
+    # 8. Hancurkan sesi runtime Colab agar unit komputasi (quota) Anda tidak terus berkurang
+    - name: Terminate Colab Session
+      if: always()
+      run: |
+        colab stop -s sesi-otomatisasi
