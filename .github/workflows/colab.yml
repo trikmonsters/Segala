@@ -31,11 +31,35 @@ jobs:
       run: |
         pip install google-colab-cli
 
-    # 5. Jalankan skrip di Colab dengan parameter `--gpu T4`
     - name: Run Script on Colab GPU
       run: |
-        colab run --gpu T4 train.py --keep -s sesi-otomatisasi
+        # Membuat file train.py langsung di runner untuk memastikan file pasti ada
+        cat << 'EOF' > train.py
+        import torch
+        import time
 
+        print("=== Memulai Pengecekan Hardware di Colab ===")
+        gpu_tersedia = torch.cuda.is_available()
+        print(f"Apakah GPU Terdeteksi? {gpu_tersedia}")
+
+        if gpu_tersedia:
+            nama_gpu = torch.cuda.get_device_name(0)
+            print(f"Model GPU: {nama_gpu}")
+            x = torch.randn(5000, 5000, device="cuda")
+            y = torch.randn(5000, 5000, device="cuda")
+            z = torch.matmul(x, y)
+            torch.cuda.synchronize()
+            with open("hasil_output.txt", "w") as f:
+                f.write(f"Eksekusi Sukses menggunakan GPU: {nama_gpu}\n")
+        else:
+            print("GPU tidak terdeteksi!")
+            with open("hasil_output.txt", "w") as f:
+                f.write("Eksekusi gagal menggunakan GPU.\n")
+        EOF
+
+        # Menjalankan colab setelah file dipastikan terbuat
+        colab run --gpu T4 train.py --keep -s sesi-otomatisasi
+        
     # 6. Unduh file hasil output dari dalam virtual machine Colab ke GitHub runner
     - name: Download Results from Colab
       run: |
