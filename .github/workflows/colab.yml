@@ -25,8 +25,15 @@ jobs:
           # Bersihkan cache uv supaya tidak menarik resolusi/paket lama yang basi
           uv cache clean
 
-          # Install fresh, paksa reinstall semua dependency (termasuk jupyter-kernel-client)
-          uv tool install google-colab-cli --reinstall --force
+          # PENTING (root cause terkonfirmasi dari pyproject.toml resmi mereka):
+          # google-colab-cli mengunci jupyter-kernel-client ke fork resmi Google lewat
+          # [tool.uv.sources], TAPI mapping ini hanya terbaca kalau di-resolve dari
+          # source tree GitHub-nya langsung -- TIDAK ikut ke metadata wheel yang
+          # dipublish ke PyPI. Jadi "uv tool install google-colab-cli" (dari PyPI,
+          # sesuai README) salah tarik "jupyter-kernel-client" versi datalayer di PyPI
+          # yang API-nya beda -> AttributeError: no attribute 'KernelClient'.
+          # Fix: install langsung dari source GitHub supaya [tool.uv.sources] terbaca.
+          uv tool install --reinstall --force "git+https://github.com/googlecolab/google-colab-cli"
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
