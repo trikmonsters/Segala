@@ -14,14 +14,13 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # 2. Setup Python di lingkungan GitHub Actions runner
+    # 2. Setup Python di lingkungan GitHub Actions runner (Sudah diperbaiki)
     - name: Set up Python
-      uses: actions/uses/setup-python@v5
+      uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
     # 3. Autentikasi ke Google Cloud Platform (GCP)
-    # Catatan: Colab CLI menggunakan Application Default Credentials (ADC) untuk login aman tanpa interaksi browser
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
@@ -33,7 +32,6 @@ jobs:
         pip install google-colab-cli
 
     # 5. Jalankan skrip di Colab dengan parameter `--gpu T4`
-    # Perintah 'colab run' otomatis memesan VM, menyalin train.py ke sana, mengeksekusinya, dan menghancurkan VM setelah selesai
     - name: Run Script on Colab GPU
       run: |
         colab run --gpu T4 train.py --keep -s sesi-otomatisasi
