@@ -11,12 +11,12 @@ on:
       test_seconds:
         description: 'Proses hanya N detik pertama vids.mp4 untuk testing. Isi 0 (atau kosongkan) untuk proses FULL video.'
         required: false
-        default: '5'
+        default: '10'
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # mendekati batas hard-limit 360 menit (6 jam) di GitHub-hosted runner
+    timeout-minutes: 360   # mendekati batas hard-limit 360 menit (6 jam) di GitHub-hosted runner
 
     steps:
       # 1. Checkout repository
@@ -333,21 +333,19 @@ jobs:
           export TORCH_HOME=$(pwd)
           export PYTHONPATH=$(pwd)/lama_repo
           echo "Jumlah pasangan frame yang akan di-inpaint: $(ls lama_input/*.png | grep -v _mask | wc -l)"
-          # refine=True diaktifkan lagi: ini mekanisme LaMa untuk hasil tajam
-          # (bukan blur/smudge) di resolusi tinggi & area mask besar/kompleks
-          # — persis kasus yang kita alami di frame video ini. Konsekuensinya
-          # waktu proses per-frame naik.
-          # refine=True defaultnya diset untuk GPU (refiner.gpu_ids berisi
-          # id GPU seperti "0,1"). Runner ini CPU-only (tidak ada CUDA), jadi
-          # kita override gpu_ids jadi kosong supaya refine_predict pakai
-          # devices=[cpu] alih-alih coba .to('cuda') dan crash.
+          # refine=True DIHAPUS: setelah cek langsung source code
+          # saicinpainting/evaluation/refinement.py, fungsi refine_predict
+          # hard-code bikin device "cuda:{id}" dari gpu_ids — literally
+          # tidak ada jalur kode untuk CPU sama sekali (bukan soal
+          # config/env, tapi keterbatasan implementasi resminya). GitHub
+          # Actions runner tidak punya GPU, jadi refine=True tidak akan
+          # pernah bisa jalan di sini. Kualitas kita andalkan dari mask yang
+          # presisi (SAM2 large + padding/dilasi + temporal window) saja.
           python3 lama_repo/bin/predict.py \
             model.path=$(pwd)/big-lama \
             indir=$(pwd)/lama_input \
             outdir=$(pwd)/lama_output \
-            dataset.img_suffix=.png \
-            refine=True \
-            refiner.gpu_ids=''
+            dataset.img_suffix=.png
           echo "Isi lama_output/ (contoh 5 file pertama):"
           ls lama_output/ | head -5
 
