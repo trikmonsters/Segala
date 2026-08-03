@@ -7,7 +7,7 @@ on:
 
 jobs:
   run-on-colab:
-    runs-on: ubuntu-latest   # Colab CLI hanya support Linux & macOS
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -17,33 +17,21 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install uv & Colab CLI
+      - name: Install uv & Fix Colab CLI
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
 
-          # Bersihkan cache uv supaya tidak menarik resolusi/paket lama yang basi
-          uv cache clean
+          # Install Colab CLI standar
+          uv tool install google-colab-cli
 
-          # PENTING (root cause terkonfirmasi dari pyproject.toml resmi mereka):
-          # google-colab-cli mengunci jupyter-kernel-client ke fork resmi Google lewat
-          # [tool.uv.sources], TAPI mapping ini hanya terbaca kalau di-resolve dari
-          # source tree GitHub-nya langsung -- TIDAK ikut ke metadata wheel yang
-          # dipublish ke PyPI. Jadi "uv tool install google-colab-cli" (dari PyPI,
-          # sesuai README) salah tarik "jupyter-kernel-client" versi datalayer di PyPI
-          # yang API-nya beda -> AttributeError: no attribute 'KernelClient'.
-          # Fix: install langsung dari source GitHub supaya [tool.uv.sources] terbaca.
-          uv tool install --reinstall --force "git+https://github.com/googlecolab/google-colab-cli"
+          # Perbaikan khusus untuk bug AttributeError: module 'jupyter_kernel_client' has no attribute 'KernelClient'
+          COLAB_VENV="$HOME/.local/share/uv/tools/google-colab-cli"
+          "$COLAB_VENV/bin/python" -m pip install "git+https://github.com/googlecolab/jupyter-kernel-client.git" --force-reinstall
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Debug - cek versi jupyter_kernel_client yang benar-benar terpasang
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          COLAB_TOOL_DIR="$HOME/.local/share/uv/tools/google-colab-cli"
-          "$COLAB_TOOL_DIR/bin/python" -c "import jupyter_kernel_client; print('path:', jupyter_kernel_client.__file__); print('has KernelClient:', hasattr(jupyter_kernel_client, 'KernelClient'))"
-
-      - name: Restore Colab auth token (dari secret, hasil login manual sekali)
+      - name: Restore Colab auth token
         env:
           COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
         run: |
@@ -68,7 +56,6 @@ jobs:
               if torch.cuda.is_available():
                   print("GPU:", torch.cuda.get_device_name(0))
 
-              # ganti bagian ini dengan job AI kamu yang sesungguhnya
               x = torch.rand(3, 3, device="cuda" if torch.cuda.is_available() else "cpu")
               y = x @ x
               print("Hasil hitung tensor:")
@@ -83,17 +70,21 @@ jobs:
 
       - name: Provision GPU, jalankan script, ambil hasil, matikan VM
         run: |
+          # Jaminan sesi di-stop jika terjadi kegagalan di tengah eksekusi
+          trap 'colab stop -s ciJob || true' EXIT
+
           colab new -s ciJob --gpu T4
           colab install -s ciJob -r requirements.txt
           colab exec -s ciJob -f train.py
-          colab download -s ciJob output.txt ./output.txt
-          colab log -s ciJob -o run_log.ipynb
-          colab stop -s ciJob
+          colab download -s ciJob output.txt ./output.txt || true
+          colab log -s ciJob -o run_log.ipynb || true
 
       - name: Upload hasil sebagai artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: colab-output
           path: |
             output.txt
             run_log.ipynb
+          if-no-files-found: warn
