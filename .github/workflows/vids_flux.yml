@@ -1,4 +1,4 @@
-name: Flux Remove Subtitle
+name: Video Subtitle/Watermark Removal (Temporal-Consistent)
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # video jauh lebih berat dari image, sesuaikan sesuai panjang video
+    timeout-minutes: 60   # video jauh lebih berat dari image, sesuaikan sesuai panjang video
 
     steps:
       # 1. Checkout repository
@@ -35,7 +35,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install easyocr opencv-python-headless pillow numpy ultralytics gradio_client
+          pip install easyocr opencv-python-headless pillow numpy ultralytics requests
 
       # 5. Extract frames + audio dari video
       - name: Extract Frames & Audio
@@ -176,71 +176,126 @@ jobs:
 
           python detect_and_mask.py
 
-      # 7. Inpainting per-frame dengan FLUX via HF Space (sesuai budget: gratis, CPU-only di runner)
-      #    Catatan: karena FLUX diproses independen tiap frame, ada langkah tambahan
-      #    (step 7b) untuk meredam flicker/bayangan secara CPU-only pakai optical flow blending.
-      - name: Run FLUX Inpainting per Frame
+      # 7. Inpainting per-frame dengan Cloudflare Workers AI (free tier, tanpa GPU sendiri)
+      #    PENTING: cek nama model inpainting terbaru di
+      #    https://developers.cloudflare.com/workers-ai/models/ sebelum run,
+      #    Cloudflare bisa menambah/mengganti nama model image-to-image/inpainting.
+      - name: Run Cloudflare Workers AI Inpainting per Frame
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: |
-          cat << 'EOF' > flux_inpaint_video.py
+          cat << 'EOF' > cf_inpaint_video.py
           import os, glob, shutil, time
-          from gradio_client import Client, handle_file
+          import requests
+          import cv2
+          import numpy as np
+
+          CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID")
+          CF_API_TOKEN = os.getenv("CF_API_TOKEN")
+          # Verifikasi model ini masih tersedia & namanya belum berubah sebelum run.
+          MODEL = "@cf/runwayml/stable-diffusion-v1-5-inpainting"
+          API_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{MODEL}"
+
+          PROMPT = "clean background, seamlessly filled, photo realistic, high detail"
+          NEGATIVE_PROMPT = "text, watermark, low quality, blurry, artifacts, distortion"
+          TARGET_SIZE = 512  # ukuran crop yang dikirim ke model, sesuaikan dgn batas model
+
+          def call_cf_inpaint(image_bytes, mask_bytes, retries=4):
+              payload = {
+                  "prompt": PROMPT,
+                  "negative_prompt": NEGATIVE_PROMPT,
+                  "image": list(image_bytes),
+                  "mask": list(mask_bytes),
+                  "num_steps": 20,
+                  "strength": 0.85,
+                  "guidance": 7.5,
+              }
+              headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+              for attempt in range(retries):
+                  resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
+                  if resp.status_code == 200:
+                      return resp.content
+                  if resp.status_code == 429:
+                      wait = 5 * (attempt + 1)
+                      print(f"Kena rate limit, tunggu {wait}s...")
+                      time.sleep(wait)
+                      continue
+                  print(f"Error {resp.status_code}: {resp.text[:300]}")
+                  break
+              return None
+
+          def get_bbox_from_mask(mask, pad_ratio=0.3):
+              ys, xs = np.where(mask > 0)
+              if len(xs) == 0:
+                  return None
+              x1, x2 = xs.min(), xs.max()
+              y1, y2 = ys.min(), ys.max()
+              w, h = x2 - x1, y2 - y1
+              pad_w, pad_h = int(w * pad_ratio), int(h * pad_ratio)
+              return (max(0, x1 - pad_w), max(0, y1 - pad_h),
+                      min(mask.shape[1], x2 + pad_w), min(mask.shape[0], y2 + pad_h))
 
           def main():
               frame_paths = sorted(glob.glob("frames/frame_*.png"))
               mask_paths = sorted(glob.glob("masks/frame_*.png"))
               os.makedirs("inpainted_frames", exist_ok=True)
 
-              hf_token = os.getenv("HF_TOKEN")
-              space_name = "ameerazam08/FLUX.1-dev-Inpainting-Model-Beta-GPU"
-              client = Client(space_name, token=hf_token if hf_token else None)
-
-              prompt_text = "clean background, seamlessly filled, photo realistic, high detail"
-              negative_prompt = "text, watermark, low quality, blurry, artifacts, distortion"
-              strength_value = 0.85
-
-              import cv2
-              import numpy as np
-
               for fp, mp in zip(frame_paths, mask_paths):
                   out_path = os.path.join("inpainted_frames", os.path.basename(fp))
-                  mask_img = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
+                  frame = cv2.imread(fp)
+                  mask = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
 
-                  # Kalau mask kosong (tidak ada subtitle/watermark terdeteksi di frame ini),
-                  # skip panggilan API -> hemat kuota Space gratis, copy frame asli saja.
-                  if mask_img is None or np.count_nonzero(mask_img) == 0:
+                  if mask is None or np.count_nonzero(mask) == 0:
                       shutil.copy(fp, out_path)
                       continue
 
-                  image_data = {
-                      "background": handle_file(fp),
-                      "layers": [handle_file(mp)]
-                  }
-
-                  try:
-                      result = client.predict(
-                          image_data,
-                          prompt_text,
-                          negative_prompt,
-                          strength_value,
-                          fn_index=0
-                      )
-                      result_file = result[0] if isinstance(result, (list, tuple)) else result
-                      shutil.copy(result_file, out_path)
-                      print(f"OK: {fp}")
-                  except Exception as e:
-                      print(f"Gagal inpaint {fp}: {e} -- fallback ke frame asli")
+                  bbox = get_bbox_from_mask(mask)
+                  if bbox is None:
                       shutil.copy(fp, out_path)
+                      continue
+                  x1, y1, x2, y2 = bbox
 
-                  # Jeda kecil supaya tidak membanjiri Space gratis (hindari rate limit/queue penuh)
-                  time.sleep(0.5)
+                  crop_img = frame[y1:y2, x1:x2]
+                  crop_mask = mask[y1:y2, x1:x2]
+                  crop_img_resized = cv2.resize(crop_img, (TARGET_SIZE, TARGET_SIZE))
+                  crop_mask_resized = cv2.resize(crop_mask, (TARGET_SIZE, TARGET_SIZE))
+
+                  ok1, img_enc = cv2.imencode(".png", crop_img_resized)
+                  ok2, mask_enc = cv2.imencode(".png", crop_mask_resized)
+                  if not (ok1 and ok2):
+                      shutil.copy(fp, out_path)
+                      continue
+
+                  result_bytes = call_cf_inpaint(img_enc.tobytes(), mask_enc.tobytes())
+
+                  if result_bytes:
+                      arr = np.frombuffer(result_bytes, dtype=np.uint8)
+                      result_crop = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                      if result_crop is not None:
+                          result_crop = cv2.resize(result_crop, (x2 - x1, y2 - y1))
+                          # Blend halus di tepi crop supaya sambungan tidak terlihat
+                          crop_mask_full = crop_mask.astype(np.float32) / 255.0
+                          crop_mask_full = cv2.merge([crop_mask_full] * 3)
+                          blended_region = (
+                              result_crop.astype(np.float32) * crop_mask_full +
+                              frame[y1:y2, x1:x2].astype(np.float32) * (1 - crop_mask_full)
+                          ).astype(np.uint8)
+                          frame[y1:y2, x1:x2] = blended_region
+                          print(f"OK: {fp}")
+                      else:
+                          print(f"Decode gagal untuk {fp}, pakai frame asli di area itu")
+                  else:
+                      print(f"Gagal inpaint {fp}, fallback ke frame asli")
+
+                  cv2.imwrite(out_path, frame)
+                  time.sleep(1)  # jaga rate limit free tier
 
           if __name__ == "__main__":
               main()
           EOF
 
-          python flux_inpaint_video.py
+          python cf_inpaint_video.py
 
       # 7b. Temporal blending pasca-FLUX (CPU-only, pakai optical flow) untuk meredam
       #     flicker/bayangan akibat tiap panggilan FLUX yang independen antar frame.
