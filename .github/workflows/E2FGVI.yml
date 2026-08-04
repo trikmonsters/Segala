@@ -31,12 +31,22 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install easyocr opencv-python-headless pillow numpy ultralytics onnxruntime
 
-      - name: Download E2FGVI Model
+      - name: Download E2FGVI Model (Direct LFS Link)
         run: |
           mkdir -p models
-          curl -L -o models/e2fgvi.onnx https://huggingface.co/onnx-community/e2fgvi-hq/resolve/main/model.onnx || \
-          wget -O models/e2fgvi.onnx https://huggingface.co/qualcomm/E2FGVI/resolve/main/e2fgvi.onnx
-
+          echo "Mengunduh E2FGVI ONNX asli..."
+          # Gunakan link direct LFS Hugging Face
+          curl -L -o models/e2fgvi.onnx "https://huggingface.co/onnx-community/e2fgvi-hq/resolve/main/onnx/model.onnx?download=true"
+          
+          # Validasi ukuran file (E2FGVI ONNX harus berkisar 30MB - 50MB)
+          FILESIZE=$(stat -c%s "models/e2fgvi.onnx" || echo 0)
+          echo "Ukuran file terunduh: $FILESIZE bytes"
+          if [ $FILESIZE -lt 10000000 ]; then
+            echo "Error: File E2FGVI corrupt/terlalu kecil!"
+            exit 1
+          fi
+          echo "Model E2FGVI ONNX berhasil diunduh!"
+          
       - name: Extract Frames & Audio
         run: |
           mkdir -p frames masks output_frames
