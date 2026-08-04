@@ -32,6 +32,15 @@ jobs:
           pip install ffmpeg-python basicsr facexlib gfpgan
           python setup.py develop
 
+      - name: Patch BasicSR for Torchvision Compatibility
+        run: |
+          # Perbaikan error ModuleNotFoundError: torchvision.transforms.functional_tensor
+          DEGRAD_FILE=$(python -c "import site; print(site.getsitepackages()[0])")/basicsr/data/degradations.py
+          if [ -f "$DEGRAD_FILE" ]; then
+            sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/g' "$DEGRAD_FILE"
+            echo "Patching BasicSR selesai!"
+          fi
+
       - name: Download Model Weights (RealESRGAN_x4plus & GFPGAN)
         run: |
           cd Real-ESRGAN
