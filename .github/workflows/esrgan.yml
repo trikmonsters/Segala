@@ -1,0 +1,82 @@
+name: Video Upscale RealESRGAN x4plus
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # Izin untuk membuat GitHub Release dan mengunggah video
+
+jobs:
+  enhance-video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install System Dependencies (FFmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Clone Real-ESRGAN & Install Python Packages
+        run: |
+          git clone https://github.com/xinntao/Real-ESRGAN.git
+          cd Real-ESRGAN
+          pip install -r requirements.txt
+          pip install ffmpeg-python basicsr facexlib gfpgan
+          python setup.py develop
+
+      - name: Download Model Weights (RealESRGAN_x4plus & GFPGAN)
+        run: |
+          cd Real-ESRGAN
+          wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth -P weights/
+          wget -q https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth -P gfpgan/weights/
+
+      - name: Prepare Input Video
+        run: |
+          mkdir -p Real-ESRGAN/inputs
+          mkdir -p Real-ESRGAN/results
+          cp video.mp4 Real-ESRGAN/inputs/video.mp4
+
+      - name: Run RealESRGAN x4plus
+        run: |
+          cd Real-ESRGAN
+          python inference_realesrgan_video.py \
+            -i inputs/video.mp4 \
+            -n RealESRGAN_x4plus \
+            -o results/ \
+            -s 4 \
+            -t 256 \
+            --num_process_per_gpu 1 \
+            --face_enhance
+
+      - name: Post-Process Color & Sharpness (FFmpeg)
+        run: |
+          cd Real-ESRGAN
+          ffmpeg -y -i results/video_out.mp4 -i inputs/video.mp4 \
+            -vf "unsharp=5:5:0.8:5:5:0.0,eq=saturation=1.2:contrast=1.05" \
+            -c:v libx264 -preset fast -pix_fmt yuv420p \
+            -c:a copy -map 0:v:0 -map 1:a:0? results/ULTRA_CLEAR_video.mp4
+
+      - name: Delete Old Tag & Release (If Exists)
+        run: |
+          gh release delete v1.0-result --yes || true
+          git push --delete origin v1.0-result || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Direct MP4 Video to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0-result
+          name: "Hasil Upscale Video Ultra Clear"
+          body: "Berikut adalah video mp4 hasil perbaikan tanpa zip."
+          files: Real-ESRGAN/results/ULTRA_CLEAR_video.mp4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
