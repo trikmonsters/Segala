@@ -1,43 +1,34 @@
 name: Run AI job on Colab GPU
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
 jobs:
   run-on-colab:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install uv & Fix Colab CLI
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
-
           # Install Colab CLI bawaan
           uv tool install google-colab-cli
-
           # Tembak venv uv dengan uv pip install (tanpa butuh pip)
           COLAB_VENV="$HOME/.local/share/uv/tools/google-colab-cli"
           uv pip install --python "$COLAB_VENV" "git+https://github.com/googlecolab/jupyter-kernel-client.git"
-
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Restore Colab auth token
         env:
           COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
         run: |
           mkdir -p ~/.config/colab-cli
           echo "$COLAB_TOKEN_JSON_B64" | base64 -d > ~/.config/colab-cli/token.json
-
       - name: Buat requirements.txt (inline, EOF)
         run: |
           cat > requirements.txt << 'EOF'
@@ -45,40 +36,41 @@ jobs:
           transformers
           accelerate
           EOF
-
       - name: Buat train.py (inline, EOF)
         run: |
           cat > train.py << 'EOF'
+          import os
           import torch
-
           def main():
               print("CUDA available:", torch.cuda.is_available())
               if torch.cuda.is_available():
                   print("GPU:", torch.cuda.get_device_name(0))
-
               x = torch.rand(3, 3, device="cuda" if torch.cuda.is_available() else "cpu")
               y = x @ x
               print("Hasil hitung tensor:")
               print(y)
-
-              with open("output.txt", "w") as f:
+              out_path = os.path.join(os.getcwd(), "output.txt")
+              with open(out_path, "w") as f:
                   f.write(str(y.tolist()))
-
+              print("File ditulis ke:", out_path)
           if __name__ == "__main__":
               main()
           EOF
-
       - name: Provision GPU, jalankan script, ambil hasil, matikan VM
         run: |
           # Jaminan sesi di-stop jika terjadi kesalahan agar tidak menggantung
           trap 'colab stop -s ciJob || true' EXIT
-
           colab new -s ciJob --gpu T4
           colab install -s ciJob -r requirements.txt
           colab exec -s ciJob -f train.py
+
+          # Debug: cek cwd & isi folder di remote kernel supaya tahu
+          # path absolut yang benar untuk 'colab download'
+          echo "=== cwd & file list di remote kernel ==="
+          colab exec -s ciJob -c "import os; print('cwd:', os.getcwd()); print('files:', os.listdir('.'))"
+
           colab download -s ciJob output.txt ./output.txt || true
           colab log -s ciJob -o run_log.ipynb || true
-
       - name: Upload hasil sebagai artifact
         if: always()
         uses: actions/upload-artifact@v4
