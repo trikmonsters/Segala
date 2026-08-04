@@ -60,9 +60,8 @@ jobs:
             -i inputs/video.mp4 \
             -n RealESRGAN_x4plus \
             -o results/ \
-            -s 4 \
+            -s 2 \
             -t 256 \
-            --cpu \
             --face_enhance
 
       - name: Post-Process Color & Sharpness (FFmpeg)
