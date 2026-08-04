@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # Izin untuk membuat GitHub Release dan mengunggah video
+  contents: write
 
 jobs:
   enhance-video:
@@ -34,7 +34,6 @@ jobs:
 
       - name: Patch BasicSR for Torchvision Compatibility
         run: |
-          # Perbaikan error ModuleNotFoundError: torchvision.transforms.functional_tensor
           DEGRAD_FILE=$(python -c "import site; print(site.getsitepackages()[0])")/basicsr/data/degradations.py
           if [ -f "$DEGRAD_FILE" ]; then
             sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/g' "$DEGRAD_FILE"
@@ -53,16 +52,17 @@ jobs:
           mkdir -p Real-ESRGAN/results
           cp video.mp4 Real-ESRGAN/inputs/video.mp4
 
-      - name: Run RealESRGAN x4plus
+      - name: Run RealESRGAN x4plus (CPU Mode)
         run: |
           cd Real-ESRGAN
+          # Menggunakan flag --cpu untuk menghindari error multiprocessing di environment CPU
           python inference_realesrgan_video.py \
             -i inputs/video.mp4 \
             -n RealESRGAN_x4plus \
             -o results/ \
             -s 4 \
             -t 256 \
-            --num_process_per_gpu 1 \
+            --cpu \
             --face_enhance
 
       - name: Post-Process Color & Sharpness (FFmpeg)
