@@ -16,7 +16,7 @@ on:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # mendekati batas hard-limit 360 menit (6 jam) di GitHub-hosted runner
+    timeout-minutes: 350   # mendekati batas hard-limit 360 menit (6 jam) di GitHub-hosted runner
 
     steps:
       # 1. Checkout repository
@@ -28,7 +28,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
+          
       # 3. Install System Dependencies (ffmpeg ditambahkan untuk extract/reassemble video)
       - name: Install System Dependencies
         run: |
@@ -304,19 +304,34 @@ jobs:
           # hard-require numpy>=2, jadi pin versi 4.x yang lebih lama juga.
           pip install "numpy<2" "opencv-python-headless<5"
 
-      # 9. Download checkpoint big-lama asli (config + weights, bukan file
-      #    .pt tunggal). Coba mirror Hugging Face dulu, fallback ke Yandex Disk.
+      # 9. Cache checkpoint big-lama antar-run. Sekali berhasil download,
+      #    run-run berikutnya tinggal restore dari cache (instan), jadi tidak
+      #    kena masalah network flaky ini lagi tiap kali testing berulang.
+      - name: Cache big-lama checkpoint
+        id: cache-big-lama
+        uses: actions/cache@v4
+        with:
+          path: big-lama
+          key: big-lama-checkpoint-v1
+
+      # 10. Download checkpoint big-lama asli (config + weights) HANYA kalau
+      #     belum ada di cache. Coba mirror Hugging Face dulu, fallback ke
+      #     Yandex Disk. Timeout per percobaan dipersingkat supaya kalau
+      #     koneksi macet, curl cepat nyerah & retry alih-alih nunggu lama.
       - name: Download big-lama checkpoint
+        if: steps.cache-big-lama.outputs.cache-hit != 'true'
         run: |
           set -e
-          echo "Mencoba mirror Hugging Face (smartywu/big-lama)..."
-          if curl -fL --retry 3 -o big-lama.zip https://huggingface.co/smartywu/big-lama/resolve/main/big-lama.zip; then
+          echo "Cache miss, mencoba mirror Hugging Face (smartywu/big-lama)..."
+          if curl -fL --connect-timeout 15 --max-time 180 --retry 3 --retry-delay 5 \
+              -o big-lama.zip https://huggingface.co/smartywu/big-lama/resolve/main/big-lama.zip; then
             echo "Berhasil unduh dari Hugging Face mirror."
           else
             echo "Mirror Hugging Face gagal atau tidak tersedia. Mencoba link resmi Yandex Disk..."
             DIRECT_URL=$(yadisk-direct https://disk.yandex.ru/d/ouP6l8VJ0HpMZg 2>/dev/null || true)
             if [ -n "$DIRECT_URL" ]; then
-              curl -fL --retry 3 -o big-lama.zip "$DIRECT_URL"
+              curl -fL --connect-timeout 15 --max-time 180 --retry 3 --retry-delay 5 \
+                -o big-lama.zip "$DIRECT_URL"
             else
               echo "ERROR: Tidak berhasil mengunduh checkpoint big-lama dari mirror manapun."
               echo "Cek issue terbaru di https://github.com/advimman/lama/issues untuk link mirror aktif."
@@ -326,7 +341,7 @@ jobs:
           unzip -o big-lama.zip -d .
           ls -la big-lama
 
-      # 10. Jalankan LaMa SEKALI untuk seluruh dataset frame (model dimuat
+      # 11. Jalankan LaMa SEKALI untuk seluruh dataset frame (model dimuat
       #     sekali, lalu iterasi semua pasangan image+mask di lama_input/).
       - name: Run LaMa Inpainting (batch semua frame)
         run: |
@@ -349,7 +364,7 @@ jobs:
           echo "Isi lama_output/ (contoh 5 file pertama):"
           ls lama_output/ | head -5
 
-      # 11. Reassemble: gabungkan frame hasil inpaint jadi video (+ audio
+      # 12. Reassemble: gabungkan frame hasil inpaint jadi video (+ audio
       #     asli kalau ada), atau kalau mode single-image, cukup salin hasil.
       - name: Reassemble Output
         run: |
@@ -373,7 +388,7 @@ jobs:
             echo "Gambar hasil: output_masked.png"
           fi
 
-      # 12. Upload hasil sebagai artifact (video ATAU gambar, tergantung mode)
+      # 13. Upload hasil sebagai artifact (video ATAU gambar, tergantung mode)
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
