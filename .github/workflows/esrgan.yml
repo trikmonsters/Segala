@@ -1,4 +1,4 @@
-name: Video Upscale RealESRGAN x4plus
+name: Video Upscale RealESRGAN General x4v3 (Face Enhance)
 on:
   workflow_dispatch:
 permissions:
@@ -9,14 +9,17 @@ jobs:
     steps:
       - name: Checkout Repository Code
         uses: actions/checkout@v4
+
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Install System Dependencies (FFmpeg)
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+
       - name: Clone Real-ESRGAN & Install Python Packages
         run: |
           git clone https://github.com/xinntao/Real-ESRGAN.git
@@ -24,6 +27,7 @@ jobs:
           pip install -r requirements.txt
           pip install ffmpeg-python basicsr facexlib gfpgan
           python setup.py develop
+
       - name: Patch BasicSR for Torchvision Compatibility
         run: |
           DEGRAD_FILE=$(python -c "import site; print(site.getsitepackages()[0])")/basicsr/data/degradations.py
@@ -31,44 +35,76 @@ jobs:
             sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/g' "$DEGRAD_FILE"
             echo "Patching BasicSR selesai!"
           fi
+
       - name: Patch Real-ESRGAN for CPU-only Environment
         run: |
           cd Real-ESRGAN
+          # Patch 1: paksa num_gpus minimal 1 agar tidak Pool(0)
           sed -i 's/num_gpus = torch.cuda.device_count()/num_gpus = max(1, torch.cuda.device_count())/' inference_realesrgan_video.py
-      - name: Download Model Weights (RealESRGAN_x4plus & GFPGAN)
+
+          # Patch 2: bungkus semua torch.cuda.synchronize() dengan cek is_available()
+          python3 - <<'EOF'
+          import re
+          path = "inference_realesrgan_video.py"
+          with open(path, "r") as f:
+              content = f.read()
+          pattern = re.compile(r"^(\s*)torch\.cuda\.synchronize\((.*)\)\s*$", re.MULTILINE)
+          def repl(m):
+              indent, arg = m.group(1), m.group(2)
+              return f"{indent}if torch.cuda.is_available():\n{indent}    torch.cuda.synchronize({arg})"
+          new_content, n = pattern.subn(repl, content)
+          print(f"Patched {n} occurrence(s) of torch.cuda.synchronize")
+          with open(path, "w") as f:
+              f.write(new_content)
+          EOF
+
+      - name: Download Model Weights (realesr-general-x4v3 & GFPGAN)
         run: |
           cd Real-ESRGAN
-          wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth -P weights/
+          mkdir -p weights gfpgan/weights
+          # Model utama (ringan, cepat di CPU)
+          wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth -P weights/
+          # Wajib ada untuk mendukung opsi -dn (denoise strength interpolation)
+          wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth -P weights/
+          # Model face enhance
           wget -q https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth -P gfpgan/weights/
+
       - name: Prepare Input Video
         run: |
           mkdir -p Real-ESRGAN/inputs
           mkdir -p Real-ESRGAN/results
           cp video.mp4 Real-ESRGAN/inputs/video.mp4
-      - name: Run RealESRGAN x4plus (CPU Mode)
+
+      - name: Run RealESRGAN General x4v3 + Face Enhance (CPU Mode)
         run: |
           cd Real-ESRGAN
           python inference_realesrgan_video.py \
             -i inputs/video.mp4 \
-            -n RealESRGAN_x4plus \
+            -n realesr-general-x4v3 \
             -o results/ \
             -s 2 \
+            -dn 0.7 \
             -t 256 \
             --fp32 \
-            
-      - name: Post-Process Color & Sharpness (FFmpeg)
+            --face_enhance
+
+      - name: Post-Process Denoise & Sharpness (FFmpeg)
         run: |
           cd Real-ESRGAN
+          # Tahap 1: hqdn3d membersihkan noise/artefak halus dulu (tanpa menghilangkan detail besar)
+          # Tahap 2: baru unsharp menajamkan di atas gambar yang sudah bersih -> tajam tapi tidak ikut menajamkan noise
           ffmpeg -y -i results/video_out.mp4 -i inputs/video.mp4 \
-            -vf "unsharp=5:5:0.8:5:5:0.0,eq=saturation=1.2:contrast=1.05" \
+            -vf "hqdn3d=2:1.5:3:2,unsharp=5:5:1.2:5:5:0.0,eq=saturation=1.15:contrast=1.05" \
             -c:v libx264 -preset fast -pix_fmt yuv420p \
             -c:a copy -map 0:v:0 -map 1:a:0? results/ULTRA_CLEAR_video.mp4
+
       - name: Delete Old Tag & Release (If Exists)
         run: |
           gh release delete v1.0-result --yes || true
           git push --delete origin v1.0-result || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish Direct MP4 Video to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
