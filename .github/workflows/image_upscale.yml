@@ -4,9 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '*.png'
-      - '*.jpg'
-      - '*.jpeg'
+      - 'agri.jpg'
 
 permissions:
   contents: write
@@ -17,18 +15,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Detect input image in root
-        id: detect
-        run: |
-          FILE=$(find . -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) | head -n 1)
-          if [ -z "$FILE" ]; then
-            echo "Tidak ada file gambar (.png/.jpg/.jpeg) ditemukan di root!" >&2
-            exit 1
-          fi
-          FILE=${FILE#./}
-          echo "input_file=$FILE" >> "$GITHUB_OUTPUT"
-          echo "Ditemukan: $FILE"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -48,20 +34,23 @@ jobs:
 
       - name: Upscale image (tiled, memory-safe)
         env:
-          INPUT_FILE: ${{ steps.detect.outputs.input_file }}
+          INPUT_FILE: agri.jpg
+          PYTHONUNBUFFERED: "1"
         run: |
-          python - <<'EOF'
+          python -u - <<'EOF'
           import os
           import torch
           from spandrel import ModelLoader, ImageModelDescriptor
           from PIL import Image
           import numpy as np
 
+          torch.set_num_threads(os.cpu_count())
+
           input_file = os.environ["INPUT_FILE"]
           base_name = os.path.splitext(os.path.basename(input_file))[0]
           output_file = f"{base_name}_upscaled.png"
 
-          TILE_SIZE = 512   # perkecil (mis. 256) kalau masih OOM, perbesar kalau ingin lebih cepat
+          TILE_SIZE = 256   # perkecil lagi (mis. 128) kalau per-tile masih lambat/lama diam
           OVERLAP = 16
 
           model = ModelLoader().load_from_file("RealESRGAN_x4plus.pth")
@@ -72,8 +61,12 @@ jobs:
           img = Image.open(input_file).convert("RGB")
           arr = np.array(img).astype(np.float32) / 255.0
           h, w, _ = arr.shape
+          print(f"Ukuran input: {w}x{h}, target output: {w*scale}x{h*scale}", flush=True)
 
           out = np.zeros((h * scale, w * scale, 3), dtype=np.float32)
+
+          total_tiles = ((h + TILE_SIZE - 1) // TILE_SIZE) * ((w + TILE_SIZE - 1) // TILE_SIZE)
+          done = 0
 
           with torch.no_grad():
               y = 0
@@ -102,13 +95,14 @@ jobs:
                       out[y*scale:y_end*scale, x*scale:x_end*scale, :] = \
                           result[crop_top:crop_top+crop_h, crop_left:crop_left+crop_w, :]
 
-                      print(f"Tile selesai: y={y}-{y_end}, x={x}-{x_end}")
+                      done += 1
+                      print(f"[{done}/{total_tiles}] tile y={y}-{y_end}, x={x}-{x_end} selesai", flush=True)
                       x += TILE_SIZE
                   y += TILE_SIZE
 
           out = (out * 255.0).round().astype(np.uint8)
           Image.fromarray(out).save(output_file)
-          print("Done:", output_file, Image.open(output_file).size)
+          print("Done:", output_file, Image.open(output_file).size, flush=True)
 
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"OUTPUT_FILE={output_file}\n")
