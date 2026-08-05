@@ -1,0 +1,48 @@
+name: FFmpeg AI Realistic Upscaler (CPU Only)
+
+on:
+  workflow_dispatch: # Jalankan manual lewat tombol di GitHub
+
+jobs:
+  ffmpeg-ai-upscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install Latest FFmpeg with DNN Support
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg wget
+
+    - name: Download Official FFmpeg AI Model
+      run: |
+        # Mengunduh model AI ESPCN (Super Resolution) resmi yang sudah di-pretrain
+        wget -O espcn.pb https://github.com || true
+        # Alternatif model ONNX untuk super resolution tekstur natural
+        wget -O sr_model.onnx https://github.com || true
+
+    - name: Process Image or Video using FFmpeg AI Filter
+      run: |
+        # Pastikan Anda sudah mengupload file bernama 'input.mp4' atau 'input.jpg' ke repo Anda
+        # Ganti perintah di bawah sesuai format file yang Anda miliki:
+
+        if [ -f "input.mp4" ]; then
+          echo "Memproses VIDEO menggunakan AI FFmpeg..."
+          # Menggunakan filter dnn_processing bawaan FFmpeg
+          ffmpeg -i vids.mp4 -vf "dnn_processing=model=sr_model.onnx:input=input:output=output:backend=onnx" -c:v libx264 -pix_fmt yuv420p output_ai_realistic.mp4
+        elif [ -f "input.jpg" ]; then
+          echo "Memproses GAMBAR menggunakan AI FFmpeg..."
+          ffmpeg -i agri.jpg -vf "dnn_processing=model=sr_model.onnx:input=input:output=output:backend=onnx" output_ai_realistic.jpg
+        else
+          echo "Error: Upload file 'input.mp4' atau 'input.jpg' terlebih dahulu ke repositori Anda!"
+          exit 1
+        fi
+
+    - name: Upload Output Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FFmpeg-AI-Upscaled-Result
+        path: output_ai_realistic.*
