@@ -15,13 +15,13 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg wget unzip
+        sudo apt-get install -y ffmpeg curl unzip
 
     - name: Download and Setup Portable Real-ESRGAN NCNN
       run: |
-        # Download core C++ engine untuk upscaler hemat CPU
-        wget https://github.com
-        unzip realesrgan-ncnn-vulkan-20220424-ubuntu.ubuntu.zip
+        # Menggunakan curl -L agar file zip terunduh dengan benar dan tidak tersangkut halaman HTML
+        curl -L -o realesrgan-ncnn-vulkan.zip https://github.com
+        unzip realesrgan-ncnn-vulkan.zip
         chmod +x ./realesrgan-ncnn-vulkan
 
     - name: Process Media Using EOF Automation
@@ -29,17 +29,17 @@ jobs:
         cat << 'EOF' > run_upscale.sh
         #!/bin/bash
         
-        # 1. CEK DAN PROSES GAMBAR (agri.jpg)
+        # 1. PROSES GAMBAR (agri.jpg)
         if [ -f "agri.jpg" ]; then
           echo "=== Menemukan agri.jpg! Memulai Upscaling Gambar Realistis ==="
-          # Menggunakan 2 thread core CPU (-j 2:2:2) agar optimal dan tidak hang
+          # Menggunakan 2 thread core CPU (-j 2:2:2) agar optimal di GitHub Actions
           ./realesrgan-ncnn-vulkan -i agri.jpg -o hasil_agri_realistic.jpg -n realesr-animevideov3 -s 2 -j 2:2:2
           echo "Sukses: Hasil gambar disimpan ke 'hasil_agri_realistic.jpg'"
         else
           echo "INFO: File 'agri.jpg' tidak ditemukan di root repository."
         fi
 
-        # 2. CEK DAN PROSES VIDEO (vids.mp4)
+        # 2. PROSES VIDEO (vids.mp4)
         if [ -f "vids.mp4" ]; then
           echo "=== Menemukan vids.mp4! Mengekstrak Frame ==="
           mkdir -p input_frames output_frames
