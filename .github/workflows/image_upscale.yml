@@ -1,4 +1,4 @@
-name: Upscale Image (4x-UltraSharp)
+name: Upscale Image (Real-ESRGAN x4plus)
 
 on:
   workflow_dispatch:
@@ -27,10 +27,10 @@ jobs:
           pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
           pip install spandrel pillow numpy
 
-      - name: Download 4x-UltraSharp model
+      - name: Download Real-ESRGAN x4plus model
         run: |
-          curl -L -o 4x-UltraSharp.pth \
-            "https://huggingface.co/lokCX/4x-Ultrasharp/resolve/main/4x-UltraSharp.pth"
+          curl -L -o RealESRGAN_x4plus.pth \
+            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
 
       - name: Upscale agri.jpg
         run: |
@@ -40,7 +40,7 @@ jobs:
           from PIL import Image
           import numpy as np
 
-          model = ModelLoader().load_from_file("4x-UltraSharp.pth")
+          model = ModelLoader().load_from_file("RealESRGAN_x4plus.pth")
           assert isinstance(model, ImageModelDescriptor)
           model.eval()
           if torch.cuda.is_available():
