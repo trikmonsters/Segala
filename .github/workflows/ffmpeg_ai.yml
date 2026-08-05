@@ -1,48 +1,71 @@
-name: FFmpeg AI Realistic Upscaler (CPU Only)
+name: Ultimate Realistic Video & Image Upscaler (CPU Only)
 
 on:
-  workflow_dispatch: # Jalankan manual lewat tombol di GitHub
+  workflow_dispatch: # Jalankan manual lewat tombol di GitHub Actions
 
 jobs:
-  ffmpeg-ai-upscale:
+  upscale-process:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
-    - name: Checkout Code
+    - name: Checkout Repository Code
       uses: actions/checkout@v4
 
-    - name: Install Latest FFmpeg with DNN Support
+    - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg wget
+        sudo apt-get install -y ffmpeg wget unzip
 
-    - name: Download Official FFmpeg AI Model
+    - name: Download and Setup Portable Real-ESRGAN NCNN
       run: |
-        # Mengunduh model AI ESPCN (Super Resolution) resmi yang sudah di-pretrain
-        wget -O espcn.pb https://github.com || true
-        # Alternatif model ONNX untuk super resolution tekstur natural
-        wget -O sr_model.onnx https://github.com || true
+        # Download core C++ engine untuk upscaler hemat CPU
+        wget https://github.com
+        unzip realesrgan-ncnn-vulkan-20220424-ubuntu.ubuntu.zip
+        chmod +x ./realesrgan-ncnn-vulkan
 
-    - name: Process Image or Video using FFmpeg AI Filter
+    - name: Process Media Using EOF Automation
       run: |
-        # Pastikan Anda sudah mengupload file bernama 'input.mp4' atau 'input.jpg' ke repo Anda
-        # Ganti perintah di bawah sesuai format file yang Anda miliki:
-
-        if [ -f "input.mp4" ]; then
-          echo "Memproses VIDEO menggunakan AI FFmpeg..."
-          # Menggunakan filter dnn_processing bawaan FFmpeg
-          ffmpeg -i vids.mp4 -vf "dnn_processing=model=sr_model.onnx:input=input:output=output:backend=onnx" -c:v libx264 -pix_fmt yuv420p output_ai_realistic.mp4
-        elif [ -f "input.jpg" ]; then
-          echo "Memproses GAMBAR menggunakan AI FFmpeg..."
-          ffmpeg -i agri.jpg -vf "dnn_processing=model=sr_model.onnx:input=input:output=output:backend=onnx" output_ai_realistic.jpg
+        cat << 'EOF' > run_upscale.sh
+        #!/bin/bash
+        
+        # 1. CEK DAN PROSES GAMBAR (agri.jpg)
+        if [ -f "agri.jpg" ]; then
+          echo "=== Menemukan agri.jpg! Memulai Upscaling Gambar Realistis ==="
+          # Menggunakan 2 thread core CPU (-j 2:2:2) agar optimal dan tidak hang
+          ./realesrgan-ncnn-vulkan -i agri.jpg -o hasil_agri_realistic.jpg -n realesr-animevideov3 -s 2 -j 2:2:2
+          echo "Sukses: Hasil gambar disimpan ke 'hasil_agri_realistic.jpg'"
         else
-          echo "Error: Upload file 'input.mp4' atau 'input.jpg' terlebih dahulu ke repositori Anda!"
-          exit 1
+          echo "INFO: File 'agri.jpg' tidak ditemukan di root repository."
         fi
 
-    - name: Upload Output Artifact
+        # 2. CEK DAN PROSES VIDEO (vids.mp4)
+        if [ -f "vids.mp4" ]; then
+          echo "=== Menemukan vids.mp4! Mengekstrak Frame ==="
+          mkdir -p input_frames output_frames
+          
+          # Ekstrak video menjadi frame gambar PNG kualitas tertinggi
+          ffmpeg -i vids.mp4 input_frames/frame_%05d.png
+          
+          echo "Memulai Upscaling Frame Video Berbasis AI Realistis (Mohon Tunggu)..."
+          ./realesrgan-ncnn-vulkan -i input_frames -o output_frames -n realesr-animevideov3 -s 2 -f png -j 2:2:2
+          
+          echo "Menyatukan Kembali Menjadi Video Baru..."
+          ffmpeg -framerate 30 -i output_frames/frame_%05d.png -i vids.mp4 -map 0:v -map 1:a? -c:v libx264 -pix_fmt yuv420p hasil_vids_realistic.mp4
+          echo "Sukses: Hasil video disimpan ke 'hasil_vids_realistic.mp4'"
+        else
+          echo "INFO: File 'vids.mp4' tidak ditemukan di root repository."
+        fi
+        EOF
+
+        # Jalankan script bash EOF yang baru dibuat
+        chmod +x run_upscale.sh
+        ./run_upscale.sh
+
+    - name: Upload Finished Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: FFmpeg-AI-Upscaled-Result
-        path: output_ai_realistic.*
+        name: AI-Upscaled-Media-Results
+        path: |
+          hasil_agri_realistic.jpg
+          hasil_vids_realistic.mp4
