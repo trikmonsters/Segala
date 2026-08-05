@@ -1,0 +1,71 @@
+name: Upscale Image (4x-UltraSharp)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'image.png'
+
+permissions:
+  contents: write
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install spandrel pillow numpy
+
+      - name: Download 4x-UltraSharp model
+        run: |
+          curl -L -o 4x-UltraSharp.pth \
+            "https://huggingface.co/lokCX/4x-Ultrasharp/resolve/main/4x-UltraSharp.pth"
+
+      - name: Upscale image.png
+        run: |
+          python - <<'EOF'
+          import torch
+          from spandrel import ModelLoader, ImageModelDescriptor
+          from PIL import Image
+          import numpy as np
+
+          model = ModelLoader().load_from_file("4x-UltraSharp.pth")
+          assert isinstance(model, ImageModelDescriptor)
+          model.eval()
+          if torch.cuda.is_available():
+              model.cuda()
+
+          img = Image.open("image.png").convert("RGB")
+          arr = np.array(img).astype(np.float32) / 255.0
+          tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+          if torch.cuda.is_available():
+              tensor = tensor.cuda()
+
+          with torch.no_grad():
+              output = model(tensor)
+
+          output = output.squeeze(0).permute(1, 2, 0).clamp(0, 1).cpu().numpy()
+          output = (output * 255.0).round().astype(np.uint8)
+          Image.fromarray(output).save("image_upscaled.png")
+          print("Done:", Image.open("image_upscaled.png").size)
+          EOF
+
+      - name: Create Release and upload image (no zip)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: upscale-${{ github.run_number }}
+          name: "Upscaled Image #${{ github.run_number }}"
+          files: image_upscaled.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
