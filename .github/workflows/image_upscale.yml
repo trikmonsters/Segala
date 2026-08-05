@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'image.png'
+      - 'agri.jpg'
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
           curl -L -o 4x-UltraSharp.pth \
             "https://huggingface.co/lokCX/4x-Ultrasharp/resolve/main/4x-UltraSharp.pth"
 
-      - name: Upscale image.png
+      - name: Upscale agri.jpg
         run: |
           python - <<'EOF'
           import torch
@@ -46,7 +46,7 @@ jobs:
           if torch.cuda.is_available():
               model.cuda()
 
-          img = Image.open("image.png").convert("RGB")
+          img = Image.open("agri.jpg").convert("RGB")
           arr = np.array(img).astype(np.float32) / 255.0
           tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
           if torch.cuda.is_available():
