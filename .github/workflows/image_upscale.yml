@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'agri.jpg'
+      - '*.png'
+      - '*.jpg'
+      - '*.jpeg'
 
 permissions:
   contents: write
@@ -15,6 +17,18 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Detect input image in root
+        id: detect
+        run: |
+          FILE=$(find . -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) | head -n 1)
+          if [ -z "$FILE" ]; then
+            echo "Tidak ada file gambar (.png/.jpg/.jpeg) ditemukan di root!" >&2
+            exit 1
+          fi
+          FILE=${FILE#./}
+          echo "input_file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "Ditemukan: $FILE"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,33 +46,72 @@ jobs:
           curl -L -o RealESRGAN_x4plus.pth \
             "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
 
-      - name: Upscale agri.jpg
+      - name: Upscale image (tiled, memory-safe)
+        env:
+          INPUT_FILE: ${{ steps.detect.outputs.input_file }}
         run: |
           python - <<'EOF'
+          import os
           import torch
           from spandrel import ModelLoader, ImageModelDescriptor
           from PIL import Image
           import numpy as np
 
+          input_file = os.environ["INPUT_FILE"]
+          base_name = os.path.splitext(os.path.basename(input_file))[0]
+          output_file = f"{base_name}_upscaled.png"
+
+          TILE_SIZE = 512   # perkecil (mis. 256) kalau masih OOM, perbesar kalau ingin lebih cepat
+          OVERLAP = 16
+
           model = ModelLoader().load_from_file("RealESRGAN_x4plus.pth")
           assert isinstance(model, ImageModelDescriptor)
           model.eval()
-          if torch.cuda.is_available():
-              model.cuda()
+          scale = model.scale
 
-          img = Image.open("agri.jpg").convert("RGB")
+          img = Image.open(input_file).convert("RGB")
           arr = np.array(img).astype(np.float32) / 255.0
-          tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-          if torch.cuda.is_available():
-              tensor = tensor.cuda()
+          h, w, _ = arr.shape
+
+          out = np.zeros((h * scale, w * scale, 3), dtype=np.float32)
 
           with torch.no_grad():
-              output = model(tensor)
+              y = 0
+              while y < h:
+                  y_end = min(y + TILE_SIZE, h)
+                  y_start_pad = max(y - OVERLAP, 0)
+                  y_end_pad = min(y_end + OVERLAP, h)
 
-          output = output.squeeze(0).permute(1, 2, 0).clamp(0, 1).cpu().numpy()
-          output = (output * 255.0).round().astype(np.uint8)
-          Image.fromarray(output).save("image_upscaled.png")
-          print("Done:", Image.open("image_upscaled.png").size)
+                  x = 0
+                  while x < w:
+                      x_end = min(x + TILE_SIZE, w)
+                      x_start_pad = max(x - OVERLAP, 0)
+                      x_end_pad = min(x_end + OVERLAP, w)
+
+                      tile = arr[y_start_pad:y_end_pad, x_start_pad:x_end_pad, :]
+                      tensor = torch.from_numpy(tile).permute(2, 0, 1).unsqueeze(0)
+
+                      result = model(tensor)
+                      result = result.squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
+
+                      crop_top = (y - y_start_pad) * scale
+                      crop_left = (x - x_start_pad) * scale
+                      crop_h = (y_end - y) * scale
+                      crop_w = (x_end - x) * scale
+
+                      out[y*scale:y_end*scale, x*scale:x_end*scale, :] = \
+                          result[crop_top:crop_top+crop_h, crop_left:crop_left+crop_w, :]
+
+                      print(f"Tile selesai: y={y}-{y_end}, x={x}-{x_end}")
+                      x += TILE_SIZE
+                  y += TILE_SIZE
+
+          out = (out * 255.0).round().astype(np.uint8)
+          Image.fromarray(out).save(output_file)
+          print("Done:", output_file, Image.open(output_file).size)
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"OUTPUT_FILE={output_file}\n")
           EOF
 
       - name: Create Release and upload image (no zip)
@@ -66,6 +119,6 @@ jobs:
         with:
           tag_name: upscale-${{ github.run_number }}
           name: "Upscaled Image #${{ github.run_number }}"
-          files: image_upscaled.png
+          files: ${{ env.OUTPUT_FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
