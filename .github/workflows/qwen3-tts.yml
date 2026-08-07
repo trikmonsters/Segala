@@ -1,0 +1,87 @@
+name: Qwen3 TTS Voice Clone (CPU Free Tier)
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: 'Text to synthesize'
+        required: true
+        default: 'Hello, this is a test of my cloned voice running on GitHub Actions CPU.'
+      output_name:
+        description: 'Output audio filename'
+        required: true
+        default: 'output.wav'
+
+jobs:
+  tts-cpu:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Verify MyVoice.wav exists
+        run: |
+          if [ ! -f "./MyVoice.wav" ]; then
+            echo "❌ ERROR: MyVoice.wav not found in root directory!"
+            exit 1
+          fi
+          echo "✅ MyVoice.wav found ($(du -h ./MyVoice.wav | cut -f1))"
+          
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-qwen3tts-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-qwen3tts-
+            
+      - name: Install dependencies (CPU Only)
+        run: |
+          # Install torch CPU-only version first to save space/time
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          
+          # Clone and install faster-qwen3-tts
+          git clone https://github.com/andimarafioti/faster-qwen3-tts.git
+          cd faster-qwen3-tts
+          pip install -r requirements.txt
+          
+          # Force CPU-only onnxruntime jika ada conflict
+          pip uninstall -y onnxruntime-gpu 2>/dev/null || true
+          pip install onnxruntime
+          
+      - name: Download Model (with cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: huggingface-qwen3-tts-v1
+          
+      - name: Run TTS Voice Clone on CPU
+        env:
+          TRANSFORMERS_OFFLINE: 0
+          HF_HUB_ENABLE_HF_TRANSFER: 0
+        run: |
+          cd faster-qwen3-tts
+          
+          # ⚠️ SESUAIKAN COMMAND INI DENGAN DOKUMENTASI REPO ASLI
+          # Fork andimarafioti biasanya menggunakan flag --device cpu
+          python inference.py \
+            --text "${{ github.event.inputs.text }}" \
+            --ref_audio "../MyVoice.wav" \
+            --output "../${{ github.event.inputs.output_name }}" \
+            --device cpu \
+            --dtype float32
+            
+          echo "✅ TTS Generation Complete"
+          
+      - name: Upload Audio Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tts-audio-output
+          path: ${{ github.event.inputs.output_name }}
+          retention-days: 7
