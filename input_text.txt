@@ -1,1 +1,1 @@
-[MyVoive] Halo, ini adalah percobaan suara pertama saya menggunakan VibeVoice di GitHub Actions.
+[MyVoive] Hello, this is my first voice test using VibeVoice on GitHub Actions.
