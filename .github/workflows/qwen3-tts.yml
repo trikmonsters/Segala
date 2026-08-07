@@ -1,4 +1,4 @@
-name: Qwen3 TTS Voice Clone (CPU/GGML)
+name: Qwen3 TTS Voice Clone (CPU)
 
 on:
   workflow_dispatch:
@@ -30,36 +30,12 @@ jobs:
             echo "❌ ERROR: MyVoice.wav not found in root!"
             exit 1
           fi
-          echo "✅ MyVoice.wav found"
+          echo "✅ MyVoice.wav found ($(du -h ./MyVoice.wav | cut -f1))"
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      # ✅ FIX: Find libcudart.so.12 reliably from pip package
-      - name: Install CUDA Runtime Library via pip
-        run: |
-          pip install nvidia-cuda-runtime-cu12
-          
-          # Search for libcudart.so.12 in site-packages
-          LIBCUDART=$(find /opt/hostedtoolcache/Python -name "libcudart.so.12*" 2>/dev/null | head -1)
-          
-          if [ -z "$LIBCUDART" ]; then
-            # Fallback: search broader
-            LIBCUDART=$(python -c "import site; import os; [print(os.path.join(p, 'nvidia', 'cuda_runtime', 'lib', 'libcudart.so.12')) for p in site.getsitepackages()]" | while read f; do [ -f "$f" ] && echo "$f" && break; done)
-          fi
-          
-          if [ -z "$LIBCUDART" ] || [ ! -f "$LIBCUDART" ]; then
-            echo "❌ Could not find libcudart.so.12"
-            find / -name "libcudart*" 2>/dev/null | head -20
-            exit 1
-          fi
-          
-          echo "✅ Found: $LIBCUDART"
-          sudo ln -sf "$LIBCUDART" /usr/lib/x86_64-linux-gnu/libcudart.so.12
-          sudo ldconfig
-          ldconfig -p | grep libcudart
 
       - name: Cache pip & HF models
         uses: actions/cache@v4
@@ -67,25 +43,55 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/huggingface
-          key: ${{ runner.os }}-qwen3-ggml-v5
+          key: ${{ runner.os }}-qwen3-torch-cpu-v1
 
-      - name: Install faster-qwen3-tts with GGML backend
+      - name: Install faster-qwen3-tts (Torch CPU only)
         run: |
+          # CPU-only PyTorch (much smaller, no CUDA deps)
           pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install "faster-qwen3-tts[ggml]"
-          faster-qwen3-tts --help
+          # Install package TANPA ggml extra
+          pip install faster-qwen3-tts
+          pip install soundfile
+          echo "✅ Installation complete"
 
-      - name: Run TTS Voice Clone via GGML (CPU fallback)
+      - name: Run TTS Voice Clone (Torch CPU)
         env:
           CUDA_VISIBLE_DEVICES: ""
+          TRANSFORMERS_VERBOSITY: info
         run: |
-          faster-qwen3-tts --backend ggml --quant BF16 clone \
-            --model Qwen/Qwen3-TTS-12Hz-0.6B-Base \
-            --ref-audio ./MyVoice.wav \
-            --ref-text "${{ github.event.inputs.ref_text }}" \
-            --text "${{ github.event.inputs.text }}" \
-            --language English \
-            --output "${{ github.event.inputs.output_name }}"
+          python << 'PYEOF'
+          import os, sys, time
+          os.environ["CUDA_VISIBLE_DEVICES"] = ""
+          
+          from faster_qwen3_tts import FasterQwen3TTS
+          import soundfile as sf
+          
+          text = """${{ github.event.inputs.text }}"""
+          ref_text = """${{ github.event.inputs.ref_text }}"""
+          output = "${{ github.event.inputs.output_name }}"
+          
+          print("⏳ Loading Qwen3-TTS-0.6B on CPU...")
+          start = time.time()
+          model = FasterQwen3TTS.from_pretrained(
+              "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+              device="cpu"
+          )
+          print(f"✅ Model loaded in {time.time()-start:.1f}s")
+          
+          print("🎙️ Generating voice clone...")
+          start = time.time()
+          audio, sr = model.generate_voice_clone(
+              text=text,
+              language="English",
+              ref_audio="./MyVoice.wav",
+              ref_text=ref_text,
+          )
+          elapsed = time.time() - start
+          print(f"✅ Generated in {elapsed:.1f}s")
+          
+          sf.write(output, audio[0], sr)
+          print(f"💾 Saved to {output} ({sr}Hz)")
+          PYEOF
 
       - name: Upload Audio Artifact
         uses: actions/upload-artifact@v4
