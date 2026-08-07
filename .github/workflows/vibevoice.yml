@@ -37,7 +37,7 @@ jobs:
           mkdir -p VibeVoice/demo/voices
           
           # Salin file .wav suara Anda ke dalam folder voices VibeVoice
-          cp MyVoice.wav VibeVoice/demo/voices/MyVoice.wav
+          cp MyVoive.wav VibeVoice/demo/voices/MyVoive.wav
           
           # Salin file naskah teks Anda
           cp input_text.txt VibeVoice/input_text.txt
@@ -48,7 +48,7 @@ jobs:
           python demo/inference_from_file.py \
             --model_path vibevoice/VibeVoice-1.5B \
             --txt_path input_text.txt \
-            --speaker_names MyVoice
+            --speaker_names MyVoive
             
       - name: 8. Upload Hasil Audio
         uses: actions/upload-artifact@v4
