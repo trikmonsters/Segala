@@ -43,54 +43,78 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/huggingface
-          key: ${{ runner.os }}-qwen3-torch-cpu-v1
+          key: ${{ runner.os }}-qwen3-base-cpu-v1
 
-      - name: Install faster-qwen3-tts (Torch CPU only)
+      - name: Install Qwen3-TTS base + deps (CPU only)
         run: |
-          # CPU-only PyTorch (much smaller, no CUDA deps)
-          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          # Install package TANPA ggml extra
-          pip install faster-qwen3-tts
-          pip install soundfile
+          pip install torch torchaudio transformers --index-url https://download.pytorch.org/whl/cpu
+          pip install soundfile librosa accelerate
+          # Install faster-qwen3-tts HANYA untuk ambil dependency utils-nya
+          pip install faster-qwen3-tts --no-deps
           echo "✅ Installation complete"
 
-      - name: Run TTS Voice Clone (Torch CPU)
+      - name: Run TTS Voice Clone (Base Model on CPU)
         env:
           CUDA_VISIBLE_DEVICES: ""
-          TRANSFORMERS_VERBOSITY: info
         run: |
           python << 'PYEOF'
           import os, sys, time
           os.environ["CUDA_VISIBLE_DEVICES"] = ""
           
-          from faster_qwen3_tts import FasterQwen3TTS
+          import torch
           import soundfile as sf
+          from transformers import AutoModel, AutoTokenizer
           
           text = """${{ github.event.inputs.text }}"""
           ref_text = """${{ github.event.inputs.ref_text }}"""
           output = "${{ github.event.inputs.output_name }}"
+          model_id = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
           
-          print("⏳ Loading Qwen3-TTS-0.6B on CPU...")
+          print(f"⏳ Loading {model_id} on CPU...")
           start = time.time()
-          model = FasterQwen3TTS.from_pretrained(
-              "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-              device="cpu"
+          
+          # Load base model directly (bypass FasterQwen3TTS wrapper)
+          tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+          model = AutoModel.from_pretrained(
+              model_id, 
+              trust_remote_code=True,
+              torch_dtype=torch.float32,
+              device_map="cpu"
           )
+          model.eval()
           print(f"✅ Model loaded in {time.time()-start:.1f}s")
           
           print("🎙️ Generating voice clone...")
           start = time.time()
-          audio, sr = model.generate_voice_clone(
+          
+          # Use model's native generate API for voice cloning
+          inputs = tokenizer(
               text=text,
-              language="English",
-              ref_audio="./MyVoice.wav",
               ref_text=ref_text,
-          )
+              return_tensors="pt"
+          ).to("cpu")
+          
+          # Load reference audio
+          import librosa
+          ref_audio, sr = librosa.load("./MyVoice.wav", sr=24000)
+          ref_audio_tensor = torch.tensor(ref_audio).unsqueeze(0)
+          
+          with torch.no_grad():
+              audio_output = model.generate(
+                  **inputs,
+                  ref_audio=ref_audio_tensor,
+                  max_new_tokens=1024,
+                  do_sample=True,
+                  temperature=0.8,
+              )
+          
           elapsed = time.time() - start
           print(f"✅ Generated in {elapsed:.1f}s")
           
-          sf.write(output, audio[0], sr)
-          print(f"💾 Saved to {output} ({sr}Hz)")
+          # Save output
+          audio_np = audio_output.cpu().numpy().squeeze()
+          sf.write(output, audio_np, sr)
+          print(f"💾 Saved to {output} ({sr}Hz, {len(audio_np)/sr:.1f}s)")
           PYEOF
 
       - name: Upload Audio Artifact
