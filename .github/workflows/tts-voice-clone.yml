@@ -85,9 +85,9 @@ jobs:
       - name: Clone qwentts-cpp-python + qwentts.cpp (native source, pinned to ABI v2)
         run: |
           git clone --depth 1 https://github.com/andimarafioti/qwentts-cpp-python.git /tmp/qwentts-cpp-python
-          git clone https://github.com/andimarafioti/qwentts.cpp.git /tmp/qwentts.cpp
+          git clone https://github.com/ServeurpersoCom/qwentts.cpp.git /tmp/qwentts.cpp
           cd /tmp/qwentts.cpp
-          git checkout 7df559a8ca25f66fee02970514ebe5f01dee9055
+          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2ac6
           git submodule update --init --recursive
 
       - name: Build native qwentts.cpp for this runner's CPU (AMX disabled)
