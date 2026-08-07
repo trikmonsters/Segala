@@ -37,18 +37,29 @@ jobs:
         with:
           python-version: '3.10'
 
-      # ✅ FIX: Install libcudart via pip nvidia package (no apt repo needed)
+      # ✅ FIX: Find libcudart.so.12 reliably from pip package
       - name: Install CUDA Runtime Library via pip
         run: |
           pip install nvidia-cuda-runtime-cu12
-          # Find and symlink libcudart.so.12 to system path
-          LIB_PATH=$(python -c "import nvidia.cuda_runtime; import os; print(os.path.join(os.path.dirname(nvidia.cuda_runtime.__file__), 'lib'))")
-          echo "CUDA runtime lib path: $LIB_PATH"
-          sudo ln -sf "$LIB_PATH/libcudart.so.12" /usr/lib/x86_64-linux-gnu/libcudart.so.12
+          
+          # Search for libcudart.so.12 in site-packages
+          LIBCUDART=$(find /opt/hostedtoolcache/Python -name "libcudart.so.12*" 2>/dev/null | head -1)
+          
+          if [ -z "$LIBCUDART" ]; then
+            # Fallback: search broader
+            LIBCUDART=$(python -c "import site; import os; [print(os.path.join(p, 'nvidia', 'cuda_runtime', 'lib', 'libcudart.so.12')) for p in site.getsitepackages()]" | while read f; do [ -f "$f" ] && echo "$f" && break; done)
+          fi
+          
+          if [ -z "$LIBCUDART" ] || [ ! -f "$LIBCUDART" ]; then
+            echo "❌ Could not find libcudart.so.12"
+            find / -name "libcudart*" 2>/dev/null | head -20
+            exit 1
+          fi
+          
+          echo "✅ Found: $LIBCUDART"
+          sudo ln -sf "$LIBCUDART" /usr/lib/x86_64-linux-gnu/libcudart.so.12
           sudo ldconfig
-          echo "✅ Verification:"
-          ldconfig -p | grep libcudart || echo "Checking alternative..."
-          find /usr/lib -name "libcudart*" 2>/dev/null
+          ldconfig -p | grep libcudart
 
       - name: Cache pip & HF models
         uses: actions/cache@v4
@@ -56,7 +67,7 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/huggingface
-          key: ${{ runner.os }}-qwen3-ggml-v4
+          key: ${{ runner.os }}-qwen3-ggml-v5
 
       - name: Install faster-qwen3-tts with GGML backend
         run: |
