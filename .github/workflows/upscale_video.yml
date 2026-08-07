@@ -7,11 +7,12 @@ permissions:
   contents: write
 
 jobs:
-  # TAHAP 1: Memotong video menjadi 17 bagian dan mendatanya
+  # =========================================================================
+  # TAHAP 1: Memotong video secara cerdas menjadi ~17 bagian secara dinamis
+  # =========================================================================
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      # Mengeluarkan daftar file (array) untuk memicu 17 mesin di tahap selanjutnya
       chunk_matrix: ${{ steps.split.outputs.matrix }}
     steps:
       - name: Checkout Repository
@@ -22,20 +23,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg jq
 
-      - name: Split Video into ~17 Chunks
+      - name: Split Video into Exactly ~17 Dynamic Chunks
         id: split
         run: |
           mkdir chunks
-          # Dapatkan total durasi video (dalam detik)
+          
+          # 1. Baca total durasi video secara akurat
           DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 video.mp4)
+          echo "Durasi video asli: $DURATION detik"
           
-          # Hitung durasi tiap potongan agar pas menjadi sekitar 17 bagian
+          # 2. Patok jumlah job = 17. Hitung durasi per potongannya secara otomatis.
           CHUNK_TIME=$(awk "BEGIN {print $DURATION/17}")
+          echo "Sistem akan memotong setiap $CHUNK_TIME detik agar pas menjadi 17 bagian"
           
-          # Potong video (mungkin akan menghasilkan 17 atau 18 file tergantung sinkronisasi keyframe)
-          ffmpeg -i video.mp4 -c copy -map 0 -f segment -segment_time $CHUNK_TIME -reset_timestamps 1 chunks/chunk_%03d.mp4
+          # 3. Potong video dengan render kilat & paksa keyframe agar potongan sangat presisi
+          ffmpeg -y -i video.mp4 \
+            -c:v libx264 -preset ultrafast -crf 10 \
+            -force_key_frames "expr:gte(t,n_forced*$CHUNK_TIME)" \
+            -c:a copy -map 0 -f segment -segment_time $CHUNK_TIME \
+            -reset_timestamps 1 chunks/chunk_%03d.mp4
           
-          # Buat daftar JSON dari potongan-potongan tersebut untuk dikirim ke Matrix Job
+          # 4. Buat daftar array JSON untuk dikirim ke Matrix Jobs
           cd chunks
           JSON_ARRAY=$(ls chunk_*.mp4 | jq -R -s -c 'split("\n")[:-1]')
           echo "matrix=$JSON_ARRAY" >> $GITHUB_OUTPUT
@@ -47,12 +55,15 @@ jobs:
           path: chunks/chunk_*.mp4
           retention-days: 1
 
-  # TAHAP 2: Menjalankan 17 Mesin secara bersamaan (Matrix)
+
+  # =========================================================================
+  # TAHAP 2: Menjalankan 17 Mesin (Jobs) secara bersamaan
+  # =========================================================================
   upscale:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false # Jika 1 gagal, mesin lain tetap berjalan
+      fail-fast: false # Jika 1 chunk gagal, mesin lain akan terus memproses chunk mereka
       matrix:
         chunk_file: ${{ fromJson(needs.prepare.outputs.chunk_matrix) }}
     steps:
@@ -78,15 +89,15 @@ jobs:
           pip install ffmpeg-python basicsr facexlib gfpgan
           python setup.py develop
 
-      - name: Patch BasicSR & Real-ESRGAN untuk CPU
+      - name: Patch BasicSR & Real-ESRGAN for CPU
         run: |
-          # Patch Torchvision
+          # Patch Torchvision (BasicSR fix)
           DEGRAD_FILE=$(python -c "import site; print(site.getsitepackages()[0])")/basicsr/data/degradations.py
           if [ -f "$DEGRAD_FILE" ]; then
             sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/g' "$DEGRAD_FILE"
           fi
           
-          # Patch Cuda check
+          # Patch Cuda check untuk CPU Mode
           cd Real-ESRGAN
           sed -i 's/num_gpus = torch.cuda.device_count()/num_gpus = max(1, torch.cuda.device_count())/' inference_realesrgan_video.py
           python3 - <<'EOF'
@@ -111,9 +122,11 @@ jobs:
         run: |
           cd Real-ESRGAN
           mkdir -p final_result
-          # Salin HANYA file bagian mesin ini dari folder inputs ke dalam folder eksekusi
+          
+          # Salin HANYA file bagian milik job/mesin ini ke ruang eksekusi
           cp ../inputs/${{ matrix.chunk_file }} input_video.mp4
           
+          # Jalankan Upscaler
           python inference_realesrgan_video.py \
             -i input_video.mp4 \
             -n realesr-general-x4v3 \
@@ -124,7 +137,7 @@ jobs:
             --fp32 \
             --face_enhance
             
-          # Ubah nama agar tidak bentrok saat digabungkan nanti (input_video_out.mp4 -> chunk_000_out.mp4)
+          # Ubah nama agar tidak bentrok saat digabung (contoh: jadi upscaled_chunk_000.mp4)
           mv final_result/input_video_out.mp4 final_result/upscaled_${{ matrix.chunk_file }}
 
       - name: Upload Processed Chunk
@@ -134,7 +147,10 @@ jobs:
           path: Real-ESRGAN/final_result/upscaled_${{ matrix.chunk_file }}
           retention-days: 1
 
-  # TAHAP 3: Menggabungkan 17 video hasil upscale menjadi 1 video final
+
+  # =========================================================================
+  # TAHAP 3: Menggabungkan 17 video hasil, memoles gambar, dan menambah Audio
+  # =========================================================================
   merge_and_release:
     needs: [prepare, upscale]
     runs-on: ubuntu-latest
@@ -162,14 +178,14 @@ jobs:
             echo "file '$f'" >> concat_list.txt
           done
           
-          # Gabungkan video (tanpa render ulang)
+          # Gabungkan video
           ffmpeg -y -f concat -safe 0 -i concat_list.txt -c copy merged_video_no_audio.mp4
           
           # Pindahkan ke folder utama untuk post-process
           mv merged_video_no_audio.mp4 ../
           cd ..
           
-          # Post-process Denoise, Pertajam, & Masukkan Audio dari video.mp4 asli
+          # Post-process Denoise, Pertajam (Unsharp), Perbaikan Warna, & Masukkan Audio asli
           ffmpeg -y -i merged_video_no_audio.mp4 -i video.mp4 \
             -vf "hqdn3d=2:1.5:3:2,unsharp=5:5:1.2:5:5:0.0,eq=saturation=1.15:contrast=1.05" \
             -c:v libx264 -preset fast -pix_fmt yuv420p \
@@ -187,7 +203,7 @@ jobs:
         with:
           tag_name: v1.0-result
           name: "Hasil Upscale Video Ultra Clear"
-          body: "Berikut adalah video mp4 hasil perbaikan dengan 17 Jobs terdistribusi."
+          body: "Berikut adalah video mp4 hasil perbaikan dengan sistem distribusi 17 Paralel Job."
           files: ULTRA_CLEAR_video.mp4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
