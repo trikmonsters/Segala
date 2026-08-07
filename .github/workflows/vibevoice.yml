@@ -1,23 +1,22 @@
 name: VibeVoice Custom Voice Cloning
 
 on:
-  workflow_dispatch: # Mengizinkan Anda memicu proses ini secara manual
+  workflow_dispatch: 
 
 jobs:
   run-tts:
-    # Catatan: Jika Anda menggunakan PC sendiri dengan GPU, ubah 'ubuntu-latest' menjadi 'self-hosted'
     runs-on: ubuntu-latest 
     
     steps:
       - name: 1. Checkout Repository Anda
         uses: actions/checkout@v4
         
-      - name: 2. Setup Python Lingkungan
+      - name: 2. Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           
-      - name: 3. Install Dependensi Sistem (FFmpeg)
+      - name: 3. Install Dependensi (FFmpeg)
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
@@ -31,16 +30,25 @@ jobs:
           cd VibeVoice
           pip install -e .
           
-      - name: 6. Siapkan Custom Voice dan Teks Anda
+      - name: 6. Siapkan Custom Voice & Generate Teks Otomatis
         run: |
-          # Model VibeVoice akan mendeteksi file suara di dalam direktori voices/
           mkdir -p VibeVoice/demo/voices
           
-          # Salin file .wav suara Anda ke dalam folder voices VibeVoice
-          cp MyVoive.wav VibeVoice/demo/voices/MyVoive.wav
+          # Kita copy file suara Anda (apapun namanya yang berawalan MyVoi) 
+          # lalu kita paksa ubah namanya menjadi MyVoice.wav agar rapi
+          cp MyVoi*.wav VibeVoice/demo/voices/MyVoice.wav
           
-          # Salin file naskah teks Anda
-          cp input_text.txt VibeVoice/input_text.txt
+          # Masuk ke folder VibeVoice
+          cd VibeVoice
+          
+          # Kita BUAT file teks otomatis di sini dengan format yang 100% benar.
+          # Anda bisa mengubah kalimat di dalam tanda kutip ini nanti:
+          echo "[MyVoice] Halo, ini adalah percobaan cloning suara menggunakan GitHub Actions dan model Vibe Voice." > input_text.txt
+          
+          # Tampilkan isi teks ke log untuk verifikasi
+          echo "=== ISI FILE TEKS ==="
+          cat input_text.txt
+          echo "====================="
           
       - name: 7. Jalankan Inferensi (Proses Cloning Suara)
         run: |
@@ -48,11 +56,10 @@ jobs:
           python demo/inference_from_file.py \
             --model_path vibevoice/VibeVoice-1.5B \
             --txt_path input_text.txt \
-            --speaker_names MyVoive
+            --speaker_names MyVoice
             
       - name: 8. Upload Hasil Audio
         uses: actions/upload-artifact@v4
         with:
           name: Hasil-Cloning-Suara
-          # Menangkap semua file .wav hasil generate agar bisa Anda unduh
           path: VibeVoice/*.wav
