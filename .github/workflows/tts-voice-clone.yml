@@ -1,0 +1,115 @@
+name: TTS Voice Clone (CPU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: "Teks yang mau diucapkan"
+        required: true
+        type: string
+      language:
+        description: "Bahasa"
+        required: true
+        type: choice
+        default: "Auto"
+        options:
+          - "Auto"
+          - "English"
+          - "Chinese"
+          - "French"
+          - "German"
+          - "Spanish"
+      ref_audio_path:
+        description: "Path file suara referensi di repo ini (commit dulu filenya sebelum run)"
+        required: true
+        type: string
+        default: "voice_samples/reference.wav"
+      ref_text:
+        description: "Transkrip persis dari audio referensi (kosongkan untuk pakai mode x-vector-only)"
+        required: false
+        type: string
+        default: ""
+      model_size:
+        description: "Ukuran model (0.6B jauh lebih cepat di CPU)"
+        required: true
+        type: choice
+        default: "0.6B"
+        options:
+          - "0.6B"
+          - "1.7B"
+      quant:
+        description: "Kuantisasi GGUF (Q4_K_M paling cepat di CPU, BF16 kualitas terbaik tapi lambat)"
+        required: true
+        type: choice
+        default: "Q4_K_M"
+        options:
+          - "Q4_K_M"
+          - "Q8_0"
+          - "BF16"
+
+jobs:
+  clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Cek file referensi ada
+        run: |
+          if [ ! -f "${{ inputs.ref_audio_path }}" ]; then
+            echo "::error::File referensi '${{ inputs.ref_audio_path }}' tidak ditemukan di repo. Commit dulu file suaranya sebelum run workflow ini."
+            exit 1
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip & model weights
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/huggingface
+            ~/.cache/faster-qwen3-tts
+          key: qwen3tts-${{ inputs.model_size }}-${{ inputs.quant }}-${{ runner.os }}
+
+      - name: Install qwentts-cpp-python (CPU wheel) + faster-qwen3-tts
+        run: |
+          pip install --upgrade pip
+          pip install "qwentts-cpp-python==0.3.1+cpu" \
+            -f https://huggingface.co/datasets/andito/qwentts-cpp-python-wheels/tree/main/whl/cpu
+          pip install "faster-qwen3-tts[ggml]"
+
+      - name: Generate voice clone
+        env:
+          TEXT: ${{ inputs.text }}
+          LANGUAGE: ${{ inputs.language }}
+          REF_AUDIO: ${{ inputs.ref_audio_path }}
+          REF_TEXT: ${{ inputs.ref_text }}
+          MODEL_SIZE: ${{ inputs.model_size }}
+          QUANT: ${{ inputs.quant }}
+        run: |
+          mkdir -p outputs
+          XVEC_FLAG=""
+          if [ -z "$REF_TEXT" ]; then
+            XVEC_FLAG="--xvec-only"
+            echo "Ref-text kosong -> pakai mode x-vector-only"
+          fi
+          faster-qwen3-tts --backend ggml --quant "$QUANT" clone \
+            --model "Qwen/Qwen3-TTS-12Hz-${MODEL_SIZE}-Base" \
+            --ref-audio "$REF_AUDIO" \
+            --ref-text "$REF_TEXT" \
+            $XVEC_FLAG \
+            --text "$TEXT" \
+            --language "$LANGUAGE" \
+            --output outputs/output_clone.wav
+
+      - name: Upload hasil audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-clone-output
+          path: outputs/output_clone.wav
+          retention-days: 14
