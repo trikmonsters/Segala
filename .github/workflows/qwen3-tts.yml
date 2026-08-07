@@ -8,7 +8,7 @@ on:
         required: true
         default: 'Hello, this is a test of my cloned voice on GitHub Actions.'
       ref_text:
-        description: 'Transcript of MyVoice.wav (REQUIRED for ICL clone)'
+        description: 'Exact transcript of MyVoice.wav'
         required: true
         default: 'This is the exact transcript of what is said in MyVoice.wav.'
       output_name:
@@ -37,26 +37,34 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ✅ FIX: Install CUDA runtime stub agar libcudart.so.12 tersedia
+      - name: Install CUDA Runtime Stub
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cuda-cudart-dev-12-8
+          # Buat symlink jika belum ada
+          sudo ln -sf /usr/local/cuda-12.8/lib64/libcudart.so.12 /usr/lib/x86_64-linux-gnu/libcudart.so.12 || true
+          ldconfig
+          echo "✅ libcudart.so.12 available:"
+          ldconfig -p | grep libcudart
+
       - name: Cache pip & HF models
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
             ~/.cache/huggingface
-          key: ${{ runner.os }}-qwen3-ggml-v2
+          key: ${{ runner.os }}-qwen3-ggml-v3
 
-      - name: Install faster-qwen3-tts with GGML backend (CPU)
+      - name: Install faster-qwen3-tts with GGML backend
         run: |
-          # Install CPU-only PyTorch first (smaller footprint)
           pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          
-          # Install package + GGML extra dari PyPI (bukan git clone!)
           pip install "faster-qwen3-tts[ggml]"
-          
-          # Verifikasi instalasi
-          faster-qwen3-tts --help || true
+          faster-qwen3-tts --help
 
-      - name: Run TTS Voice Clone via GGML Backend
+      - name: Run TTS Voice Clone via GGML (CPU fallback)
+        env:
+          CUDA_VISIBLE_DEVICES: ""
         run: |
           faster-qwen3-tts --backend ggml --quant BF16 clone \
             --model Qwen/Qwen3-TTS-12Hz-0.6B-Base \
