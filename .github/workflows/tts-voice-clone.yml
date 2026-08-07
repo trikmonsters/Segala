@@ -7,6 +7,7 @@ on:
         description: "Teks yang mau diucapkan"
         required: true
         type: string
+        default: "Good morning, and welcome to today's session. Over the next few minutes, we will walk through the main ideas together, step by step, so nothing feels rushed or confusing. Feel free to pause, take notes, or revisit any part that needs a second look. Our goal is simple: to make this topic clear, practical, and genuinely useful for you, no matter your starting point. Technology like this keeps evolving quickly, and staying curious is the best way to keep up. Thank you for joining, for your patience, and for being open to learning something new today. Let's get started."
       language:
         description: "Bahasa"
         required: true
@@ -23,7 +24,7 @@ on:
         description: "Path file suara referensi di repo ini (commit dulu filenya sebelum run)"
         required: true
         type: string
-        default: "voice_samples/reference.wav"
+        default: "MyVoice.wav"
       ref_text:
         description: "Transkrip persis dari audio referensi (kosongkan untuk pakai mode x-vector-only)"
         required: false
@@ -81,11 +82,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq cmake ninja-build patchelf
 
-      - name: Clone qwentts-cpp-python + qwentts.cpp (native source)
+      - name: Clone qwentts-cpp-python + qwentts.cpp (native source, pinned to ABI v2)
         run: |
           git clone --depth 1 https://github.com/andimarafioti/qwentts-cpp-python.git /tmp/qwentts-cpp-python
-          git clone --depth 1 https://github.com/andimarafioti/qwentts.cpp.git /tmp/qwentts.cpp
-          git clone --depth 1 https://github.com/ServeurpersoCom/ggml.git /tmp/qwentts.cpp/ggml
+          git clone https://github.com/andimarafioti/qwentts.cpp.git /tmp/qwentts.cpp
+          cd /tmp/qwentts.cpp
+          git checkout 7df559a8ca25f66fee02970514ebe5f01dee9055
+          git submodule update --init --recursive
 
       - name: Build native qwentts.cpp for this runner's CPU (AMX disabled)
         run: |
