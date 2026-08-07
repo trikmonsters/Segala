@@ -1,4 +1,4 @@
-Vname: VibeVoice Custom Voice Cloning
+name: VibeVoice Custom Voice Cloning
 
 on:
   workflow_dispatch: # Mengizinkan Anda memicu proses ini secara manual
