@@ -29,7 +29,7 @@ on:
         description: "Transkrip persis dari audio referensi (kosongkan untuk pakai mode x-vector-only)"
         required: false
         type: string
-        default: ""
+        default: "I'm at my 10-year college reunion today, but the emotion I feel is not what I expected. I really thought I would enjoy reminiscing and seeing all the old spots, whether it was a significant memory or something more mundane. But the emotion I feel is a little bit more complex. The nostalgia is more like grief—grief over how fast time seems to go by. I cannot believe it's been 10 years, but I think it's good to feel like this every once in a while because it reminds us to savor the present moment. But I don't know if that'll make us feel any different when we look back 10 years from today; at least we'll know that we paid attention."
       model_size:
         description: "Ukuran model (0.6B jauh lebih cepat di CPU)"
         required: true
