@@ -1,0 +1,194 @@
+name: Voice Clone TTS
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: "Teks yang mau diucapkan"
+        required: true
+        type: string
+        default: "Good morning, and welcome to today's session. Over the next few minutes, we will walk through the main ideas together, step by step, so nothing feels rushed or confusing. Feel free to pause, take notes, or revisit any part that needs a second look. Our goal is simple: to make this topic clear, practical, and genuinely useful for you, no matter your starting point. Technology like this keeps evolving quickly, and staying curious is the best way to keep up. Thank you for joining, for your patience, and for being open to learning something new today. Let's get started."
+      language:
+        description: "Bahasa"
+        required: true
+        type: choice
+        default: "Auto"
+        options:
+          - "Auto"
+          - "English"
+          - "Chinese"
+          - "French"
+          - "German"
+          - "Spanish"
+      ref_audio_path:
+        description: "Path file suara referensi di repo ini (commit dulu filenya sebelum run)"
+        required: true
+        type: string
+        default: "MyVoice.wav"
+      ref_text:
+        description: "SANGAT disarankan diisi: transkrip PERSIS dari audio referensi (huruf besar/kecil & tanda baca ikut aslinya). Ini mengaktifkan mode ICL yang kualitasnya jauh lebih bersih dari mode x-vector-only. Kosongkan hanya kalau kamu memang tidak tahu transkripnya."
+        required: false
+        type: string
+        default: "I'm at my 10-year college reunion today, but the emotion I feel is not what I expected. I really thought I would enjoy reminiscing and seeing all the old spots, whether it was a significant memory or something more mundane. But the emotion I feel is a little bit more complex. The nostalgia is more like grief—grief over how fast time seems to go by. I cannot believe it's been 10 years, but I think it's good to feel like this every once in a while because it reminds us to savor the present moment. But I don't know if that'll make us feel any different when we look back 10 years from today; at least we'll know that we paid attention."
+      model_size:
+        description: "Ukuran model (0.6B jauh lebih cepat di CPU)"
+        required: true
+        type: choice
+        default: "0.6B"
+        options:
+          - "0.6B"
+          - "1.7B"
+      quant:
+        description: "Kuantisasi GGUF (BF16 = kualitas terbaik & paling halus, tapi lambat di CPU. Q8_0 = kompromi. Q4_K_M = tercepat tapi paling banyak artefak/kresek)"
+        required: true
+        type: choice
+        default: "BF16"
+        options:
+          - "BF16"
+          - "Q8_0"
+          - "Q4_K_M"
+
+jobs:
+  clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Cek file referensi ada
+        run: |
+          if [ ! -f "${{ inputs.ref_audio_path }}" ]; then
+            echo "::error::File referensi '${{ inputs.ref_audio_path }}' tidak ditemukan di repo. Commit dulu file suaranya sebelum run workflow ini."
+            exit 1
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip & model weights
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/huggingface
+            ~/.cache/faster-qwen3-tts
+          key: qwen3tts-${{ inputs.model_size }}-${{ inputs.quant }}-${{ runner.os }}
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build patchelf
+
+      - name: Clone qwentts-cpp-python + qwentts.cpp (native source, pinned to ABI v2)
+        run: |
+          git clone --depth 1 https://github.com/andimarafioti/qwentts-cpp-python.git /tmp/qwentts-cpp-python
+          git clone https://github.com/ServeurpersoCom/qwentts.cpp.git /tmp/qwentts.cpp
+          cd /tmp/qwentts.cpp
+          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2ac6
+          git submodule update --init --recursive
+
+      - name: Build native qwentts.cpp for this runner's CPU (AMX disabled)
+        run: |
+          cd /tmp/qwentts-cpp-python
+          python scripts/build_native.py \
+            --source /tmp/qwentts.cpp \
+            --backend cpu \
+            --clean \
+            --cmake-arg=-GNinja \
+            --cmake-arg=-DGGML_NATIVE=ON \
+            --cmake-arg=-DGGML_CPU_ALL_VARIANTS=OFF \
+            --cmake-arg=-DGGML_AMX_TILE=OFF \
+            --cmake-arg=-DGGML_AMX_INT8=OFF \
+            --cmake-arg=-DGGML_AMX_BF16=OFF
+
+      - name: Install qwentts-cpp-python (from local build) + faster-qwen3-tts
+        run: |
+          pip install --upgrade pip
+          pip install /tmp/qwentts-cpp-python
+          pip install "faster-qwen3-tts[ggml]"
+
+      - name: Generate voice clone
+        env:
+          TEXT: ${{ inputs.text }}
+          LANGUAGE: ${{ inputs.language }}
+          REF_AUDIO: ${{ inputs.ref_audio_path }}
+          REF_TEXT: ${{ inputs.ref_text }}
+          MODEL_SIZE: ${{ inputs.model_size }}
+          QUANT: ${{ inputs.quant }}
+        run: |
+          mkdir -p outputs
+          python3 - <<'PY'
+          import os
+          import numpy as np
+          import soundfile as sf
+          from faster_qwen3_tts import FasterQwen3TTS
+
+          text = os.environ["TEXT"]
+          language = os.environ["LANGUAGE"]
+          ref_audio = os.environ["REF_AUDIO"]
+          ref_text = os.environ.get("REF_TEXT", "")
+          model_size = os.environ["MODEL_SIZE"]
+          quant = os.environ["QUANT"]
+          xvec_only = (ref_text.strip() == "")
+
+          if xvec_only:
+              print("Ref-text kosong -> pakai mode x-vector-only")
+
+          # Bersihkan audio referensi dulu: hilangkan DC offset & peak-normalize.
+          # Referensi yang sedikit clipping/over-driven bisa ikut ter-"clone"
+          # jadi karakter noise di suara hasil.
+          ref_data, ref_sr = sf.read(ref_audio, dtype="float64")
+          if ref_data.ndim > 1:
+              ref_data = ref_data.mean(axis=1)  # mono-kan kalau stereo
+          ref_data = ref_data - np.mean(ref_data)  # hilangkan DC offset
+          ref_peak = float(np.max(np.abs(ref_data))) if ref_data.size else 0.0
+          print(f"Peak amplitude referensi asli: {ref_peak:.4f}")
+          target_ref_peak = 10 ** (-1 / 20)  # headroom -1 dBFS
+          if ref_peak > 0:
+              ref_data = ref_data * (target_ref_peak / ref_peak)
+          cleaned_ref_path = "outputs/_ref_cleaned.wav"
+          sf.write(cleaned_ref_path, ref_data, ref_sr)
+          print(f"Referensi sudah dibersihkan & disimpan ke {cleaned_ref_path}")
+
+          model = FasterQwen3TTS.from_pretrained(
+              f"Qwen/Qwen3-TTS-12Hz-{model_size}-Base",
+              backend="ggml",
+              quant=quant,
+          )
+
+          audio_list, sr = model.generate_voice_clone(
+              text=text,
+              language=language,
+              ref_audio=cleaned_ref_path,
+              ref_text=ref_text,
+              xvec_only=xvec_only,
+          )
+          audio = np.concatenate(audio_list) if isinstance(audio_list, list) else audio_list
+          audio = np.asarray(audio, dtype=np.float64)
+
+          # Normalisasi peak SEBELUM ditulis ke WAV, supaya tidak ada hard-clip
+          # (menulis WAV float>1.0 langsung sebagai PCM_16 memotong paksa sample-nya,
+          # itulah sumber suara "kresek-kresek").
+          peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+          print(f"Peak amplitude mentah dari model: {peak:.4f}")
+          target_peak = 10 ** (-1 / 20)  # headroom -1 dBFS (~0.891)
+          if peak > target_peak:
+              audio = audio * (target_peak / peak)
+              print(f"Peak melebihi batas aman, di-scale turun ke {target_peak:.4f} (bukan dipotong)")
+          else:
+              print("Tidak ada risiko clipping, audio dibiarkan apa adanya.")
+
+          sf.write("outputs/output_clone.wav", audio, sr)
+          dur = len(audio) / sr if sr else 0.0
+          print(f"Selesai: outputs/output_clone.wav ({dur:.2f}s @ {sr} Hz)")
+          PY
+
+      - name: Upload hasil audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-clone-output
+          path: outputs/output_clone.wav
+          retention-days: 14
