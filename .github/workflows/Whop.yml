@@ -1,0 +1,107 @@
+name: A1 Scraper
+
+on:
+  workflow_dispatch: # Dapat dijalankan manual lewat tab Actions
+  schedule:
+    - cron: '0 */6 * * *' # Otomatis berjalan setiap 6 jam
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Create package.json
+        run: |
+          cat << 'EOF' > package.json
+          {
+            "name": "gha-scraper",
+            "version": "1.0.0",
+            "main": "scrape.js",
+            "dependencies": {
+              "playwright": "^1.40.0",
+              "playwright-extra": "^4.3.6",
+              "puppeteer-extra-plugin-stealth": "^2.11.2"
+            }
+          }
+          EOF
+
+      - name: Install Node Dependencies
+        run: npm install
+
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Create scrape.js
+        run: |
+          cat << 'EOF' > scrape.js
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth')();
+
+          chromium.use(stealth);
+
+          (async () => {
+            console.log('Membuka browser...');
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            });
+
+            const page = await context.newPage();
+            const url = 'https://contentrewards.com/discover/23fc937f-4240-4cb7-bfe0-d79c2271b8ee';
+
+            try {
+              await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+
+              // Pindah ke tab Analytics jika ada
+              const analyticsTab = page.locator('button:has-text("Analytics")');
+              if (await analyticsTab.isVisible()) {
+                await analyticsTab.click();
+                await page.waitForTimeout(2000);
+              }
+
+              // Klik tab Submissions jika ada
+              const submissionsTab = page.locator('button:has-text("Submissions")');
+              if (await submissionsTab.isVisible()) {
+                await submissionsTab.click();
+                await page.waitForTimeout(2000);
+              }
+
+              // Tunggu data selesai dimuat oleh JavaScript
+              console.log('Menunggu render data...');
+              await page.waitForTimeout(5000);
+
+              // Ambil Link Resource
+              const resourceUrl = await page.getAttribute('a:has-text("Content Guidelines")', 'href').catch(() => "Tidak ditemukan");
+
+              // Ambil Angka Submissions
+              const submissionsText = await page.locator('text=Submissions').locator('..').innerText().catch(() => "0");
+
+              const result = {
+                timestamp: new Date().toISOString(),
+                submissions: submissionsText.replace(/[^0-9kK,.]/g, ''),
+                resource_url: resourceUrl
+              };
+
+              console.log('====================================');
+              console.log('HASIL SCRAPING:');
+              console.log(JSON.stringify(result, null, 2));
+              console.log('====================================');
+
+            } catch (error) {
+              console.error('Error saat scraping:', error);
+            } finally {
+              await browser.close();
+            }
+          })();
+          EOF
+
+      - name: Run Scraper
+        run: node scrape.js
