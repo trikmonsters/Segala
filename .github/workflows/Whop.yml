@@ -1,4 +1,4 @@
-name: Playwright Scraper Final Exact Selector
+name: Playwright Scraper Number-Flow Fix
 
 on:
   workflow_dispatch:
@@ -66,53 +66,64 @@ jobs:
               await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
               await page.waitForTimeout(3000);
 
-              // 1. KLIK TAB ANALYTICS (Menggunakan data-tab="analytics")
-              console.log('Mengeklik tab Analytics...');
+              // 1. KLIK TAB ANALYTICS
               const analyticsBtn = page.locator('button[data-tab="analytics"]');
               if (await analyticsBtn.isVisible()) {
                 await analyticsBtn.click({ force: true });
                 await page.waitForTimeout(2000);
               }
 
-              // 2. KLIK SUB-TAB SUBMISSIONS (JIKA ADA TOGGLE SUBMISSIONS)
-              console.log('Mengeklik sub-tab Submissions...');
-              const subTab = page.locator('button:has-text("Submissions"), [data-tab="submissions"]').first();
+              // 2. KLIK SUB-TAB SUBMISSIONS
+              const subTab = page.locator('button:has-text("Submissions")').first();
               if (await subTab.isVisible()) {
                 await subTab.click({ force: true });
                 await page.waitForTimeout(2000);
               }
 
-              // Tunggu angka terisi/berubah dari 0 ke data aktual
+              // Tunggu animasi number-flow selesai bergulir
               await page.waitForTimeout(4000);
 
               // 3. ESTRAKSI LINK RESOURCE
               let resourceUrl = "Tidak ditemukan";
-              const resourceAnchor = page.locator('a:has-text("Content Guidelines"), a[href*="docs.google.com"]').first();
-              if (await resourceAnchor.count() > 0) {
-                resourceUrl = await resourceAnchor.getAttribute('href');
-              } else {
-                const pageContent = await page.content();
-                const match = pageContent.match(/href="(https:\/\/(?:docs\.google\.com|drive\.google\.com)[^"]*)"/i);
-                if (match) resourceUrl = match[1];
-              }
+              const pageContent = await page.content();
+              const matchDoc = pageContent.match(/href="(https:\/\/(?:docs\.google\.com|drive\.google\.com)[^"]*)"/i);
+              if (matchDoc) resourceUrl = matchDoc[1];
 
-              // 4. ESTRAKSI ANGKA SUBMISSIONS (LANGSUNG DARI DOM ANALYTICS)
-              let submissionsVal = "0";
+              // 4. ESTRAKSI ANGKA DARI NUMBER-FLOW REACT
+              let submissionsVal = await page.evaluate(() => {
+                // Trik A: Cari elemen <number-flow> atau elemen dengan atribut number-flow
+                const nfElements = document.querySelectorAll('number-flow, [data-number-flow], [class*="number-flow"]');
+                
+                for (const el of nfElements) {
+                  // Cek Atribut Utama number-flow
+                  const val = el.getAttribute('value') || 
+                              el.getAttribute('aria-label') || 
+                              el.getAttribute('data-value');
+                  if (val) return val;
 
-              // Taktik 1: Ambil elemen angka persis di dalam container Analytics
-              const submissionsBlock = page.locator('text=/Submissions/i').locator('xpath=..');
-              if (await submissionsBlock.count() > 0) {
-                const rawText = await submissionsBlock.innerText();
-                const cleanText = rawText.replace(/Submissions/i, '').trim();
-                if (cleanText) submissionsVal = cleanText;
-              }
+                  // Cek apakah angka tersimpan di dataset React internal
+                  if (el.dataset && el.dataset.value) return el.dataset.value;
+                }
 
-              // Taktik 2: Jika masih kosong, scan angka terdekat di area analytics
-              if (submissionsVal === "0" || submissionsVal === "") {
-                const pageText = await page.innerText('body');
-                const match = pageText.match(/([\d.,]+[kKM]?)\s*\n?\s*Submissions/i);
-                if (match) submissionsVal = match[1];
-              }
+                // Trik B: Jika tidak menggunakan custom tag, cari komponen di sekitar tulisan "Submissions"
+                const subLabel = Array.from(document.querySelectorAll('*')).find(
+                  el => el.children.length === 0 && el.textContent.trim().toLowerCase() === 'submissions'
+                );
+
+                if (subLabel && subLabel.parentElement) {
+                  const parent = subLabel.parentElement;
+                  // Cari elemen number-flow atau angka di dalam parent container
+                  const nfInside = parent.querySelector('number-flow, [aria-label], [value]');
+                  if (nfInside) {
+                    return nfInside.getAttribute('value') || nfInside.getAttribute('aria-label');
+                  }
+                  
+                  // Ambil seluruh textContent dari parent jika terpaksa
+                  return parent.textContent.replace(/submissions/i, '').trim();
+                }
+
+                return "0";
+              });
 
               const result = {
                 timestamp: new Date().toISOString(),
@@ -121,7 +132,7 @@ jobs:
               };
 
               console.log('====================================');
-              console.log('HASIL SCRAPING TARGETED:');
+              console.log('HASIL SCRAPING NUMBER-FLOW:');
               console.log(JSON.stringify(result, null, 2));
               console.log('====================================');
 
