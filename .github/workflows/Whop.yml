@@ -1,4 +1,4 @@
-name: Playwright Scraper Final Fix
+name: Playwright Scraper Final Exact Selector
 
 on:
   workflow_dispatch:
@@ -48,7 +48,7 @@ jobs:
           chromium.use(stealth);
 
           (async () => {
-            console.log('Membuka browser & menyiapkan network interceptor...');
+            console.log('Membuka browser...');
             const browser = await chromium.launch({ 
               headless: true,
               args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -60,74 +60,68 @@ jobs:
             });
 
             const page = await context.newPage();
-            let capturedData = {};
-
-            // 1. CEGAT (INTERCEPT) API RESPONSE JSON
-            page.on('response', async (response) => {
-              const url = response.url();
-              // Mengincar respon API yang membawa data campaign
-              if (url.includes('/api/') || url.includes('_next/data')) {
-                try {
-                  const json = await response.json();
-                  // Simpan JSON jika mengandung kata submission/budget/campaign
-                  const str = JSON.stringify(json);
-                  if (str.includes('submission') || str.includes('budget') || str.includes('1500')) {
-                    capturedData = { ...capturedData, ...json };
-                  }
-                } catch (e) {
-                  // Abaikan jika respon bukan JSON
-                }
-              }
-            });
-
             const url = 'https://contentrewards.com/discover/23fc937f-4240-4cb7-bfe0-d79c2271b8ee';
 
             try {
               await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-              await page.waitForTimeout(5000);
+              await page.waitForTimeout(3000);
 
-              // 2. RESOURCE URL (Sudah terbukti berhasil)
-              const pageContent = await page.content();
-              const resourceMatch = pageContent.match(/href="(https:\/\/(?:docs\.google\.com|drive\.google\.com|notion\.[^"]+)[^"]*)"/i);
-              const resourceUrl = resourceMatch ? resourceMatch[1] : "https://docs.google.com/document/d/1qZy_32pz9bvNMB5vmfs8MYhqk9wpBHHw9z9cY6rY1k8/edit?usp=sharing";
-
-              // 3. ESTRAKSI ANGKA SUBMISSIONS / METRICS DARIKAN DOM & API
-              let submissionsVal = "0";
-
-              // Taktik A: Scan seluruh teks visual di halaman (Termasuk header/cards)
-              const fullText = await page.innerText('body');
-              
-              // Mencari pola angka yang diikuti oleh ikon/teks submission
-              const matchText = fullText.match(/([\d.,]+[kKM]?)\s*(?:submissions|submissions\s*0)/i) || 
-                                fullText.match(/submissions[\s\S]{1,20}?([\d.,]+[kKM]?)/i);
-
-              if (matchText) {
-                submissionsVal = matchText[1];
+              // 1. KLIK TAB ANALYTICS (Menggunakan data-tab="analytics")
+              console.log('Mengeklik tab Analytics...');
+              const analyticsBtn = page.locator('button[data-tab="analytics"]');
+              if (await analyticsBtn.isVisible()) {
+                await analyticsBtn.click({ force: true });
+                await page.waitForTimeout(2000);
               }
 
-              // Taktik B: Ambil dari elemen icon statistik jika Taktik A meleset
-              if (submissionsVal === "0") {
-                const statElements = await page.locator('div, span, p').allInnerTexts();
-                for (const text of statElements) {
-                  if (text.toLowerCase().includes('submission') && /\d/.test(text)) {
-                    const cleanNum = text.replace(/[^0-9kK,.]/g, '');
-                    if (cleanNum) {
-                      submissionsVal = cleanNum;
-                      break;
-                    }
-                  }
-                }
+              // 2. KLIK SUB-TAB SUBMISSIONS (JIKA ADA TOGGLE SUBMISSIONS)
+              console.log('Mengeklik sub-tab Submissions...');
+              const subTab = page.locator('button:has-text("Submissions"), [data-tab="submissions"]').first();
+              if (await subTab.isVisible()) {
+                await subTab.click({ force: true });
+                await page.waitForTimeout(2000);
+              }
+
+              // Tunggu angka terisi/berubah dari 0 ke data aktual
+              await page.waitForTimeout(4000);
+
+              // 3. ESTRAKSI LINK RESOURCE
+              let resourceUrl = "Tidak ditemukan";
+              const resourceAnchor = page.locator('a:has-text("Content Guidelines"), a[href*="docs.google.com"]').first();
+              if (await resourceAnchor.count() > 0) {
+                resourceUrl = await resourceAnchor.getAttribute('href');
+              } else {
+                const pageContent = await page.content();
+                const match = pageContent.match(/href="(https:\/\/(?:docs\.google\.com|drive\.google\.com)[^"]*)"/i);
+                if (match) resourceUrl = match[1];
+              }
+
+              // 4. ESTRAKSI ANGKA SUBMISSIONS (LANGSUNG DARI DOM ANALYTICS)
+              let submissionsVal = "0";
+
+              // Taktik 1: Ambil elemen angka persis di dalam container Analytics
+              const submissionsBlock = page.locator('text=/Submissions/i').locator('xpath=..');
+              if (await submissionsBlock.count() > 0) {
+                const rawText = await submissionsBlock.innerText();
+                const cleanText = rawText.replace(/Submissions/i, '').trim();
+                if (cleanText) submissionsVal = cleanText;
+              }
+
+              // Taktik 2: Jika masih kosong, scan angka terdekat di area analytics
+              if (submissionsVal === "0" || submissionsVal === "") {
+                const pageText = await page.innerText('body');
+                const match = pageText.match(/([\d.,]+[kKM]?)\s*\n?\s*Submissions/i);
+                if (match) submissionsVal = match[1];
               }
 
               const result = {
                 timestamp: new Date().toISOString(),
                 submissions: submissionsVal,
-                resource_url: resourceUrl,
-                api_debug_keys: Object.keys(capturedData) // Untuk melihat API apa saja yang berhasil dicegat
+                resource_url: resourceUrl
               };
 
               console.log('====================================');
-              console.log('HASIL SCRAPING AKURAT:');
+              console.log('HASIL SCRAPING TARGETED:');
               console.log(JSON.stringify(result, null, 2));
               console.log('====================================');
 
