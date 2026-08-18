@@ -1,0 +1,81 @@
+name: Canary-Qwen Transcribe Test
+
+on:
+  workflow_dispatch:          # Manual trigger saja
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300      # 5 jam
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Install PyTorch CPU + NeMo
+        run: |
+          pip install --upgrade pip
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install "nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main"
+          pip install soundfile librosa
+
+      - name: Transcribe example-tts-v2.wav
+        run: |
+          python - << 'EOF'
+          import torch
+          from nemo.collections.speechlm2.models import SALM
+          import os
+
+          audio_path = "example-tts-v2.wav"
+
+          if not os.path.exists(audio_path):
+              print(f"File {audio_path} tidak ditemukan!")
+              exit(1)
+
+          print("Loading Canary-Qwen 2.5B on CPU... (ini akan lama)")
+          device = torch.device("cpu")
+          model = SALM.from_pretrained("nvidia/canary-qwen-2.5b")
+          model = model.to(device).eval()
+
+          print(f"\nTranscribing: {audio_path}")
+          try:
+              answer_ids = model.generate(
+                  prompts=[[{
+                      "role": "user",
+                      "content": f"Transcribe the following: {model.audio_locator_tag}",
+                      "audio": [audio_path]
+                  }]],
+                  max_new_tokens=256,
+              )
+              text = model.tokenizer.ids_to_text(answer_ids[0].cpu())
+              
+              print("\n========== TRANSCRIPT ==========")
+              print(text)
+              print("================================")
+
+              # Simpan hasil
+              with open("transcript.txt", "w", encoding="utf-8") as f:
+                  f.write(text)
+              print("\nHasil disimpan ke transcript.txt")
+
+          except Exception as e:
+              print(f"Error saat transcribe: {e}")
+              raise
+          EOF
+
+      - name: Upload transcript
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript
+          path: transcript.txt
