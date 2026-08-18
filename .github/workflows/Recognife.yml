@@ -1,85 +1,289 @@
-name: Canary-Qwen Transcribe Test
+name: Auto Subtitle (Canary-Qwen 2.5B transcribe + Forced Alignment, word-by-word SRT)
+
+# 2-stage pipeline:
+#   Stage 1 (TEXT):    nvidia/canary-qwen-2.5b transcribes the audio into text
+#                       (skipped if you paste your own reference_text instead).
+#   Stage 2 (TIMING):  NeMo Forced Aligner (NFA) aligns that text to the audio
+#                       to get precise word-level timestamps -> word-by-word SRT.
+#
+# Why split it like this instead of using Canary-Qwen's own timestamps?
+#   - Canary-Qwen 2.5B is an ASR+LLM model (SALM) - great at producing clean,
+#     well-formed TEXT, but it does not output word-level timestamps.
+#   - NFA is a small CTC model whose only job is precise timing, given text
+#     that's already known to be correct. Combining them gets you both:
+#     accurate wording AND accurate word-by-word timing.
+#
+# HOW TO USE:
+#   1. Put your audio/video file in the repo, e.g. example-tts-v2.wav
+#   2. Actions -> run this workflow
+#      - Leave "reference_text" EMPTY to let Canary-Qwen 2.5B auto-transcribe it
+#      - OR paste your own exact narration script into "reference_text" to
+#        skip transcription entirely (fastest, 100% guaranteed wording)
+#   3. Download word-by-word.srt from the run's Artifacts section
+#
+# NOTE: Canary-Qwen 2.5B on a CPU GitHub-hosted runner is slow (that's why
+# timeout-minutes is generous below). If you transcribe often, consider
+# pointing `runs-on` at a self-hosted GPU runner.
 
 on:
   workflow_dispatch:
+    inputs:
+      input_file:
+        description: "Path (in repo) to the audio/video file"
+        required: true
+        default: "example-tts-v2.wav"
+      reference_text:
+        description: "Optional: exact narration script. Leave EMPTY to auto-transcribe with Canary-Qwen 2.5B instead."
+        required: false
+        type: string
+      alignment_model:
+        description: "NeMo CTC/Hybrid-CTC model used for word-level alignment"
+        required: false
+        default: "stt_en_fastconformer_hybrid_large_pc"
+      output_name:
+        description: "Filename for the generated SRT"
+        required: false
+        default: "subtitle.srt"
 
 jobs:
-  transcribe:
+  transcribe-and-align:
     runs-on: ubuntu-latest
     timeout-minutes: 300
-
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          # NeMo's codebase uses PEP 646 star-unpacking in subscripts
+          # (e.g. a[*b]), which only parses on Python 3.11+.
+          python-version: "3.11"
 
-      - name: Install system dependencies
+      - name: Install system dependencies (ffmpeg, libsndfile)
         run: |
-          sudo apt-get update
+          sudo apt-get update -y
           sudo apt-get install -y ffmpeg libsndfile1
 
-      - name: Install PyTorch CPU + NeMo + peft
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-cqwen-nfa-${{ hashFiles('**/*.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-cqwen-nfa-
+
+      - name: Install Python dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install peft
           pip install "nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main"
           pip install soundfile librosa
 
-      - name: Convert audio to mono 16kHz
+      - name: Fetch only the NeMo Forced Aligner tool (sparse checkout, fast)
         run: |
-          ffmpeg -y -i example-tts-v2.wav -ar 16000 -ac 1 -c:a pcm_s16le example-tts-v2-mono.wav
-          ls -lh example-tts-v2-mono.wav
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/NVIDIA/NeMo.git nfa_repo
+          cd nfa_repo
+          git sparse-checkout set tools/nemo_forced_aligner
 
-      - name: Transcribe
+      - name: Convert input to 16kHz mono WAV
         run: |
-          python - << 'EOF'
+          mkdir -p work
+          ffmpeg -y -i "${{ inputs.input_file }}" -ar 16000 -ac 1 -c:a pcm_s16le work/audio_16k.wav
+
+      # ---------- STAGE 1: TEXT ----------
+
+      - name: "Stage 1a: Transcribe with Canary-Qwen 2.5B (only if reference_text is empty)"
+        if: ${{ inputs.reference_text == '' }}
+        run: |
+          python - << 'PYEOF'
           import torch
           from nemo.collections.speechlm2.models import SALM
-          import os
 
-          audio_path = "example-tts-v2-mono.wav"
+          audio_path = "work/audio_16k.wav"
 
-          if not os.path.exists(audio_path):
-              print(f"File {audio_path} tidak ditemukan!")
-              exit(1)
-
-          print("Loading Canary-Qwen 2.5B on CPU... (ini akan lama)")
+          print("Loading Canary-Qwen 2.5B on CPU... (this will take a while)")
           device = torch.device("cpu")
           model = SALM.from_pretrained("nvidia/canary-qwen-2.5b")
           model = model.to(device).eval()
 
-          print(f"\nTranscribing: {audio_path}")
-          try:
-              answer_ids = model.generate(
-                  prompts=[[{
-                      "role": "user",
-                      "content": f"Transcribe the following: {model.audio_locator_tag} and timestamp for word",
-                      "audio": [audio_path]
-                  }]],
-                  max_new_tokens=256,
-              )
-              text = model.tokenizer.ids_to_text(answer_ids[0].cpu())
-              
-              print("\n========== TRANSCRIPT ==========")
-              print(text)
-              print("================================")
+          print(f"Transcribing: {audio_path}")
+          answer_ids = model.generate(
+              prompts=[[{
+                  "role": "user",
+                  "content": f"Transcribe the following: {model.audio_locator_tag}",
+                  "audio": [audio_path],
+              }]],
+              max_new_tokens=256,
+          )
+          text = model.tokenizer.ids_to_text(answer_ids[0].cpu())
 
-              with open("transcript.txt", "w", encoding="utf-8") as f:
-                  f.write(text)
-              print("\nHasil disimpan ke transcript.txt")
+          print("\n========== TRANSCRIPT ==========")
+          print(text)
+          print("================================")
 
-          except Exception as e:
-              print(f"Error saat transcribe: {e}")
-              raise
-          EOF
+          with open("work/script_raw.txt", "w", encoding="utf-8") as f:
+              f.write(text)
+          PYEOF
 
-      - name: Upload transcript
+      - name: "Stage 1b: Use your provided reference_text instead (skips transcription)"
+        if: ${{ inputs.reference_text != '' }}
+        env:
+          REFERENCE_TEXT: ${{ inputs.reference_text }}
+        run: |
+          mkdir -p work
+          printf '%s' "$REFERENCE_TEXT" > work/script_raw.txt
+
+      - name: Upload auto-transcribed text (if generated)
+        if: ${{ inputs.reference_text == '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: transcript
-          path: transcript.txt
+          name: canary-qwen-transcript
+          path: work/script_raw.txt
+
+      - name: Clean text (strip emoji, hashtags, mentions, stray symbols)
+        run: |
+          python - << 'PYEOF'
+          import re
+
+          with open("work/script_raw.txt", "r", encoding="utf-8") as f:
+              text = f.read()
+
+          # 1) Remove emojis / pictographs / dingbats / misc symbol blocks
+          emoji_pattern = re.compile(
+              "["
+              "\U0001F300-\U0001F5FF"
+              "\U0001F600-\U0001F64F"
+              "\U0001F680-\U0001F6FF"
+              "\U0001F700-\U0001F77F"
+              "\U0001F780-\U0001F7FF"
+              "\U0001F800-\U0001F8FF"
+              "\U0001F900-\U0001F9FF"
+              "\U0001FA00-\U0001FA6F"
+              "\U0001FA70-\U0001FAFF"
+              "\U00002600-\U000026FF"
+              "\U00002700-\U000027BF"
+              "\U0001F1E0-\U0001F1FF"
+              "\U00002190-\U000021FF"
+              "\U00002300-\U000023FF"
+              "\U0000FE00-\U0000FE0F"
+              "\U0001F000-\U0001F0FF"
+              "]+",
+              flags=re.UNICODE,
+          )
+          text = emoji_pattern.sub(" ", text)
+
+          # 2) Hashtags/mentions: drop the symbol but keep the underlying word
+          text = re.sub(r"[#@](\w+)", r"\1", text, flags=re.UNICODE)
+
+          # 3) Keep only letters/numbers/spaces + basic sentence punctuation
+          text = re.sub(r"[^\w\s.,!?'-]", " ", text, flags=re.UNICODE)
+
+          # 4) Normalize repeated punctuation/whitespace
+          text = re.sub(r"([.,!?])\1+", r"\1", text)
+          text = re.sub(r"\s+", " ", text).strip()
+
+          with open("work/script_clean.txt", "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("Cleaned reference text:")
+          print(text)
+          PYEOF
+
+      - name: Upload cleaned script (for review)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleaned-reference-script
+          path: work/script_clean.txt
+
+      # ---------- STAGE 2: TIMING ----------
+
+      - name: Build NFA manifest from cleaned text
+        run: |
+          python - << 'PYEOF'
+          import json
+
+          with open("work/script_clean.txt", "r", encoding="utf-8") as f:
+              text = f.read().strip()
+
+          if not text:
+              raise RuntimeError("Reference text is empty after cleaning - check Stage 1 output.")
+
+          manifest = {
+              "audio_filepath": "work/audio_16k.wav",
+              "text": text,
+          }
+
+          with open("work/manifest.json", "w", encoding="utf-8") as f:
+              f.write(json.dumps(manifest) + "\n")
+
+          print("Manifest written:", manifest)
+          PYEOF
+
+      - name: Run NeMo Forced Aligner
+        run: |
+          python nfa_repo/tools/nemo_forced_aligner/align.py \
+            pretrained_name="${{ inputs.alignment_model }}" \
+            manifest_filepath="work/manifest.json" \
+            output_dir="work/nfa_output" \
+            save_output_file_formats=["ctm"] \
+            ctm_file_config.remove_blank_tokens=true
+
+      - name: Convert word-level CTM to word-by-word SRT
+        run: |
+          python - << 'PYEOF'
+          import glob
+
+          # Punctuation kept in the reference text on purpose (helps the
+          # _pc alignment model segment sentences correctly), but stripped
+          # here purely for DISPLAY so subtitles show clean words.
+          STRIP_CHARS = ".,!?'-\""
+
+          def fmt_ts(seconds: float) -> str:
+              if seconds < 0:
+                  seconds = 0
+              ms_total = round(seconds * 1000)
+              hh, rem = divmod(ms_total, 3_600_000)
+              mm, rem = divmod(rem, 60_000)
+              ss, ms = divmod(rem, 1000)
+              return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
+
+          ctm_files = glob.glob("work/nfa_output/ctm/words/*.ctm")
+          if not ctm_files:
+              raise RuntimeError("No CTM output found - alignment likely failed.")
+
+          raw_entries = []
+          with open(ctm_files[0], "r", encoding="utf-8") as f:
+              for line in f:
+                  parts = line.strip().split()
+                  if len(parts) < 5:
+                      continue
+                  # NeMo's CTM: <utt_id> <channel> <start> <duration> <word> <confidence> <type> <speaker>
+                  # -> take ONLY the word column (index 4).
+                  start = float(parts[2])
+                  duration = float(parts[3])
+                  word = parts[4]
+                  raw_entries.append((start, start + duration, word))
+
+          entries = []
+          for start, end, word in raw_entries:
+              clean_word = word.strip(STRIP_CHARS)
+              if not clean_word:
+                  continue
+              entries.append((start, end, clean_word))
+
+          out_path = "${{ inputs.output_name }}"
+          with open(out_path, "w", encoding="utf-8") as f:
+              for i, (start, end, word) in enumerate(entries, start=1):
+                  f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{word}\n\n")
+
+          print(f"Wrote {len(entries)} word-level subtitle entries to {out_path}")
+          PYEOF
+
+      - name: Upload SRT artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: word-by-word-srt
+          path: ${{ inputs.output_name }}
+          if-no-files-found: error
