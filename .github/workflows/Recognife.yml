@@ -1,12 +1,12 @@
 name: Canary-Qwen Transcribe Test
 
 on:
-  workflow_dispatch:          # Manual trigger saja
+  workflow_dispatch:
 
 jobs:
   transcribe:
     runs-on: ubuntu-latest
-    timeout-minutes: 300      # 5 jam
+    timeout-minutes: 300
 
     steps:
       - name: Checkout
@@ -16,7 +16,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          # cache dihapus supaya tidak error
 
       - name: Install system dependencies
         run: |
@@ -64,7 +64,6 @@ jobs:
               print(text)
               print("================================")
 
-              # Simpan hasil
               with open("transcript.txt", "w", encoding="utf-8") as f:
                   f.write(text)
               print("\nHasil disimpan ke transcript.txt")
