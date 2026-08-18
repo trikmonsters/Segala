@@ -58,7 +58,7 @@ jobs:
               answer_ids = model.generate(
                   prompts=[[{
                       "role": "user",
-                      "content": f"Transcribe the following: {model.audio_locator_tag}",
+                      "content": f"Transcribe the following: {model.audio_locator_tag} and timestamp for word",
                       "audio": [audio_path]
                   }]],
                   max_new_tokens=256,
