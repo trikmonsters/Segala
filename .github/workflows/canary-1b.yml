@@ -57,7 +57,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          # NeMo's codebase uses PEP 646 star-unpacking in subscripts
+          # (e.g. a[*b]), which only parses on Python 3.11+. 3.10 will
+          # fail with a SyntaxError on import.
+          python-version: "3.11"
 
       - name: Install system dependencies (ffmpeg, libsndfile)
         run: |
