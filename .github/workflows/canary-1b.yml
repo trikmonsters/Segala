@@ -22,10 +22,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg libsndfile1
 
-      - name: Install PyTorch CPU + NeMo
+      - name: Install PyTorch (CPU Version)
         run: |
-          pip install --upgrade pip
-          pip install torch torchvision torchaudio --index-url https://pytorch.org
+          python -m pip install --upgrade pip
+          pip install torch torchvision torchaudio --extra-index-url https://pytorch.org
+
+      - name: Install NeMo Toolkit + Audio Libraries
+        run: |
           pip install "nemo_toolkit[asr] @ git+https://github.com"
           pip install soundfile librosa
 
@@ -48,21 +51,17 @@ jobs:
               exit(1)
 
           print("Loading Canary-1B-v2 on CPU...")
-          # Menggunakan EncDecMultiTaskModel bawaan NeMo ASR untuk Canary-1B-v2
+          # Membuka model Canary-1B-v2 murni ASR dari NVIDIA HuggingFace
           model = EncDecMultiTaskModel.from_pretrained("nvidia/canary-1b-v2")
           model = model.to(torch.device("cpu")).eval()
 
-          # Mengatur parameter decoding (Bahasa sumber & target harus ditentukan)
-          # Ganti "en" sesuai bahasa audio Anda jika bukan bahasa Inggris (cth: "es", "de", "fr")
+          # Konfigurasi decoding Canary v2 untuk mendeteksi penanda waktu kata/kalimat
           decode_cfg = model.cfg.decoding
           decode_cfg.beam.beam_size = 1
-          
-          # Aktifkan timestamps (Kemampuan deteksi segmen / kata)
-          decode_cfg.timestamps = True 
+          decode_cfg.timestamps = True # Mengaktifkan deteksi rentang waktu ucapan
 
           print(f"\nTranscribing: {audio_path}")
           try:
-              # Jalankan inferensi dengan konfigurasi multi-task Canary
               res = model.transcribe(
                   paths2audio_files=[audio_path],
                   batch_size=1,
@@ -70,21 +69,20 @@ jobs:
                   override_config=decode_cfg
               )
               
-              # Mengambil hasil transkrip teks murni dan detail timestamps-nya
-              hypothesis = res[0]
+              # Mengambil hasil hipotesis transkrip
+              hypothesis = res[0] if isinstance(res, list) else res
               text_output = hypothesis.text if hasattr(hypothesis, 'text') else str(hypothesis)
               
               print("\n========== TRANSCRIPT ==========")
               print(text_output)
               print("================================")
 
-              # Menampilkan informasi penanda waktu kata (jika tersedia dari objek hipotesis)
               print("\n========== TIMESTAMPS DETAIL ==========")
               if hasattr(hypothesis, 'timestep') and hypothesis.timestep is not None:
                   print(f"Detail Timestamps Semantik: {hypothesis.timestep}")
               else:
-                  print("Catatan: Untuk ekstraksi Word-Level Timestamps penuh yang presisi tinggi,")
-                  print("disarankan menggunakan library pendukung 'NeMo Forced Aligner (NFA)'.")
+                  print("Catatan: Untuk penanda waktu tingkat kata (Word-Level) yang presisi tinggi,")
+                  print("disarankan menggabungkannya dengan NeMo Forced Aligner (NFA).")
               print("=======================================")
 
               with open("transcript.txt", "w", encoding="utf-8") as f:
