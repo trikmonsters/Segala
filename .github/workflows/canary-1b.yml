@@ -25,10 +25,9 @@ jobs:
       - name: Install PyTorch CPU + NeMo
         run: |
           pip install --upgrade pip
-          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          # Canary 1B v2 tidak memerlukan library 'peft' seperti model berbasis LLM
-          pip install "nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main"
-          pip install soundfile librosa omega_conf
+          pip install torch torchvision torchaudio --index-url https://pytorch.org
+          pip install "nemo_toolkit[asr] @ git+https://github.com"
+          pip install soundfile librosa
 
       - name: Convert audio to mono 16kHz
         run: |
