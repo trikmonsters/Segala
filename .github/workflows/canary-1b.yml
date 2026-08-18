@@ -1,32 +1,5 @@
 name: Auto Subtitle (Forced Alignment, word-by-word SRT)
 
-# Generates a word-by-word .srt from an audio/video file USING A KNOWN
-# REFERENCE SCRIPT (e.g. the exact text you fed into your TTS engine).
-#
-# Why forced alignment instead of free ASR (Canary-1b-v2)?
-#   - Zero hallucination / no "unknown word" guessing: the text is fixed,
-#     the model only finds WHEN each word was spoken.
-#   - Much faster: it's a single CTC forward pass + Viterbi alignment on a
-#     ~115M param model, instead of autoregressive decoding on a 1B model.
-#
-# Engine: NVIDIA NeMo Forced Aligner (NFA) + stt_en_fastconformer_hybrid_large_pc
-# (a small Hybrid CTC-Transducer model used in CTC mode, with punctuation
-# & capitalization support so your reference text's casing/punctuation is
-# preserved in the SRT).
-#
-# The reference text is pasted directly into the workflow_dispatch input
-# (no .txt file needed) and is auto-cleaned before alignment: emojis,
-# hashtags (#), mentions (@), and other stray symbols are stripped, while
-# normal sentence punctuation (. , ! ? ' -) is kept since the alignment
-# model understands it.
-#
-# HOW TO USE:
-#   1. Put your audio/video file in the repo, e.g. example-tts-v2.wav
-#   2. Actions -> "Auto Subtitle (Forced Alignment, word-by-word SRT)" -> Run workflow
-#   3. Paste your full narration script (as given to the TTS engine,
-#      emojis/hashtags/etc. are fine) into the "reference_text" box
-#   4. Download the generated .srt from the run's Artifacts section
-
 on:
   workflow_dispatch:
     inputs:
@@ -217,10 +190,13 @@ jobs:
                   parts = line.strip().split()
                   if len(parts) < 5:
                       continue
-                  # <utt_id> 1 <start> <duration> <word>
+                  # NeMo's CTM has MORE than 5 columns:
+                  # <utt_id> <channel> <start> <duration> <word> <confidence> <type> <speaker>
+                  # -> take ONLY the word column (index 4), not everything after it,
+                  # or you'll get junk like "Disney NA lex NA" in the subtitle.
                   start = float(parts[2])
                   duration = float(parts[3])
-                  word = " ".join(parts[4:])
+                  word = parts[4]
                   raw_entries.append((start, start + duration, word))
 
           entries = []
