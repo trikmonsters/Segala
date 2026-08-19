@@ -1,30 +1,5 @@
 name: Auto Subtitle (Canary-Qwen 2.5B transcribe + Forced Alignment, word-by-word SRT)
 
-# 2-stage pipeline:
-#   Stage 1 (TEXT):    nvidia/canary-qwen-2.5b transcribes the audio into text
-#                       (skipped if you paste your own reference_text instead).
-#   Stage 2 (TIMING):  NeMo Forced Aligner (NFA) aligns that text to the audio
-#                       to get precise word-level timestamps -> word-by-word SRT.
-#
-# Why split it like this instead of using Canary-Qwen's own timestamps?
-#   - Canary-Qwen 2.5B is an ASR+LLM model (SALM) - great at producing clean,
-#     well-formed TEXT, but it does not output word-level timestamps.
-#   - NFA is a small CTC model whose only job is precise timing, given text
-#     that's already known to be correct. Combining them gets you both:
-#     accurate wording AND accurate word-by-word timing.
-#
-# HOW TO USE:
-#   1. Put your audio/video file in the repo, e.g. example-tts-v2.wav
-#   2. Actions -> run this workflow
-#      - Leave "reference_text" EMPTY to let Canary-Qwen 2.5B auto-transcribe it
-#      - OR paste your own exact narration script into "reference_text" to
-#        skip transcription entirely (fastest, 100% guaranteed wording)
-#   3. Download word-by-word.srt from the run's Artifacts section
-#
-# NOTE: Canary-Qwen 2.5B on a CPU GitHub-hosted runner is slow (that's why
-# timeout-minutes is generous below). If you transcribe often, consider
-# pointing `runs-on` at a self-hosted GPU runner.
-
 on:
   workflow_dispatch:
     inputs:
@@ -49,6 +24,11 @@ jobs:
   transcribe-and-align:
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    env:
+      OMP_NUM_THREADS: 4
+      MKL_NUM_THREADS: 4
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+      NEMO_CACHE_DIR: ${{ github.workspace }}/.cache/nemo
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -56,8 +36,6 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # NeMo's codebase uses PEP 646 star-unpacking in subscripts
-          # (e.g. a[*b]), which only parses on Python 3.11+.
           python-version: "3.11"
 
       - name: Install system dependencies (ffmpeg, libsndfile)
@@ -69,17 +47,34 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-cqwen-nfa-${{ hashFiles('**/*.yml') }}
+          key: ${{ runner.os }}-pip-cqwen-nfa-${{ inputs.reference_text == '' && 'transcribe' || 'align-only' }}
           restore-keys: |
             ${{ runner.os }}-pip-cqwen-nfa-
 
-      - name: Install Python dependencies
+      - name: Cache downloaded model checkpoints (HF Hub + NeMo)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/huggingface
+            ${{ github.workspace }}/.cache/nemo
+          key: model-cache-${{ inputs.reference_text == '' && 'canary-qwen-2.5b' || 'align-only' }}-${{ inputs.alignment_model }}
+
+      - name: "Install dependencies - Path A (transcribe with Canary-Qwen 2.5B)"
+        if: ${{ inputs.reference_text == '' }}
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install peft
           pip install "nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main"
           pip install soundfile librosa
+
+      - name: "Install dependencies - Path B (align-only, no transcription needed)"
+        if: ${{ inputs.reference_text != '' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "nemo_toolkit[asr]"
+          pip install soundfile
 
       - name: Fetch only the NeMo Forced Aligner tool (sparse checkout, fast)
         run: |
@@ -99,9 +94,16 @@ jobs:
         run: |
           python - << 'PYEOF'
           import torch
+          import soundfile as sf
           from nemo.collections.speechlm2.models import SALM
 
+          torch.set_num_threads(4)
+
           audio_path = "work/audio_16k.wav"
+
+          duration_sec = sf.info(audio_path).duration
+          max_new_tokens = min(256, max(32, int(duration_sec * 6) + 16))
+          print(f"Audio duration: {duration_sec:.1f}s -> max_new_tokens={max_new_tokens}")
 
           print("Loading Canary-Qwen 2.5B on CPU... (this will take a while)")
           device = torch.device("cpu")
@@ -115,7 +117,7 @@ jobs:
                   "content": f"Transcribe the following: {model.audio_locator_tag}",
                   "audio": [audio_path],
               }]],
-              max_new_tokens=256,
+              max_new_tokens=max_new_tokens,
           )
           text = model.tokenizer.ids_to_text(answer_ids[0].cpu())
 
@@ -271,7 +273,7 @@ jobs:
               clean_word = word.strip(STRIP_CHARS)
               if not clean_word:
                   continue
-              entries.append((start, end, clean_word))
+              entries.append((start, end, clean_word.upper()))
 
           out_path = "${{ inputs.output_name }}"
           with open(out_path, "w", encoding="utf-8") as f:
