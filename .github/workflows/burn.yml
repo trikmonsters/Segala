@@ -14,7 +14,17 @@ jobs:
       - name: Install ffmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fontconfig
+
+      - name: Download display fonts (Shrikhand & Ultra)
+        run: |
+          mkdir -p ~/.fonts
+          curl -L -o ~/.fonts/Shrikhand-Regular.ttf \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/shrikhand/Shrikhand-Regular.ttf"
+          curl -L -o ~/.fonts/Ultra-Regular.ttf \
+            "https://raw.githubusercontent.com/google/fonts/main/ofl/ultra/Ultra-Regular.ttf"
+          fc-cache -f ~/.fonts
+          fc-list | grep -Ei "shrikhand|ultra"
 
       - name: Verify input files exist
         run: |
@@ -22,7 +32,7 @@ jobs:
 
       - name: Burn subtitle into video
         run: |
-          ffmpeg -y -i subtitle.mp4 -vf "subtitles=subtitle.srt:fontsdir=/root/.fonts:force_style='FontName=Shrikhand,FontSize=13,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2.2,Shadow=0,Alignment=2,MarginV=75'" -c:a copy output.mp4
+          ffmpeg -y -i subtitle.mp4 -vf "subtitles=subtitle.srt:fontsdir=/root/.fonts:force_style='FontName=Shrikhand,FontSize=13,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2.2,Shadow=0,Alignment=2,MarginV=75'" -c:a copy output.mp4
 
       - name: Upload result as artifact
         uses: actions/upload-artifact@v4
