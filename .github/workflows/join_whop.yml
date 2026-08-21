@@ -1,0 +1,160 @@
+name: Whop Login Screenshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+          npx playwright install --with-deps chromium
+
+      - name: Create Netscape cookie file
+        env:
+          WHOP_COOKIES: ${{ secrets.WHOP_COOKIES }}
+        run: |
+          printf '%s' "$WHOP_COOKIES" > whop.cookies.txt
+          chmod 600 whop.cookies.txt
+
+      - name: Login with cookies and screenshot
+        env:
+          COOKIE_FILE: whop.cookies.txt
+        run: |
+          cat > screenshot.js <<'EOF'
+          const fs = require("fs");
+          const { chromium } = require("playwright-extra");
+          const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+
+          chromium.use(StealthPlugin());
+
+          function parseNetscapeCookies(text) {
+            const cookies = [];
+
+            for (const rawLine of text.split(/\r?\n/)) {
+              const line = rawLine.trim();
+
+              if (!line || line.startsWith("#")) continue;
+
+              const parts = line.split("\t");
+
+              if (parts.length < 7) continue;
+
+              const [
+                domain,
+                flag,
+                path,
+                secure,
+                expiration,
+                name,
+                value
+              ] = parts;
+
+              const expires = Number(expiration);
+
+              cookies.push({
+                name,
+                value,
+                domain,
+                path: path || "/",
+                secure: secure.toUpperCase() === "TRUE",
+                httpOnly: false,
+                expires:
+                  Number.isFinite(expires) && expires > 0
+                    ? expires
+                    : undefined
+              });
+            }
+
+            return cookies;
+          }
+
+          (async () => {
+            const cookieText = fs.readFileSync(
+              process.env.COOKIE_FILE,
+              "utf8"
+            );
+
+            const cookies = parseNetscapeCookies(cookieText);
+
+            if (!cookies.length) {
+              throw new Error("No valid Netscape cookies found.");
+            }
+
+            console.log(`Loaded ${cookies.length} cookies`);
+
+            const browser = await chromium.launch({
+              headless: true
+            });
+
+            const context = await browser.newContext({
+              viewport: {
+                width: 1440,
+                height: 1000
+              },
+              deviceScaleFactor: 1
+            });
+
+            await context.addCookies(cookies);
+
+            const page = await context.newPage();
+
+            await page.goto("https://whop.com/", {
+              waitUntil: "domcontentloaded",
+              timeout: 120000
+            });
+
+            await page.waitForTimeout(5000);
+
+            console.log("URL:", page.url());
+            console.log("TITLE:", await page.title());
+
+            await page.screenshot({
+              path: "whop-login.png",
+              fullPage: true
+            });
+
+            await browser.close();
+          })().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
+          EOF
+
+          node screenshot.js
+
+      - name: Remove sensitive cookie file
+        if: always()
+        run: |
+          rm -f whop.cookies.txt
+          rm -f screenshot.js
+
+      - name: Commit screenshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add whop-login.png
+
+          if git diff --cached --quiet; then
+            echo "No screenshot changes."
+            exit 0
+          fi
+
+          git commit -m "Update Whop login screenshot"
+          git push
