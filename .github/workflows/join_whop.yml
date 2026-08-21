@@ -84,21 +84,30 @@ jobs:
           }
 
           (async () => {
-            const cookieText = fs.readFileSync(
-              "cookies.txt",
-              "utf8"
-            );
-
+            const cookieText = fs.readFileSync("cookies.txt", "utf8");
             const cookies = parseCookies(cookieText);
 
             if (!cookies.length) {
               throw new Error("No valid Netscape cookies found.");
             }
 
-            console.log(`Loaded ${cookies.length} cookies`);
+            // Normalisasi domain agar mencakup wildcard subdomain
+            const formattedCookies = cookies.map(c => {
+              let domain = c.domain;
+              if (!domain.startsWith('.')) {
+                domain = '.' + domain.replace(/^www\./, '');
+              }
+              return { ...c, domain };
+            });
+
+            console.log(`Loaded ${formattedCookies.length} formatted cookies`);
 
             const browser = await chromium.launch({
-              headless: true
+              headless: true,
+              args: [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox'
+              ]
             });
 
             const context = await browser.newContext({
@@ -106,24 +115,46 @@ jobs:
                 width: 1440,
                 height: 1000
               },
-              deviceScaleFactor: 1
+              deviceScaleFactor: 1,
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              locale: 'en-US'
             });
 
-            await context.addCookies(cookies);
+            // Inject cookie ke context
+            await context.addCookies(formattedCookies);
 
             const page = await context.newPage();
 
-            const target =
-              "https://whop.com/tikcut/exp_1r3Q9rIouuXK1L/app/";
+            // Sembunyikan tanda-tanda automatisasi dari browser
+            await page.addInitScript(() => {
+              Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
 
-            console.log("Opening target...");
+            console.log("Navigating to base Whop domain...");
+            // Buka domain utama agar context mengenali domain & local storage
+            await page.goto("https://whop.com", { waitUntil: "domcontentloaded" });
+
+            // Copy token cookie ke LocalStorage/SessionStorage
+            await page.evaluate((cookieList) => {
+              cookieList.forEach(c => {
+                if (c.name.includes('token') || c.name.includes('session') || c.name.includes('auth')) {
+                  localStorage.setItem(c.name, c.value);
+                  sessionStorage.setItem(c.name, c.value);
+                }
+              });
+            }, formattedCookies);
+
+            const target = "https://whop.com/tikcut/exp_1r3Q9rIouuXK1L/app/";
+
+            console.log("Opening target URL...");
 
             await page.goto(target, {
-              waitUntil: "domcontentloaded",
+              waitUntil: "networkidle",
               timeout: 120000
             });
 
-            await page.waitForTimeout(7000);
+            // Tunggu UI React menyelesaikan render status login
+            await page.waitForTimeout(8000);
 
             console.log("Final URL:", page.url());
             console.log("Title:", await page.title());
