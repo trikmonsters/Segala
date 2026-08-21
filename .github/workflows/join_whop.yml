@@ -131,7 +131,7 @@ jobs:
               Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             });
 
-            const target = "https://whop.com/tikcut/exp_1r3Q9rIouuXK1L/app/";
+            const target = "https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/experiences/exp_1r3Q9rIouuXK1L/discover/134e33d2-b41f-4547-b024-8ab1cf5a2106";
 
             console.log("Opening target URL with complete authentication tokens...");
 
