@@ -1,0 +1,196 @@
+name: Whop Screenshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
+          npx playwright install --with-deps chromium
+
+      - name: Create Netscape cookie file
+        env:
+          WHOP_COOKIES: ${{ secrets.WHOP_COOKIES }}
+        run: |
+          printf '%s' "$WHOP_COOKIES" > cookies.txt
+          chmod 600 cookies.txt
+
+      - name: Open Whop and take screenshot
+        run: |
+          cat > run.js <<'EOF'
+          const fs = require("fs");
+          const { chromium } = require("playwright-extra");
+          const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+
+          chromium.use(StealthPlugin());
+
+          function parseCookies(text) {
+            const cookies = [];
+            for (let line of text.split(/\r?\n/)) {
+              let l = line.trim();
+              if (!l || (l.startsWith("#") && !l.startsWith("#HttpOnly_"))) continue;
+
+              let isHttpOnly = false;
+              if (l.startsWith("#HttpOnly_")) {
+                isHttpOnly = true;
+                l = l.replace("#HttpOnly_", "");
+              }
+
+              const p = l.split("\t");
+              if (p.length < 7) continue;
+
+              const [domain, flag, path, secure, expiration, name, value] = p;
+
+              let formattedDomain = domain.trim();
+              if (!formattedDomain.startsWith('.')) {
+                formattedDomain = '.' + formattedDomain.replace(/^www\./, '');
+              }
+
+              const cookie = {
+                name: name.trim(),
+                value: value.trim(),
+                domain: formattedDomain,
+                path: path.trim() || "/",
+                secure: secure.trim().toUpperCase() === "TRUE",
+                httpOnly: isHttpOnly
+              };
+
+              const exp = Number(expiration);
+              if (Number.isFinite(exp) && exp > 0) {
+                cookie.expires = exp;
+              }
+
+              cookies.push(cookie);
+            }
+            return cookies;
+          }
+
+          (async () => {
+            const cookieText = fs.readFileSync("cookies.txt", "utf8");
+            const cookies = parseCookies(cookieText);
+
+            if (!cookies.length) {
+              throw new Error("No valid Netscape cookies found.");
+            }
+
+            console.log(`Successfully parsed ${cookies.length} cookies (including HttpOnly tokens)`);
+
+            const browser = await chromium.launch({
+              headless: true,
+              args: [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox'
+              ]
+            });
+
+            const context = await browser.newContext({
+              viewport: { width: 1440, height: 1000 },
+              deviceScaleFactor: 1,
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              locale: 'en-US'
+            });
+
+            await context.addCookies(cookies);
+            const page = await context.newPage();
+
+            await page.addInitScript(() => {
+              Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
+
+            const target = "https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/experiences/exp_1r3Q9rIouuXK1L/discover/134e33d2-b41f-4547-b024-8ab1cf5a2106";
+
+            console.log("Opening target URL with complete authentication tokens...");
+            await page.goto(target, {
+              waitUntil: "networkidle",
+              timeout: 120000
+            });
+
+            await page.waitForTimeout(8000);
+
+            console.log("Final URL:", page.url());
+            console.log("Title:", await page.title());
+
+            // --- PAYLOAD SUBMIT VIDEO ---
+            const bodyPayload = JSON.stringify([
+              [
+                {
+                  campaignId: "134e33d2-b41f-4547-b024-8ab1cf5a2106",
+                  demographicsScreenshotUrl: "$undefined",
+                  description: "",
+                  platform: "tiktok",
+                  title: "Mixol Ghost",
+                  url: "https://vt.tiktok.com/ZSVPujfgp/"
+                }
+              ]
+            ]);
+
+            console.log("Sending submission payload via API context...");
+
+            // Pengiriman POST request langsung dengan context yang sudah membawa cookie login
+            try {
+              const apiEndpoint = "https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/api/submit"; // Disesuaikan dengan URL endpoint submission Whop Anda
+              const response = await context.request.post(apiEndpoint, {
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Origin': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com',
+                  'Referer': target
+                },
+                data: bodyPayload
+              });
+
+              console.log("Submission Response Status:", response.status());
+              console.log("Submission Response Body:", await response.text());
+            } catch (err) {
+              console.error("Failed to submit payload:", err.message);
+            }
+
+            // Beri jeda sejenak agar state UI ter-update sebelum screenshot
+            await page.waitForTimeout(5000);
+
+            await page.screenshot({
+              path: "whop-screenshot.png",
+              fullPage: true
+            });
+
+            await browser.close();
+          })();
+          EOF
+          node run.js
+
+      - name: Delete sensitive files
+        if: always()
+        run: |
+          rm -f cookies.txt
+          rm -f run.js
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="whop-screenshot-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            whop-screenshot.png \
+            --title "Whop Screenshot #${GITHUB_RUN_NUMBER}" \
+            --notes "Screenshot generated by GitHub Actions."
+
+      - name: Delete local screenshot
+        if: always()
+        run: |
+          rm -f whop-screenshot.png
