@@ -81,6 +81,57 @@ jobs:
             return cookies;
           }
 
+          function generateRouterStateTree(experienceId, campaignId) {
+            const tree = [
+              "",
+              {
+                children: [
+                  "experiences",
+                  {
+                    children: [
+                      ["experienceId", experienceId, "d", null],
+                      {
+                        children: [
+                          "discover",
+                          {
+                            children: [
+                              ["campaignId", campaignId, "d", null],
+                              {
+                                children: [
+                                  "__PAGE__",
+                                  {},
+                                  null,
+                                  null,
+                                  0
+                                ]
+                              },
+                              null,
+                              null,
+                              4
+                            ]
+                          },
+                          null,
+                          null,
+                          8
+                        ]
+                      },
+                      null,
+                      null,
+                      8
+                    ]
+                  },
+                  null,
+                  null,
+                  8
+                ]
+              },
+              null,
+              null,
+              24
+            ];
+            return encodeURIComponent(JSON.stringify(tree));
+          }
+
           (async () => {
             const cookieText = fs.readFileSync("cookies.txt", "utf8");
             const cookies = parseCookies(cookieText);
@@ -89,7 +140,7 @@ jobs:
               throw new Error("No valid Netscape cookies found.");
             }
 
-            console.log(`Successfully parsed ${cookies.length} cookies (including HttpOnly tokens)`);
+            console.log(`Successfully parsed ${cookies.length} cookies.`);
 
             const browser = await chromium.launch({
               headless: true,
@@ -114,54 +165,59 @@ jobs:
               Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             });
 
-            const target = "https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/experiences/exp_1r3Q9rIouuXK1L/discover/134e33d2-b41f-4547-b024-8ab1cf5a2106";
+            const experienceId = "exp_1r3Q9rIouuXK1L";
+            const campaignId = "134e33d2-b41f-4547-b024-8ab1cf5a2106";
+            const targetUrl = `https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/experiences/${experienceId}/discover/${campaignId}`;
 
-            console.log("Opening target URL with complete authentication tokens...");
-            await page.goto(target, {
+            console.log("Navigating to target page...");
+            await page.goto(targetUrl, {
               waitUntil: "networkidle",
               timeout: 120000
             });
 
-            await page.waitForTimeout(8000);
+            await page.waitForTimeout(5000);
 
-            console.log("Final URL:", page.url());
-            console.log("Title:", await page.title());
+            console.log("Submitting video payload via Next.js Server Action...");
 
-            // --- PAYLOAD SUBMIT VIDEO ---
-            const bodyPayload = JSON.stringify([
-              [
-                {
-                  campaignId: "134e33d2-b41f-4547-b024-8ab1cf5a2106",
-                  demographicsScreenshotUrl: "$undefined",
-                  description: "",
-                  platform: "tiktok",
-                  title: "Mixol Ghost",
-                  url: "https://vt.tiktok.com/ZSVPujfgp/"
-                }
-              ]
-            ]);
+            const stateTree = generateRouterStateTree(experienceId, campaignId);
 
-            console.log("Sending submission payload via API context...");
+            const result = await page.evaluate(async ({ targetUrl, stateTree, campaignId }) => {
+              const payload = [
+                [
+                  {
+                    campaignId: campaignId,
+                    demographicsScreenshotUrl: "$undefined",
+                    description: "",
+                    platform: "tiktok",
+                    title: "Mixol Jerapah",
+                    url: "https://vt.tiktok.com/ZSVP4yTD5/"
+                  }
+                ]
+              ];
 
-            // Pengiriman POST request langsung dengan context yang sudah membawa cookie login
-            try {
-              const apiEndpoint = "https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com/api/submit"; // Disesuaikan dengan URL endpoint submission Whop Anda
-              const response = await context.request.post(apiEndpoint, {
+              const res = await fetch(targetUrl, {
+                method: "POST",
                 headers: {
-                  'Content-Type': 'application/json',
-                  'Origin': 'https://b4e0vdqv6zgqeqj4pfgm.apps.whop.com',
-                  'Referer': target
+                  "accept": "text/x-component",
+                  "content-type": "text/plain;charset=UTF-8",
+                  "next-action": "40d7830b9c4dd01730ea99b7ed68e46992977c093e",
+                  "next-router-state-tree": stateTree,
+                  "x-deployment-id": "dpl_8Pmm4j45ozy38pZqMZouctSZmrJn"
                 },
-                data: bodyPayload
+                referrer: targetUrl,
+                body: JSON.stringify(payload),
+                credentials: "include"
               });
 
-              console.log("Submission Response Status:", response.status());
-              console.log("Submission Response Body:", await response.text());
-            } catch (err) {
-              console.error("Failed to submit payload:", err.message);
-            }
+              return {
+                status: res.status,
+                text: await res.text()
+              };
+            }, { targetUrl, stateTree, campaignId });
 
-            // Beri jeda sejenak agar state UI ter-update sebelum screenshot
+            console.log("Response Status:", result.status);
+            console.log("Response Text:", result.text);
+
             await page.waitForTimeout(5000);
 
             await page.screenshot({
