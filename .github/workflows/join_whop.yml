@@ -1,4 +1,4 @@
-name: Whop Login Screenshot
+name: Whop Screenshot
 
 on:
   workflow_dispatch:
@@ -11,15 +11,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install Playwright
         run: |
           npm init -y
           npm install playwright playwright-extra puppeteer-extra-plugin-stealth
@@ -29,31 +26,29 @@ jobs:
         env:
           WHOP_COOKIES: ${{ secrets.WHOP_COOKIES }}
         run: |
-          printf '%s' "$WHOP_COOKIES" > whop.cookies.txt
-          chmod 600 whop.cookies.txt
+          printf '%s' "$WHOP_COOKIES" > cookies.txt
+          chmod 600 cookies.txt
 
-      - name: Login with cookies and screenshot
-        env:
-          COOKIE_FILE: whop.cookies.txt
+      - name: Open Whop and take screenshot
         run: |
-          cat > screenshot.js <<'EOF'
+          cat > run.js <<'EOF'
           const fs = require("fs");
           const { chromium } = require("playwright-extra");
           const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 
           chromium.use(StealthPlugin());
 
-          function parseNetscapeCookies(text) {
+          function parseCookies(text) {
             const cookies = [];
 
-            for (const rawLine of text.split(/\r?\n/)) {
-              const line = rawLine.trim();
+            for (const line of text.split(/\r?\n/)) {
+              const l = line.trim();
 
-              if (!line || line.startsWith("#")) continue;
+              if (!l || l.startsWith("#")) continue;
 
-              const parts = line.split("\t");
+              const p = l.split("\t");
 
-              if (parts.length < 7) continue;
+              if (p.length < 7) continue;
 
               const [
                 domain,
@@ -63,22 +58,23 @@ jobs:
                 expiration,
                 name,
                 value
-              ] = parts;
+              ] = p;
 
-              const expires = Number(expiration);
-
-              cookies.push({
+              const cookie = {
                 name,
                 value,
                 domain,
                 path: path || "/",
-                secure: secure.toUpperCase() === "TRUE",
-                httpOnly: false,
-                expires:
-                  Number.isFinite(expires) && expires > 0
-                    ? expires
-                    : undefined
-              });
+                secure: secure.toUpperCase() === "TRUE"
+              };
+
+              const exp = Number(expiration);
+
+              if (Number.isFinite(exp) && exp > 0) {
+                cookie.expires = exp;
+              }
+
+              cookies.push(cookie);
             }
 
             return cookies;
@@ -86,11 +82,11 @@ jobs:
 
           (async () => {
             const cookieText = fs.readFileSync(
-              process.env.COOKIE_FILE,
+              "cookies.txt",
               "utf8"
             );
 
-            const cookies = parseNetscapeCookies(cookieText);
+            const cookies = parseCookies(cookieText);
 
             if (!cookies.length) {
               throw new Error("No valid Netscape cookies found.");
@@ -114,47 +110,50 @@ jobs:
 
             const page = await context.newPage();
 
-            await page.goto("https://whop.com/", {
+            const target =
+              "https://whop.com/tikcut/exp_1r3Q9rIouuXK1L/app/";
+
+            console.log("Opening target...");
+
+            await page.goto(target, {
               waitUntil: "domcontentloaded",
               timeout: 120000
             });
 
-            await page.waitForTimeout(5000);
+            await page.waitForTimeout(7000);
 
-            console.log("URL:", page.url());
-            console.log("TITLE:", await page.title());
+            console.log("Final URL:", page.url());
+            console.log("Title:", await page.title());
 
             await page.screenshot({
-              path: "whop-login.png",
+              path: "whop-screenshot.png",
               fullPage: true
             });
 
             await browser.close();
-          })().catch(err => {
-            console.error(err);
-            process.exit(1);
-          });
+          })();
           EOF
 
-          node screenshot.js
+          node run.js
 
-      - name: Remove sensitive cookie file
+      - name: Delete sensitive files
         if: always()
         run: |
-          rm -f whop.cookies.txt
-          rm -f screenshot.js
+          rm -f cookies.txt
+          rm -f run.js
 
-      - name: Commit screenshot
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="whop-screenshot-${GITHUB_RUN_NUMBER}"
 
-          git add whop-login.png
+          gh release create "$TAG" \
+            whop-screenshot.png \
+            --title "Whop Screenshot #${GITHUB_RUN_NUMBER}" \
+            --notes "Screenshot generated by GitHub Actions."
 
-          if git diff --cached --quiet; then
-            echo "No screenshot changes."
-            exit 0
-          fi
-
-          git commit -m "Update Whop login screenshot"
-          git push
+      - name: Delete local screenshot
+        if: always()
+        run: |
+          rm -f whop-screenshot.png
