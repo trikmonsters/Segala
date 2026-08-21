@@ -44,13 +44,19 @@ jobs:
           function parseCookies(text) {
             const cookies = [];
 
-            for (const line of text.split(/\r?\n/)) {
-              const l = line.trim();
+            for (let line of text.split(/\r?\n/)) {
+              let l = line.trim();
 
-              if (!l || l.startsWith("#")) continue;
+              // Skip baris kosong atau komentar biasa (tapi JANGAN skip #HttpOnly_)
+              if (!l || (l.startsWith("#") && !l.startsWith("#HttpOnly_"))) continue;
+
+              let isHttpOnly = false;
+              if (l.startsWith("#HttpOnly_")) {
+                isHttpOnly = true;
+                l = l.replace("#HttpOnly_", ""); // Hapus prefix #HttpOnly_
+              }
 
               const p = l.split("\t");
-
               if (p.length < 7) continue;
 
               const [
@@ -63,16 +69,22 @@ jobs:
                 value
               ] = p;
 
+              // Normalisasi domain agar cocok di semua subdomain
+              let formattedDomain = domain.trim();
+              if (!formattedDomain.startsWith('.')) {
+                formattedDomain = '.' + formattedDomain.replace(/^www\./, '');
+              }
+
               const cookie = {
-                name,
-                value,
-                domain,
-                path: path || "/",
-                secure: secure.toUpperCase() === "TRUE"
+                name: name.trim(),
+                value: value.trim(),
+                domain: formattedDomain,
+                path: path.trim() || "/",
+                secure: secure.trim().toUpperCase() === "TRUE",
+                httpOnly: isHttpOnly
               };
 
               const exp = Number(expiration);
-
               if (Number.isFinite(exp) && exp > 0) {
                 cookie.expires = exp;
               }
@@ -91,69 +103,44 @@ jobs:
               throw new Error("No valid Netscape cookies found.");
             }
 
-            // Normalisasi domain agar mencakup wildcard subdomain
-            const formattedCookies = cookies.map(c => {
-              let domain = c.domain;
-              if (!domain.startsWith('.')) {
-                domain = '.' + domain.replace(/^www\./, '');
-              }
-              return { ...c, domain };
-            });
-
-            console.log(`Loaded ${formattedCookies.length} formatted cookies`);
+            console.log(`Successfully parsed ${cookies.length} cookies (including HttpOnly tokens)`);
 
             const browser = await chromium.launch({
               headless: true,
               args: [
                 '--disable-blink-features=AutomationControlled',
-                '--no-sandbox'
+                '--no-sandbox',
+                '--disable-setuid-sandbox'
               ]
             });
 
             const context = await browser.newContext({
-              viewport: {
-                width: 1440,
-                height: 1000
-              },
+              viewport: { width: 1440, height: 1000 },
               deviceScaleFactor: 1,
               userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
               locale: 'en-US'
             });
 
-            // Inject cookie ke context
-            await context.addCookies(formattedCookies);
+            // Inject cookie yang sudah diparse dengan benar
+            await context.addCookies(cookies);
 
             const page = await context.newPage();
 
-            // Sembunyikan tanda-tanda automatisasi dari browser
+            // Sembunyikan tanda otomasi browser
             await page.addInitScript(() => {
               Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             });
 
-            console.log("Navigating to base Whop domain...");
-            // Buka domain utama agar context mengenali domain & local storage
-            await page.goto("https://whop.com", { waitUntil: "domcontentloaded" });
-
-            // Copy token cookie ke LocalStorage/SessionStorage
-            await page.evaluate((cookieList) => {
-              cookieList.forEach(c => {
-                if (c.name.includes('token') || c.name.includes('session') || c.name.includes('auth')) {
-                  localStorage.setItem(c.name, c.value);
-                  sessionStorage.setItem(c.name, c.value);
-                }
-              });
-            }, formattedCookies);
-
             const target = "https://whop.com/tikcut/exp_1r3Q9rIouuXK1L/app/";
 
-            console.log("Opening target URL...");
+            console.log("Opening target URL with complete authentication tokens...");
 
             await page.goto(target, {
               waitUntil: "networkidle",
               timeout: 120000
             });
 
-            // Tunggu UI React menyelesaikan render status login
+            // Beri waktu UI React menghidrasi state login
             await page.waitForTimeout(8000);
 
             console.log("Final URL:", page.url());
