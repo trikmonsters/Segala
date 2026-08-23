@@ -483,27 +483,35 @@ jobs:
         run: |
           ls -la "${{ inputs.video_path }}" work/output_clone.wav work/subtitle.srt
 
-      - name: Get audio/video durations
+      - name: Get audio/video durations & original fps
         run: |
           VIDEO_DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${{ inputs.video_path }}")
           AUDIO_DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 work/output_clone.wav)
+          ORIG_FPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${{ inputs.video_path }}")
           echo "VIDEO_DUR=$VIDEO_DUR" >> "$GITHUB_ENV"
           echo "AUDIO_DUR=$AUDIO_DUR" >> "$GITHUB_ENV"
+          echo "ORIG_FPS=$ORIG_FPS" >> "$GITHUB_ENV"
           echo "Video duration : ${VIDEO_DUR}s"
           echo "Audio duration : ${AUDIO_DUR}s"
+          echo "Video fps      : ${ORIG_FPS}"
 
       - name: Sync video duration to audio (PTS slow-down if longer, silence pad if shorter)
         run: |
           IS_AUDIO_LONGER=$(awk -v a="$AUDIO_DUR" -v v="$VIDEO_DUR" 'BEGIN{print (a>v)?1:0}')
 
           if [ "$IS_AUDIO_LONGER" -eq 1 ]; then
-            # Audio > Video: perlambat video pakai Faktor PTS = Durasi Audio / Durasi Video,
-            # lalu -t untuk memotong presisi ke durasi audio (menghindari sisa frame lebih).
+            # Audio > Video: perlambat video pakai Faktor PTS = Durasi Audio / Durasi Video.
+            # setpts sendiri TIDAK menambah jumlah frame - ia cuma merentangkan timestamp
+            # frame yang sudah ada, jadi fps efektif ikut turun (jadi variable frame rate)
+            # kalau dibiarkan begitu saja. Makanya setelah setpts kita paksa balik ke fps
+            # asli pakai filter fps= (duplikasi frame secukupnya) + -fps_mode cfr, supaya
+            # output tetap constant frame rate dan durasinya presisi (tidak "bablas").
             PTS_FACTOR=$(awk -v a="$AUDIO_DUR" -v v="$VIDEO_DUR" 'BEGIN{printf "%.6f", a/v}')
-            echo "Audio lebih panjang -> perlambat video. Faktor PTS = $PTS_FACTOR"
+            echo "Audio lebih panjang -> perlambat video. Faktor PTS = $PTS_FACTOR, fps dipertahankan di $ORIG_FPS"
             ffmpeg -y -i "${{ inputs.video_path }}" -i work/output_clone.wav \
-              -filter_complex "[0:v]setpts=${PTS_FACTOR}*PTS[v]" \
+              -filter_complex "[0:v]setpts=${PTS_FACTOR}*PTS,fps=${ORIG_FPS}[v]" \
               -map "[v]" -map 1:a:0 \
+              -fps_mode cfr \
               -t "$AUDIO_DUR" \
               -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
               -c:a aac -b:a 192k \
