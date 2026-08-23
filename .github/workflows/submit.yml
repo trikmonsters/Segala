@@ -1,4 +1,4 @@
-name: Whop Screenshot
+name: Whop Submit Video | Tikcut
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  screenshot:
+  submit-video:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
