@@ -70,16 +70,6 @@ on:
         description: "Path video di repo (root) yang mau dikasih audio+subtitle"
         required: true
         default: "subtitle.mp4"
-      max_speed_factor:
-        description: "Batas maksimal kecepatan saat men-speed-up sebagian video (mis. 1.5 = maksimal 1.5x)"
-        required: true
-        type: string
-        default: "1.5"
-      duration_tolerance_seconds:
-        description: "Kalau audio cuma lebih pendek dari video sebesar ini (detik) atau kurang, video dibiarkan full apa adanya (tidak di-speed-up/crop)"
-        required: true
-        type: string
-        default: "3"
       output_video_name:
         description: "Nama file video hasil akhir"
         required: false
@@ -249,7 +239,18 @@ jobs:
             $XVEC_FLAG \
             --text "$TEXT" \
             --language "$LANGUAGE" \
-            --output outputs/output_clone.wav
+            --output outputs/output_clone_raw.wav
+
+      - name: Trim leading/trailing silence from the cloned audio
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          ffmpeg -y -i outputs/output_clone_raw.wav \
+            -af "silenceremove=start_periods=1:start_threshold=-40dB:start_silence=0.15:detection=peak,silenceremove=stop_periods=-1:stop_threshold=-40dB:stop_silence=0.15:detection=peak" \
+            outputs/output_clone.wav
+          echo "Durasi sebelum trim:"
+          ffprobe -v error -show_entries format=duration -of csv=p=0 outputs/output_clone_raw.wav
+          echo "Durasi sesudah trim:"
+          ffprobe -v error -show_entries format=duration -of csv=p=0 outputs/output_clone.wav
 
       - name: Upload hasil audio
         uses: actions/upload-artifact@v4
@@ -482,152 +483,40 @@ jobs:
         run: |
           ls -la "${{ inputs.video_path }}" work/output_clone.wav work/subtitle.srt
 
-      - name: Decide precise-duration strategy (loop / partial speed-up / crop fallback)
+      - name: Get audio/video durations
         run: |
-          python3 - << 'PYEOF'
-          import json, math, subprocess
+          VIDEO_DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${{ inputs.video_path }}")
+          AUDIO_DUR=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 work/output_clone.wav)
+          echo "VIDEO_DUR=$VIDEO_DUR" >> "$GITHUB_ENV"
+          echo "AUDIO_DUR=$AUDIO_DUR" >> "$GITHUB_ENV"
+          echo "Video duration : ${VIDEO_DUR}s"
+          echo "Audio duration : ${AUDIO_DUR}s"
 
-          video_path = "${{ inputs.video_path }}"
-          audio_path = "work/output_clone.wav"
-          MAX_SPEED = float("${{ inputs.max_speed_factor }}")
-          TOLERANCE_SEC = float("${{ inputs.duration_tolerance_seconds }}")
-
-          def ffprobe_json(path, args):
-              cmd = ["ffprobe", "-v", "error", "-print_format", "json"] + args + [path]
-              out = subprocess.check_output(cmd)
-              return json.loads(out)
-
-          audio_dur = float(ffprobe_json(audio_path, ["-show_entries", "format=duration"])["format"]["duration"])
-
-          vdata = ffprobe_json(video_path, ["-select_streams", "v:0",
-                                             "-show_entries", "stream=r_frame_rate,duration"])
-          vstream = vdata["streams"][0]
-          num, den = vstream["r_frame_rate"].split("/")
-          fps = float(num) / float(den)
-          video_dur = float(vstream["duration"]) if vstream.get("duration") else \
-              float(ffprobe_json(video_path, ["-show_entries", "format=duration"])["format"]["duration"])
-
-          video_frames = int(round(video_dur * fps))
-          target_frames = int(round(audio_dur * fps))
-
-          print(f"Audio: {audio_dur:.3f}s | Video: {video_dur:.3f}s @ {fps:.3f}fps "
-                f"({video_frames} frames) | Target: {target_frames} frames | max speed: {MAX_SPEED}x")
-
-          mode = None
-          filt = None
-
-          if video_frames <= target_frames:
-              # Audio is longer than (or equal to) the video: loop a highlight
-              # segment (middle third) enough times to cover the gap, then trim.
-              extra_frames = target_frames - video_frames
-              seg_size = max(1, video_frames // 3)
-              seg_start = max(0, (video_frames - seg_size) // 2)
-              loops = math.ceil(extra_frames / seg_size) if extra_frames > 0 else 0
-              if loops > 0:
-                  filt = (f"loop=loop={loops}:size={seg_size}:start={seg_start},"
-                          f"trim=end_frame={target_frames},setpts=PTS-STARTPTS")
-                  print(f"Strategy: LOOP highlight [{seg_start}:{seg_start + seg_size}] x{loops}, "
-                        f"trim to {target_frames} frames")
-              else:
-                  filt = f"trim=end_frame={target_frames},setpts=PTS-STARTPTS"
-                  print(f"Strategy: exact match already, trim to {target_frames} frames")
-              mode = "simple"
-          else:
-              # Audio is shorter than the video.
-              cut_needed = video_frames - target_frames
-              tolerance_frames = round(TOLERANCE_SEC * fps)
-
-              if cut_needed <= tolerance_frames:
-                  # Shortfall is small (a few seconds or less) - narration
-                  # already covers the video fine, no need to alter it at
-                  # all. Keep the video full-length; audio just ends early.
-                  mode = "passthrough"
-                  filt = None
-                  print(f"Strategy: PASSTHROUGH - shortfall of {cut_needed} frames "
-                        f"({cut_needed / fps:.2f}s) is within tolerance "
-                        f"({TOLERANCE_SEC:.2f}s) - video kept as-is")
-              else:
-                  # Speed up only a centered portion of the video, escalating
-                  # 1/4 -> 1/3 -> 1/2 -> full, stopping at the smallest portion
-                  # whose required speed stays within max_speed_factor. Rest
-                  # of the video stays untouched, so we never overshoot past
-                  # the audio's duration.
-                  chosen = None
-                  for frac in (0.25, 1 / 3, 0.5, 1.0):
-                      sub_frames = max(1, round(video_frames * frac))
-                      denom = sub_frames - cut_needed
-                      if denom <= 0:
-                          continue  # this portion alone can't absorb the needed cut
-                      speed = sub_frames / denom
-                      if speed <= MAX_SPEED:
-                          chosen = (frac, sub_frames, speed)
-                          break
-
-                  if chosen is None:
-                      # Even speeding up the whole video isn't enough within the
-                      # speed cap -> fall back to a safe centered crop instead of
-                      # an unnaturally fast clip.
-                      start_frame = max(0, (video_frames - target_frames) // 2)
-                      end_frame = start_frame + target_frames
-                      filt = f"trim=start_frame={start_frame}:end_frame={end_frame},setpts=PTS-STARTPTS"
-                      mode = "simple"
-                      print(f"Strategy: FALLBACK CROP (speed cap {MAX_SPEED}x not enough even on full "
-                            f"video), frames [{start_frame}:{end_frame}]")
-                  else:
-                      frac, sub_frames, speed = chosen
-                      sub_start = max(0, (video_frames - sub_frames) // 2)
-                      sub_end = sub_start + sub_frames
-                      parts, labels = [], []
-                      if sub_start > 0:
-                          parts.append(f"[0:v]trim=start_frame=0:end_frame={sub_start},setpts=PTS-STARTPTS[a]")
-                          labels.append("[a]")
-                      parts.append(f"[0:v]trim=start_frame={sub_start}:end_frame={sub_end},"
-                                   f"setpts=(PTS-STARTPTS)/{speed}[b]")
-                      labels.append("[b]")
-                      if sub_end < video_frames:
-                          parts.append(f"[0:v]trim=start_frame={sub_end}:end_frame={video_frames},"
-                                       f"setpts=PTS-STARTPTS[c]")
-                          labels.append("[c]")
-                      concat = "".join(labels) + f"concat=n={len(labels)}:v=1:a=0[outv]"
-                      filt = ";".join(parts) + ";" + concat
-                      mode = "complex"
-                      print(f"Strategy: SPEED UP centered ~{frac:.2f} of video (frames "
-                            f"[{sub_start}:{sub_end}]) by {speed:.3f}x, rest untouched")
-
-          with open("work/video_filter_mode.txt", "w") as f:
-              f.write(mode)
-          with open("work/video_filter.txt", "w") as f:
-              f.write(filt or "")
-          PYEOF
-          echo "Mode: $(cat work/video_filter_mode.txt)"
-          echo "Filter dipakai:"
-          cat work/video_filter.txt
-
-      - name: Mux cloned audio onto precisely-timed video
+      - name: Sync video duration to audio (PTS slow-down if longer, silence pad if shorter)
         run: |
-          MODE="$(cat work/video_filter_mode.txt)"
-          VF="$(cat work/video_filter.txt)"
-          if [ "$MODE" = "complex" ]; then
+          IS_AUDIO_LONGER=$(awk -v a="$AUDIO_DUR" -v v="$VIDEO_DUR" 'BEGIN{print (a>v)?1:0}')
+
+          if [ "$IS_AUDIO_LONGER" -eq 1 ]; then
+            # Audio > Video: perlambat video pakai Faktor PTS = Durasi Audio / Durasi Video,
+            # lalu -t untuk memotong presisi ke durasi audio (menghindari sisa frame lebih).
+            PTS_FACTOR=$(awk -v a="$AUDIO_DUR" -v v="$VIDEO_DUR" 'BEGIN{printf "%.6f", a/v}')
+            echo "Audio lebih panjang -> perlambat video. Faktor PTS = $PTS_FACTOR"
             ffmpeg -y -i "${{ inputs.video_path }}" -i work/output_clone.wav \
-              -filter_complex "$VF" \
-              -map "[outv]" -map 1:a:0 \
+              -filter_complex "[0:v]setpts=${PTS_FACTOR}*PTS[v]" \
+              -map "[v]" -map 1:a:0 \
+              -t "$AUDIO_DUR" \
               -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-              -c:a aac -b:a 192k -shortest \
-              work/video_with_audio.mp4
-          elif [ "$MODE" = "passthrough" ]; then
-            # Video kept exactly as-is (no filter, no re-encode of video needed);
-            # no -shortest so the video plays out in full even after narration ends.
-            ffmpeg -y -i "${{ inputs.video_path }}" -i work/output_clone.wav \
-              -map 0:v:0 -map 1:a:0 \
-              -c:v copy \
               -c:a aac -b:a 192k \
               work/video_with_audio.mp4
           else
+            # Audio <= Video: video dibiarkan apa adanya, audio ditambah silence
+            # (apad) sampai durasinya sama persis dengan video.
+            echo "Audio lebih pendek/sama -> video tetap, audio ditambah silence padding ke ${VIDEO_DUR}s"
             ffmpeg -y -i "${{ inputs.video_path }}" -i work/output_clone.wav \
-              -filter:v "$VF" \
-              -map 0:v:0 -map 1:a:0 \
-              -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-              -c:a aac -b:a 192k -shortest \
+              -filter_complex "[1:a]apad=whole_dur=${VIDEO_DUR}[a]" \
+              -map 0:v:0 -map "[a]" \
+              -t "$VIDEO_DUR" \
+              -c:v copy -c:a aac -b:a 192k \
               work/video_with_audio.mp4
           fi
 
