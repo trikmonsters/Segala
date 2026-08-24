@@ -1,10 +1,10 @@
-name: Resequence Fashion Shoes Showcase Video
+name: Advanced Video Resequencing (Unique Content Transformation)
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'URL Video YouTube Shorts Review Produk'
+        description: 'URL Video YouTube Shorts'
         default: 'https://youtube.com/shorts/VORoFc_x_Ls'
         required: true
         type: string
@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  download-and-edit-video:
+  transform-and-edit-video:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -52,22 +52,25 @@ jobs:
                  -o "video_raw.mp4" \
                  "${{ github.event.inputs.video_url }}"
 
-      - name: Resequence Video with FFmpeg
+      - name: Execute Advanced FFmpeg Transformation
         run: |
           ffmpeg -i video_raw.mp4 -filter_complex \
-          "[0:v]trim=start=18:end=20.5,setpts=PTS-STARTPTS[v1]; [0:a]atrim=start=18:end=20.5,asetpts=PTS-STARTPTS[a1]; \
-           [0:v]trim=start=3:end=7,setpts=PTS-STARTPTS[v2]; [0:a]atrim=start=3:end=7,asetpts=PTS-STARTPTS[a2]; \
-           [0:v]trim=start=7:end=9.5,setpts=PTS-STARTPTS[v3]; [0:a]atrim=start=7:end=9.5,asetpts=PTS-STARTPTS[a3]; \
-           [0:v]trim=start=0:end=3,setpts=PTS-STARTPTS[v4]; [0:a]atrim=start=0:end=3,asetpts=PTS-STARTPTS[a4]; \
-           [0:v]trim=start=9.5:end=18,setpts=PTS-STARTPTS[v5]; [0:a]atrim=start=9.5:end=18,asetpts=PTS-STARTPTS[a5]; \
-           [0:v]trim=start=18:end=27,setpts=PTS-STARTPTS[v6]; [0:a]atrim=start=18:end=27,asetpts=PTS-STARTPTS[a6]; \
-           [v1][a1][v2][a2][v3][a3][v4][a4][v5][a5][v6][a6]concat=n=6:v=1:a=1[vconcat][aconcat]; \
-           [vconcat]minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir[v]" \
-          -map "[v]" -map "[aconcat]" video_resequenced.mp4
+          "[0:v]trim=start=9.5:end=12,setpts=0.9*PTS-STARTPTS,scale=1.05*iw:-1,crop=iw/1.05:ih/1.05[v1]; \
+           [0:v]trim=start=5:end=7,setpts=1.15*PTS-STARTPTS[v2]; \
+           [0:v]trim=start=22:end=26,setpts=PTS-STARTPTS[v3]; \
+           [0:v]trim=start=7:end=9.5,setpts=0.9*PTS-STARTPTS[v4]; \
+           [0:v]trim=start=3:end=5,setpts=PTS-STARTPTS[v5]; \
+           [0:v]trim=start=18:end=22,setpts=1.1*PTS-STARTPTS[v6]; \
+           [v1][v2]xfade=transition=fade:duration=0.2:offset=2.05[xf1]; \
+           [xf1][v3]xfade=transition=fade:duration=0.2:offset=3.90[xf2]; \
+           [xf2][v4]xfade=transition=fade:duration=0.2:offset=7.70[xf3]; \
+           [xf3][v5]xfade=transition=fade:duration=0.2:offset=9.95[xf4]; \
+           [xf4][v6]xfade=transition=fade:duration=0.2:offset=11.75[v]" \
+          -map "[v]" -an video_unique_transformed.mp4
 
       - name: Upload Processed Video Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: resequenced-fashion-video
-          path: video_resequenced.mp4
+          name: unique-transformed-video
+          path: video_unique_transformed.mp4
           retention-days: 1
