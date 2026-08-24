@@ -52,21 +52,23 @@ jobs:
                  -o "video_raw.mp4" \
                  "${{ github.event.inputs.video_url }}"
 
-      - name: Execute Advanced FFmpeg Transformation
+      - name: Execute Robust FFmpeg Transformation
         run: |
-          ffmpeg -i video_raw.mp4 -filter_complex \
-          "[0:v]trim=start=9.5:end=12,setpts=0.9*PTS-STARTPTS,fps=fps=30,settb=AVTB,scale=1.05*iw:-1,crop=iw/1.05:ih/1.05[v1]; \
-           [0:v]trim=start=5:end=7,setpts=1.15*PTS-STARTPTS,fps=fps=30,settb=AVTB[v2]; \
-           [0:v]trim=start=22:end=26,setpts=PTS-STARTPTS,fps=fps=30,settb=AVTB[v3]; \
-           [0:v]trim=start=7:end=9.5,setpts=0.9*PTS-STARTPTS,fps=fps=30,settb=AVTB[v4]; \
-           [0:v]trim=start=3:end=5,setpts=PTS-STARTPTS,fps=fps=30,settb=AVTB[v5]; \
-           [0:v]trim=start=18:end=22,setpts=1.1*PTS-STARTPTS,fps=fps=30,settb=AVTB[v6]; \
-           [v1][v2]xfade=transition=fade:duration=0.2:offset=2.05[xf1]; \
-           [xf1][v3]xfade=transition=fade:duration=0.2:offset=3.63[xf2]; \
-           [xf2][v4]xfade=transition=fade:duration=0.2:offset=7.43[xf3]; \
-           [xf3][v5]xfade=transition=fade:duration=0.2:offset=9.48[xf4]; \
-           [xf4][v6]xfade=transition=fade:duration=0.2:offset=11.28[v]" \
-          -map "[v]" -an video_unique_transformed.mp4
+          ffmpeg -y -i video_raw.mp4 -filter_complex \
+          "[0:v]trim=start=9.5:end=12,setpts=0.9*PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p[v1]; \
+           [0:v]trim=start=5:end=7,setpts=1.15*PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p[v2]; \
+           [0:v]trim=start=22:end=26,setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p[v3]; \
+           [0:v]trim=start=7:end=9.5,setpts=0.9*PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p[v4]; \
+           [0:v]trim=start=3:end=5,setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p[v5]; \
+           [0:v]trim=start=18:end=22,setpts=1.1*PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p[v6]; \
+           [v1][v2][v3][v4][v5][v6]concat=n=6:v=1:a=0[v]" \
+          -map "[v]" \
+          -c:v libx264 \
+          -preset fast \
+          -crf 20 \
+          -pix_fmt yuv420p \
+          -movflags +faststart \
+          video_unique_transformed.mp4
 
       - name: Upload Processed Video Artifact
         uses: actions/upload-artifact@v4
