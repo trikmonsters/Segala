@@ -55,17 +55,17 @@ jobs:
       - name: Execute Advanced FFmpeg Transformation
         run: |
           ffmpeg -i video_raw.mp4 -filter_complex \
-          "[0:v]trim=start=9.5:end=12,setpts=0.9*PTS-STARTPTS,scale=1.05*iw:-1,crop=iw/1.05:ih/1.05[v1]; \
-           [0:v]trim=start=5:end=7,setpts=1.15*PTS-STARTPTS[v2]; \
-           [0:v]trim=start=22:end=26,setpts=PTS-STARTPTS[v3]; \
-           [0:v]trim=start=7:end=9.5,setpts=0.9*PTS-STARTPTS[v4]; \
-           [0:v]trim=start=3:end=5,setpts=PTS-STARTPTS[v5]; \
-           [0:v]trim=start=18:end=22,setpts=1.1*PTS-STARTPTS[v6]; \
+          "[0:v]trim=start=9.5:end=12,setpts=0.9*PTS-STARTPTS,fps=fps=30,settb=AVTB,scale=1.05*iw:-1,crop=iw/1.05:ih/1.05[v1]; \
+           [0:v]trim=start=5:end=7,setpts=1.15*PTS-STARTPTS,fps=fps=30,settb=AVTB[v2]; \
+           [0:v]trim=start=22:end=26,setpts=PTS-STARTPTS,fps=fps=30,settb=AVTB[v3]; \
+           [0:v]trim=start=7:end=9.5,setpts=0.9*PTS-STARTPTS,fps=fps=30,settb=AVTB[v4]; \
+           [0:v]trim=start=3:end=5,setpts=PTS-STARTPTS,fps=fps=30,settb=AVTB[v5]; \
+           [0:v]trim=start=18:end=22,setpts=1.1*PTS-STARTPTS,fps=fps=30,settb=AVTB[v6]; \
            [v1][v2]xfade=transition=fade:duration=0.2:offset=2.05[xf1]; \
-           [xf1][v3]xfade=transition=fade:duration=0.2:offset=3.90[xf2]; \
-           [xf2][v4]xfade=transition=fade:duration=0.2:offset=7.70[xf3]; \
-           [xf3][v5]xfade=transition=fade:duration=0.2:offset=9.95[xf4]; \
-           [xf4][v6]xfade=transition=fade:duration=0.2:offset=11.75[v]" \
+           [xf1][v3]xfade=transition=fade:duration=0.2:offset=3.63[xf2]; \
+           [xf2][v4]xfade=transition=fade:duration=0.2:offset=7.43[xf3]; \
+           [xf3][v5]xfade=transition=fade:duration=0.2:offset=9.48[xf4]; \
+           [xf4][v6]xfade=transition=fade:duration=0.2:offset=11.28[v]" \
           -map "[v]" -an video_unique_transformed.mp4
 
       - name: Upload Processed Video Artifact
