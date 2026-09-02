@@ -153,7 +153,7 @@ jobs:
           yt-dlp \
             $COOKIE_ARG \
             --remote-components ejs:github \
-            -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            -f "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
             --merge-output-format mp4 \
             --no-playlist \
             -o "video_raw.mp4" \
@@ -163,6 +163,20 @@ jobs:
 
           echo "Downloaded video:"
           ls -lh video_raw.mp4
+
+      # --------------------------------------------------------
+      # VERIFY DOWNLOAD IS ACTUALLY DECODABLE
+      # --------------------------------------------------------
+
+      - name: Verify video integrity
+        run: |
+
+          set -e
+
+          ffprobe -v error -show_format -show_streams video_raw.mp4
+
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=nb_read_frames -of csv=p=0 video_raw.mp4
 
       # --------------------------------------------------------
       # ARTIFACT
@@ -429,7 +443,7 @@ jobs:
           path: input
 
       # --------------------------------------------------------
-      # CREATE COLAB SESSION
+      # CREATE COLAB SESSION + UPLOAD (VERIFIED, WITH RETRY) + RUN
       # --------------------------------------------------------
 
       - name: Start Colab T4
@@ -446,13 +460,82 @@ jobs:
           echo "Colab T4 started."
 
           # ----------------------------------------------------
-          # UPLOAD INPUT
+          # HASH LOKAL (untuk verifikasi integritas upload)
           # ----------------------------------------------------
 
-          colab upload \
-            -s ciJob \
-            input/video_raw.mp4 \
-            /content/video_raw.mp4
+          LOCAL_SIZE=$(stat -c%s input/video_raw.mp4)
+          LOCAL_HASH=$(sha256sum input/video_raw.mp4 | awk '{print $1}')
+
+          echo "Local video: size=$LOCAL_SIZE sha256=$LOCAL_HASH"
+
+          # ----------------------------------------------------
+          # SCRIPT VERIFIKASI SISI COLAB
+          # ----------------------------------------------------
+
+          cat > check_video.py <<'PYEOF'
+          import hashlib, os
+
+          path = "/content/video_raw.mp4"
+
+          if not os.path.exists(path):
+              print("MISSING 0")
+          else:
+              size = os.path.getsize(path)
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              print(f"{size} {h.hexdigest()}")
+          PYEOF
+
+          # ----------------------------------------------------
+          # UPLOAD VIDEO + VERIFIKASI, RETRY KALAU KORUP
+          # ----------------------------------------------------
+
+          MAX_UPLOAD_RETRIES=3
+          VERIFIED=0
+
+          for attempt in $(seq 1 $MAX_UPLOAD_RETRIES); do
+
+            echo ""
+            echo "==> Upload video percobaan $attempt/$MAX_UPLOAD_RETRIES ..."
+
+            colab upload \
+              -s ciJob \
+              input/video_raw.mp4 \
+              /content/video_raw.mp4
+
+            colab upload \
+              -s ciJob \
+              check_video.py \
+              /content/check_video.py
+
+            colab exec \
+              -s ciJob \
+              -f check_video.py \
+              > remote_check.txt || true
+
+            REMOTE_LINE=$(tail -n 1 remote_check.txt | tr -d '\r')
+            REMOTE_SIZE=$(echo "$REMOTE_LINE" | awk '{print $1}')
+            REMOTE_HASH=$(echo "$REMOTE_LINE" | awk '{print $2}')
+
+            echo "Remote video: size=$REMOTE_SIZE sha256=$REMOTE_HASH"
+
+            if [ "$REMOTE_SIZE" == "$LOCAL_SIZE" ] && [ "$REMOTE_HASH" == "$LOCAL_HASH" ]; then
+              echo "✅ Upload video terverifikasi utuh."
+              VERIFIED=1
+              break
+            fi
+
+            echo "⚠️  Upload tidak cocok/korup, mencoba lagi dalam 10 detik..."
+            sleep 10
+
+          done
+
+          if [ "$VERIFIED" != "1" ]; then
+            echo "::error::Video gagal terupload utuh ke Colab setelah $MAX_UPLOAD_RETRIES percobaan (kemungkinan channel colab upload tidak stabil untuk file sebesar ini)."
+            exit 1
+          fi
 
           # ----------------------------------------------------
           # UPLOAD PROPainter SCRIPT
@@ -606,7 +689,7 @@ jobs:
 
           cd /tmp/qwentts.cpp
 
-          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2acb
+          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2ac6
 
           git submodule update --init --recursive
 
@@ -752,6 +835,8 @@ jobs:
 
       NEMO_CACHE_DIR: ${{ github.workspace }}/.cache/nemo
 
+      ALIGNMENT_MODEL: "stt_en_fastconformer_hybrid_large_pc"
+
     steps:
 
       - name: Checkout repository
@@ -797,7 +882,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-nfa-${{ inputs.alignment_model }}
+          key: ${{ runner.os }}-pip-nfa-${{ env.ALIGNMENT_MODEL }}
           restore-keys: |
             ${{ runner.os }}-pip-nfa-
 
@@ -811,7 +896,7 @@ jobs:
           path: |
             ${{ github.workspace }}/.cache/huggingface
             ${{ github.workspace }}/.cache/nemo
-          key: nemo-model-${{ inputs.alignment_model }}
+          key: nemo-model-${{ env.ALIGNMENT_MODEL }}
           restore-keys: |
             nemo-model-
 
@@ -975,7 +1060,7 @@ jobs:
         run: |
 
           python nfa_repo/tools/nemo_forced_aligner/align.py \
-            pretrained_name="${{ inputs.alignment_model }}" \
+            pretrained_name="${{ env.ALIGNMENT_MODEL }}" \
             manifest_filepath="work/manifest.json" \
             output_dir="work/nfa_output" \
             save_output_file_formats='["ctm"]' \
