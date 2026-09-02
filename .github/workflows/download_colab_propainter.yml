@@ -788,6 +788,14 @@ jobs:
           echo "TTS generated:"
           ls -lh outputs/narration.wav
 
+          # Ratakan (flatten) ke root workspace supaya struktur artifact
+          # tidak ikut membawa folder "outputs/" -- upload-artifact
+          # mempertahankan path relatif apa adanya, jadi kalau tidak
+          # diratakan di sini, hasil download-artifact di job lain akan
+          # jadi "<path>/outputs/narration.wav", bukan "<path>/narration.wav"
+          # seperti yang diharapkan ffmpeg di job auto-subtitle & final-video.
+          cp outputs/narration.wav narration.wav
+
       # --------------------------------------------------------
       # ARTIFACT
       # --------------------------------------------------------
@@ -797,7 +805,7 @@ jobs:
         with:
           name: tts-audio
           path: |
-            outputs/narration.wav
+            narration.wav
             narration.txt
           retention-days: 1
 
