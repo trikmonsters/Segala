@@ -1,0 +1,277 @@
+name: Download → Colab GPU → ProPainter → GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "URL video yang akan didownload oleh yt-dlp"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  process-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      # ================================================================
+      # 1. CHECKOUT
+      # ================================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ================================================================
+      # 2. DOWNLOAD VIDEO DI GITHUB ACTIONS
+      # ================================================================
+      - name: Install FFmpeg Binary
+        run: |
+          set -e
+          mkdir -p "$HOME/.local/bin"
+          curl -L --fail --retry 3 \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+            | tar -xJ --strip-components=1 -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          ffmpeg -version | head -n 1
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade yt-dlp
+          yt-dlp --version
+
+      - name: Create Downloads Cookie File
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
+        run: |
+          set -e
+          if [ -z "$COOKIES_TEXT" ]; then
+            echo "::error::Secret COOKIE kosong/tidak ditemukan."
+            exit 1
+          fi
+          printf '%s\n' "$COOKIES_TEXT" > cookies.txt
+          chmod 600 cookies.txt
+
+      - name: Download Video via yt-dlp
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$VIDEO_URL" ]; then
+            echo "::error::video_url kosong."
+            exit 1
+          fi
+
+          yt-dlp \
+            --cookies ./cookies.txt \
+            --remote-components ejs:github \
+            -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --merge-output-format mp4 \
+            --no-part \
+            -o "video_raw.mp4" \
+            "$VIDEO_URL"
+
+          test -s video_raw.mp4
+          ls -lh video_raw.mp4
+
+      # Cookie tidak perlu ikut ke langkah berikutnya.
+      - name: Remove cookie file
+        if: always()
+        run: rm -f cookies.txt
+
+      # ================================================================
+      # 3. INSTALL GOOGLE COLAB CLI
+      # ================================================================
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv & Google Colab CLI
+        run: |
+          set -e
+
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+
+          uv tool install google-colab-cli
+
+          # Compatibility/fix seperti workflow Anda sebelumnya.
+          COLAB_VENV="$HOME/.local/share/uv/tools/google-colab-cli"
+          uv pip install \
+            --python "$COLAB_VENV" \
+            "git+https://github.com/googlecolab/jupyter-kernel-client.git"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          colab version
+
+      # ================================================================
+      # 4. RESTORE COLAB AUTH
+      # ================================================================
+      - name: Restore Colab auth token
+        env:
+          COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
+        run: |
+          set -e
+          mkdir -p "$HOME/.config/colab-cli"
+
+          if [ -z "$COLAB_TOKEN_JSON_B64" ]; then
+            echo "::error::Secret COLAB_TOKEN_JSON_B64 kosong/tidak ditemukan."
+            exit 1
+          fi
+
+          printf '%s' "$COLAB_TOKEN_JSON_B64" | base64 -d \
+            > "$HOME/.config/colab-cli/token.json"
+
+          chmod 600 "$HOME/.config/colab-cli/token.json"
+
+      # ================================================================
+      # 5. BUAT SESSION COLAB T4
+      # ================================================================
+      - name: Provision Colab T4 and process video
+        env:
+          INPUT_VIDEO: /content/video_raw.mp4
+        run: |
+          set -Eeuo pipefail
+
+          SESSION="ciJob"
+
+          # Apa pun yang terjadi, VM Colab harus dihentikan.
+          cleanup() {
+            echo ""
+            echo "============================================================"
+            echo "CLEANUP: stopping Colab session..."
+            echo "============================================================"
+            colab stop -s "$SESSION" || true
+          }
+          trap cleanup EXIT
+
+          echo "============================================================"
+          echo "CREATE COLAB T4"
+          echo "============================================================"
+          colab new -s "$SESSION" --gpu T4
+
+          echo "============================================================"
+          echo "UPLOAD INPUT VIDEO → COLAB"
+          echo "============================================================"
+          test -s video_raw.mp4
+
+          # Remote path dibuat eksplisit supaya script selalu tahu lokasi input.
+          colab upload -s "$SESSION" \
+            ./video_raw.mp4 \
+            /content/video_raw.mp4
+
+          echo "============================================================"
+          echo "UPLOAD PROPAINTER SCRIPT → COLAB"
+          echo "============================================================"
+          colab upload -s "$SESSION" \
+            ./propainter_gha.py \
+            /content/propainter_gha.py
+
+          echo "============================================================"
+          echo "CHECK REMOTE FILES"
+          echo "============================================================"
+          colab ls -s "$SESSION" /content
+
+          echo "============================================================"
+          echo "RUN PROPAINTER ON COLAB GPU"
+          echo "============================================================"
+
+          # Script Anda melakukan:
+          # OCR subtitle → mask → ProPainter chunk → feather blending
+          # → render MP4 + restore audio.
+          colab exec -s "$SESSION" -f propainter_gha.py
+
+          echo "============================================================"
+          echo "DOWNLOAD RESULT FROM COLAB"
+          echo "============================================================"
+
+          # Nama output mengikuti:
+          # video_raw_ProPainter_Success.mp4
+          colab download -s "$SESSION" \
+            /content/video_raw_ProPainter_Success.mp4 \
+            ./video_final.mp4
+
+          test -s video_final.mp4
+          ls -lh video_final.mp4
+
+          echo "COLAB_OUTPUT=video_final.mp4" >> "$GITHUB_ENV"
+
+      # ================================================================
+      # 6. SIMPAN VIDEO SEBAGAI GITHUB ARTIFACT
+      #    (opsional, tetapi berguna untuk debugging)
+      # ================================================================
+      - name: Upload final video artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: propainter-final-video
+          path: video_final.mp4
+          if-no-files-found: error
+          retention-days: 1
+
+      # ================================================================
+      # 7. BUAT GITHUB RELEASE + UPLOAD MP4 LANGSUNG
+      #    TIDAK DI-ZIP
+      # ================================================================
+      - name: Publish final video to GitHub Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          test -s video_final.mp4
+
+          TAG="propainter-${GITHUB_RUN_ID}"
+          TITLE="ProPainter Video #${GITHUB_RUN_NUMBER}"
+
+          echo "Release tag : $TAG"
+          echo "Video       : video_final.mp4"
+          ls -lh video_final.mp4
+
+          # Jika release dengan tag tersebut belum ada → buat.
+          # Jika sudah ada → upload ulang/clobber.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release sudah ada, upload/clobber asset..."
+            gh release upload "$TAG" \
+              video_final.mp4 \
+              --clobber
+          else
+            echo "Membuat release baru..."
+            gh release create "$TAG" \
+              video_final.mp4 \
+              --title "$TITLE" \
+              --notes "Video hasil ProPainter dari GitHub Actions → Google Colab GPU T4." \
+              --target "$GITHUB_SHA"
+          fi
+
+          echo "============================================================"
+          echo "RELEASE SELESAI"
+          echo "============================================================"
+          gh release view "$TAG"
+
+      # ================================================================
+      # 8. LOG JIKA GAGAL
+      # ================================================================
+      - name: Show Colab log on failure
+        if: failure()
+        run: |
+          colab log -s ciJob -o colab_failure_log.ipynb || true
+
+      - name: Upload Colab log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colab-failure-log
+          path: colab_failure_log.ipynb
+          if-no-files-found: ignore
