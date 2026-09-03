@@ -549,10 +549,25 @@ jobs:
           # ----------------------------------------------------
           # RUN
           # ----------------------------------------------------
+          #
+          # CATATAN: google-colab-cli punya bug upstream yang dikenal
+          # (googlecolab/google-colab-cli#14) -- eksekusi yang berjalan
+          # lama kadang membuat koneksi timeout menunggu balasan akhir,
+          # PADAHAL proses di sisi Colab sudah selesai sukses (video
+          # sudah ter-render). Jadi kita tidak langsung exit kalau
+          # "colab exec" gagal -- kita tetap coba download output-nya
+          # dulu. Kalau filenya memang ada, lanjut seperti biasa.
 
+          set +e
           colab exec \
             -s ciJob \
             -f propainter_gha.py
+          EXEC_STATUS=$?
+          set -e
+
+          if [ "$EXEC_STATUS" -ne 0 ]; then
+            echo "::warning::colab exec keluar dengan status $EXEC_STATUS (kemungkinan bug upstream google-colab-cli#14: reply timeout meski proses sebenarnya sudah selesai). Mencoba tetap mengambil file output dari Colab..."
+          fi
 
           # ----------------------------------------------------
           # DOWNLOAD OUTPUT
@@ -560,10 +575,13 @@ jobs:
 
           mkdir -p output
 
-          colab download \
-            -s ciJob \
-            /content/video_raw_ProPainter_Success.mp4 \
-            output/video_processed.mp4
+          if ! colab download \
+                -s ciJob \
+                /content/video_raw_ProPainter_Success.mp4 \
+                output/video_processed.mp4; then
+            echo "::error::colab exec gagal (status $EXEC_STATUS) DAN file output tidak ditemukan di Colab -- prosesnya benar-benar gagal, bukan sekadar bug reply timeout."
+            exit 1
+          fi
 
           test -s output/video_processed.mp4
 
