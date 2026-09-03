@@ -453,9 +453,34 @@ jobs:
 
           trap 'colab stop -s ciJob || true' EXIT
 
-          colab new \
-            -s ciJob \
-            --gpu T4
+          # Pembuatan sesi Colab kadang gagal sesaat karena server Google
+          # sendiri (mis. "Service Unavailable" / kapasitas GPU T4 gratis
+          # lagi penuh, atau "TooManyAssignments" kalau ada sesi lama yang
+          # nyangkut). Ini di luar kendali kita dan biasanya sembuh sendiri
+          # kalau dicoba lagi -- jadi retry dengan jeda yang makin panjang.
+
+          MAX_NEW_RETRIES=5
+          CREATED=0
+
+          for attempt in $(seq 1 $MAX_NEW_RETRIES); do
+
+            echo "==> Membuat sesi Colab, percobaan $attempt/$MAX_NEW_RETRIES ..."
+
+            if colab new -s ciJob --gpu T4; then
+              CREATED=1
+              break
+            fi
+
+            WAIT=$((attempt * 30))
+            echo "⚠️  Gagal membuat sesi (kemungkinan server Colab lagi penuh/gangguan sesaat). Menunggu ${WAIT}s sebelum coba lagi..."
+            sleep "$WAIT"
+
+          done
+
+          if [ "$CREATED" != "1" ]; then
+            echo "::error::Gagal membuat sesi Colab setelah $MAX_NEW_RETRIES percobaan. Kemungkinan besar ini gangguan sementara di sisi Google Colab (kapasitas GPU T4 gratis penuh) -- coba jalankan ulang workflow beberapa saat lagi."
+            exit 1
+          fi
 
           echo "Colab T4 started."
 
