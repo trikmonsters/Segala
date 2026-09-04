@@ -205,10 +205,15 @@ jobs:
   # ============================================================
 
   gemini-analysis:
+
     name: Gemini Analysis + Narrative
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 20
+
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -495,49 +500,84 @@ jobs:
           retention-days: 1
 
 
-    # ============================================================
-  # JOB 3 - PROPAINTER
   # ============================================================
+  # JOB 3
+  # PROPainTER
+  #
+  # WAITS ONLY FOR DOWNLOAD
+  # ============================================================
+
   propainter:
+
     name: ProPainter on Colab T4
+
     needs:
       - download-video
+
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+
+    timeout-minutes: 180
 
     steps:
-      - name: Checkout
+
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # PYTHON
+      # --------------------------------------------------------
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install google-colab-cli
+      # --------------------------------------------------------
+      # INSTALL COLAB CLI
+      # --------------------------------------------------------
+
+      - name: Install uv and Colab CLI
         run: |
-          python -m pip install --upgrade pip
-          pip install uv
+
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+          export PATH="$HOME/.local/bin:$PATH"
+
           uv tool install google-colab-cli
 
-      - name: Install jupyter-kernel-client
-        run: |
-          uv tool run --from google-colab-cli \
-            pip install jupyter-kernel-client
+          COLAB_VENV="$HOME/.local/share/uv/tools/google-colab-cli"
+
+          uv pip install \
+            --python "$COLAB_VENV" \
+            "git+https://github.com/googlecolab/jupyter-kernel-client.git"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # --------------------------------------------------------
+      # RESTORE COLAB AUTH
+      # --------------------------------------------------------
 
       - name: Restore Colab authentication
         env:
           COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
         run: |
+
           set -e
 
-          mkdir -p ~/.config/colab
+          if [ -z "$COLAB_TOKEN_JSON_B64" ]; then
+            echo "::error::COLAB_TOKEN_JSON_B64 belum diset."
+            exit 1
+          fi
+
+          mkdir -p ~/.config/colab-cli
 
           printf '%s' "$COLAB_TOKEN_JSON_B64" \
             | base64 -d \
-            > ~/.config/colab/token.json
+            > ~/.config/colab-cli/token.json
 
-          test -s ~/.config/colab/token.json
+      # --------------------------------------------------------
+      # DOWNLOAD ARTIFACT
+      # --------------------------------------------------------
 
       - name: Download raw video artifact
         uses: actions/download-artifact@v4
@@ -545,74 +585,88 @@ jobs:
           name: raw-video
           path: input
 
-      # ==========================================================
-      # CREATE COLAB SESSION
-      # ==========================================================
+      # --------------------------------------------------------
+      # CREATE COLAB SESSION + UPLOAD (VERIFIED, WITH RETRY) + RUN
+      # --------------------------------------------------------
+
       - name: Start Colab T4
         run: |
+
           set -e
 
-          for attempt in 1 2 3; do
-            echo "Mencoba membuat Colab T4 - attempt $attempt/3"
+          trap 'colab stop -s ciJob || true' EXIT
+
+          # Pembuatan sesi Colab kadang gagal sesaat karena server Google
+          # sendiri (mis. "Service Unavailable" / kapasitas GPU T4 gratis
+          # lagi penuh, atau "TooManyAssignments" kalau ada sesi lama yang
+          # nyangkut). Ini di luar kendali kita dan biasanya sembuh sendiri
+          # kalau dicoba lagi -- jadi retry dengan jeda yang makin panjang.
+
+          MAX_NEW_RETRIES=5
+          CREATED=0
+
+          for attempt in $(seq 1 $MAX_NEW_RETRIES); do
+
+            echo "==> Membuat sesi Colab, percobaan $attempt/$MAX_NEW_RETRIES ..."
 
             if colab new -s ciJob --gpu T4; then
-              echo "Colab T4 berhasil dibuat."
+              CREATED=1
               break
             fi
 
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Gagal membuat Colab T4."
-              exit 1
-            fi
+            WAIT=$((attempt * 30))
+            echo "⚠️  Gagal membuat sesi (kemungkinan server Colab lagi penuh/gangguan sesaat). Menunggu ${WAIT}s sebelum coba lagi..."
+            sleep "$WAIT"
 
-            sleep 10
           done
 
-      # ==========================================================
-      # UPLOAD VIDEO
-      # ==========================================================
-      - name: Upload video to Colab
-        run: |
-          set -e
+          if [ "$CREATED" != "1" ]; then
+            echo "::error::Gagal membuat sesi Colab setelah $MAX_NEW_RETRIES percobaan. Kemungkinan besar ini gangguan sementara di sisi Google Colab (kapasitas GPU T4 gratis penuh) -- coba jalankan ulang workflow beberapa saat lagi."
+            exit 1
+          fi
+
+          echo "Colab T4 started."
+
+          # ----------------------------------------------------
+          # HASH LOKAL (untuk verifikasi integritas upload)
+          # ----------------------------------------------------
 
           LOCAL_SIZE=$(stat -c%s input/video_raw.mp4)
-          LOCAL_SHA=$(sha256sum input/video_raw.mp4 | awk '{print $1}')
+          LOCAL_HASH=$(sha256sum input/video_raw.mp4 | awk '{print $1}')
 
-          echo "Local size : $LOCAL_SIZE"
-          echo "Local SHA  : $LOCAL_SHA"
+          echo "Local video: size=$LOCAL_SIZE sha256=$LOCAL_HASH"
 
-          cat > check_video.py <<'PY'
-          import hashlib
-          import os
+          # ----------------------------------------------------
+          # SCRIPT VERIFIKASI SISI COLAB
+          # ----------------------------------------------------
+
+          cat > check_video.py <<'PYEOF'
+          import hashlib, os
 
           path = "/content/video_raw.mp4"
 
           if not os.path.exists(path):
-              print("REMOTE_MISSING")
-              raise SystemExit(0)
+              print("MISSING 0")
+          else:
+              size = os.path.getsize(path)
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              print(f"{size} {h.hexdigest()}")
+          PYEOF
 
-          size = os.path.getsize(path)
+          # ----------------------------------------------------
+          # UPLOAD VIDEO + VERIFIKASI, RETRY KALAU KORUP
+          # ----------------------------------------------------
 
-          sha = hashlib.sha256()
+          MAX_UPLOAD_RETRIES=3
+          VERIFIED=0
 
-          with open(path, "rb") as f:
-              while True:
-                  chunk = f.read(1024 * 1024)
+          for attempt in $(seq 1 $MAX_UPLOAD_RETRIES); do
 
-                  if not chunk:
-                      break
-
-                  sha.update(chunk)
-
-          print(f"REMOTE_SIZE={size}")
-          print(f"REMOTE_SHA={sha.hexdigest()}")
-          PY
-
-          for attempt in 1 2 3; do
-
-            echo "=========================================="
-            echo "UPLOAD ATTEMPT $attempt/3"
-            echo "=========================================="
+            echo ""
+            echo "==> Upload video percobaan $attempt/$MAX_UPLOAD_RETRIES ..."
 
             colab upload \
               -s ciJob \
@@ -624,744 +678,211 @@ jobs:
               check_video.py \
               /content/check_video.py
 
-            set +e
-
-            REMOTE_RESULT=$(colab exec \
-              -s ciJob \
-              -f check_video.py 2>&1)
-
-            set -e
-
-            echo "$REMOTE_RESULT"
-
-            REMOTE_SIZE=$(printf '%s\n' "$REMOTE_RESULT" \
-              | grep '^REMOTE_SIZE=' \
-              | tail -1 \
-              | cut -d= -f2-)
-
-            REMOTE_SHA=$(printf '%s\n' "$REMOTE_RESULT" \
-              | grep '^REMOTE_SHA=' \
-              | tail -1 \
-              | cut -d= -f2-)
-
-            if [ "$LOCAL_SIZE" = "$REMOTE_SIZE" ] && \
-               [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-
-              echo "=========================================="
-              echo "UPLOAD BERHASIL"
-              echo "SHA256 COCOK"
-              echo "=========================================="
-
-              break
-            fi
-
-            echo "::warning::Hash remote belum cocok."
-
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Upload video gagal setelah 3 percobaan."
-              exit 1
-            fi
-
-            sleep 5
-          done
-
-      # ==========================================================
-      # UPLOAD PROPAINTER SCRIPT
-      # ==========================================================
-      - name: Upload ProPainter script
-        run: |
-          set -e
-
-          test -f propainter_gha.py
-
-          colab upload \
-            -s ciJob \
-            propainter_gha.py \
-            /content/propainter_gha.py
-
-      # ==========================================================
-      # BACKGROUND LAUNCHER
-      # ==========================================================
-      - name: Create background launcher
-        run: |
-          cat > start_propainter.py <<'PY'
-          import os
-          import subprocess
-          import sys
-
-          SCRIPT = "/content/propainter_gha.py"
-          LOG = "/content/propainter.log"
-          PID_FILE = "/content/propainter.pid"
-          OUTPUT = "/content/video_raw_ProPainter_Success.mp4"
-
-          # ------------------------------------------------------
-          # Kalau output sudah ada, jangan start ulang
-          # ------------------------------------------------------
-          if os.path.exists(OUTPUT):
-              print("OUTPUT_ALREADY_EXISTS")
-              raise SystemExit(0)
-
-          # ------------------------------------------------------
-          # Kalau process masih berjalan, jangan start ulang
-          # ------------------------------------------------------
-          if os.path.exists(PID_FILE):
-
-              try:
-                  with open(PID_FILE, "r") as f:
-                      pid = int(f.read().strip())
-
-                  os.kill(pid, 0)
-
-                  print(f"ALREADY_RUNNING PID={pid}")
-                  raise SystemExit(0)
-
-              except ProcessLookupError:
-                  pass
-
-              except ValueError:
-                  pass
-
-              except PermissionError:
-                  print("PROCESS_EXISTS")
-                  raise SystemExit(0)
-
-          # ------------------------------------------------------
-          # Redirect semua output ke log.
-          #
-          # Sangat penting agar child process tidak bergantung
-          # kepada koneksi Jupyter/kernel.
-          # ------------------------------------------------------
-          log = open(
-              LOG,
-              "a",
-              buffering=1
-          )
-
-          process = subprocess.Popen(
-              [sys.executable, SCRIPT],
-
-              stdin=subprocess.DEVNULL,
-
-              stdout=log,
-
-              stderr=subprocess.STDOUT,
-
-              start_new_session=True,
-
-              close_fds=True
-          )
-
-          with open(PID_FILE, "w") as f:
-              f.write(str(process.pid))
-
-          print(f"STARTED PID={process.pid}")
-          print(f"LOG={LOG}")
-          PY
-
-          colab upload \
-            -s ciJob \
-            start_propainter.py \
-            /content/start_propainter.py
-
-      # ==========================================================
-      # START PROPAINTER
-      #
-      # colab exec hanya menjalankan launcher.
-      # Launcher langsung selesai.
-      # ProPainter tetap berjalan di background.
-      # ==========================================================
-      - name: Start ProPainter in background
-        run: |
-          set -e
-
-          echo "Starting ProPainter..."
-
-          RESULT=$(colab exec \
-            -s ciJob \
-            -f start_propainter.py)
-
-          echo "$RESULT"
-
-          if echo "$RESULT" | grep -q "STARTED PID="; then
-
-            echo "ProPainter berhasil dijalankan."
-
-          elif echo "$RESULT" | grep -q "ALREADY_RUNNING"; then
-
-            echo "ProPainter sudah berjalan."
-
-          elif echo "$RESULT" | grep -q "OUTPUT_ALREADY_EXISTS"; then
-
-            echo "Output sudah tersedia."
-
-          else
-
-            echo "::error::Gagal menjalankan ProPainter."
-            exit 1
-
-          fi
-
-      # ==========================================================
-      # STATUS CHECKER
-      # ==========================================================
-      - name: Create ProPainter status checker
-        run: |
-          cat > status_propainter.py <<'PY'
-          import os
-
-          OUTPUT = "/content/video_raw_ProPainter_Success.mp4"
-          PID_FILE = "/content/propainter.pid"
-
-          # ------------------------------------------------------
-          # OUTPUT EXIST
-          # ------------------------------------------------------
-          if os.path.exists(OUTPUT):
-
-              size = os.path.getsize(OUTPUT)
-
-              if size > 1024:
-                  print("DONE")
-                  print(f"OUTPUT_SIZE={size}")
-                  raise SystemExit(0)
-
-              print("OUTPUT_INVALID")
-              raise SystemExit(2)
-
-          # ------------------------------------------------------
-          # PID TIDAK ADA
-          # ------------------------------------------------------
-          if not os.path.exists(PID_FILE):
-
-              print("NOT_STARTED")
-              raise SystemExit(3)
-
-          # ------------------------------------------------------
-          # BACA PID
-          # ------------------------------------------------------
-          try:
-
-              with open(PID_FILE, "r") as f:
-                  pid = int(f.read().strip())
-
-          except Exception:
-
-              print("PID_INVALID")
-              raise SystemExit(3)
-
-          # ------------------------------------------------------
-          # CEK PROCESS
-          # ------------------------------------------------------
-          try:
-
-              os.kill(pid, 0)
-
-              print("RUNNING")
-              print(f"PID={pid}")
-
-              raise SystemExit(0)
-
-          except ProcessLookupError:
-
-              print("FAILED")
-              raise SystemExit(2)
-
-          except PermissionError:
-
-              print("RUNNING")
-              print(f"PID={pid}")
-
-              raise SystemExit(0)
-          PY
-
-          colab upload \
-            -s ciJob \
-            status_propainter.py \
-            /content/status_propainter.py
-
-      # ==========================================================
-      # WAIT PROPAINTER
-      # ==========================================================
-      - name: Wait for ProPainter
-        run: |
-          set -e
-
-          MAX_WAIT=9000
-          INTERVAL=20
-          ELAPSED=0
-
-          echo "=========================================="
-          echo "WAITING FOR PROPAINTER"
-          echo "=========================================="
-
-          while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-
-            echo ""
-            echo "------------------------------------------"
-            echo "Elapsed: ${ELAPSED}s / ${MAX_WAIT}s"
-            echo "------------------------------------------"
-
-            set +e
-
-            STATUS=$(colab exec \
-              -s ciJob \
-              -f status_propainter.py 2>&1)
-
-            STATUS_CODE=$?
-
-            set -e
-
-            echo "$STATUS"
-
-            # ----------------------------------------------------
-            # DONE
-            # ----------------------------------------------------
-            if echo "$STATUS" | grep -q '^DONE'; then
-
-              echo ""
-              echo "=========================================="
-              echo "PROPAINTER PROCESS SELESAI"
-              echo "=========================================="
-
-              break
-            fi
-
-            # ----------------------------------------------------
-            # RUNNING
-            # ----------------------------------------------------
-            if echo "$STATUS" | grep -q '^RUNNING'; then
-
-              echo "ProPainter masih melakukan processing..."
-
-            # ----------------------------------------------------
-            # FAILED
-            # ----------------------------------------------------
-            elif echo "$STATUS" | grep -q '^FAILED'; then
-
-              echo "::error::ProPainter berhenti tanpa menghasilkan output."
-
-              echo ""
-              echo "Membaca log ProPainter..."
-
-              cat > tail_log.py <<'PY'
-          import os
-
-          path = "/content/propainter.log"
-
-          if not os.path.exists(path):
-              print("LOG_NOT_FOUND")
-              raise SystemExit(0)
-
-          with open(path, "r", errors="replace") as f:
-              lines = f.readlines()
-
-          print("===== LAST 150 LOG LINES =====")
-
-          for line in lines[-150:]:
-              print(line.rstrip())
-          PY
-
-              colab upload \
-                -s ciJob \
-                tail_log.py \
-                /content/tail_log.py || true
-
-              colab exec \
-                -s ciJob \
-                -f tail_log.py || true
-
-              exit 1
-
-            else
-
-              echo "::warning::Status tidak dikenali (exit $STATUS_CODE)."
-
-            fi
-
-            sleep "$INTERVAL"
-
-            ELAPSED=$((ELAPSED + INTERVAL))
-
-          done
-
-          # ------------------------------------------------------
-          # GLOBAL TIMEOUT
-          # ------------------------------------------------------
-          if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
-
-            echo "::error::Timeout menunggu ProPainter."
-
-            cat > tail_log.py <<'PY'
-          import os
-
-          path = "/content/propainter.log"
-
-          if not os.path.exists(path):
-              print("LOG_NOT_FOUND")
-              raise SystemExit(0)
-
-          with open(path, "r", errors="replace") as f:
-              lines = f.readlines()
-
-          print("===== LAST 150 LOG LINES =====")
-
-          for line in lines[-150:]:
-              print(line.rstrip())
-          PY
-
-            colab upload \
-              -s ciJob \
-              tail_log.py \
-              /content/tail_log.py || true
-
             colab exec \
               -s ciJob \
-              -f tail_log.py || true
+              -f check_video.py \
+              > remote_check.txt || true
 
-            exit 1
-          fi
+            REMOTE_LINE=$(tail -n 1 remote_check.txt | tr -d '\r')
+            REMOTE_SIZE=$(echo "$REMOTE_LINE" | awk '{print $1}')
+            REMOTE_HASH=$(echo "$REMOTE_LINE" | awk '{print $2}')
 
-      # ==========================================================
-      # NEW:
-      # WAIT UNTIL OUTPUT FILE SIZE IS STABLE
-      #
-      # Ini bagian tambahan untuk kasus yang Anda lihat di
-      # Colab GUI:
-      #
-      # rendering selesai
-      #      ↓
-      # runner terlihat selesai
-      #      ↓
-      # file masih loading
-      #
-      # Kita tidak langsung download.
-      # ==========================================================
-      - name: Wait until output file is stable
-        run: |
-          set -e
+            echo "Remote video: size=$REMOTE_SIZE sha256=$REMOTE_HASH"
 
-          cat > file_stability.py <<'PY'
-          import os
-
-          path = "/content/video_raw_ProPainter_Success.mp4"
-
-          if not os.path.exists(path):
-
-              print("MISSING")
-              raise SystemExit(1)
-
-          size = os.path.getsize(path)
-
-          print(f"SIZE={size}")
-
-          if size <= 1024:
-
-              print("TOO_SMALL")
-              raise SystemExit(2)
-
-          print("READY")
-          PY
-
-          colab upload \
-            -s ciJob \
-            file_stability.py \
-            /content/file_stability.py
-
-          PREVIOUS_SIZE=0
-          STABLE_COUNT=0
-
-          REQUIRED_STABLE_CHECKS=4
-          STABLE_INTERVAL=15
-
-          echo "=========================================="
-          echo "WAITING FOR STABLE OUTPUT FILE"
-          echo "=========================================="
-
-          for i in $(seq 1 40); do
-
-            set +e
-
-            RESULT=$(colab exec \
-              -s ciJob \
-              -f file_stability.py 2>&1)
-
-            STATUS_CODE=$?
-
-            set -e
-
-            echo "$RESULT"
-
-            CURRENT_SIZE=$(printf '%s\n' "$RESULT" \
-              | grep '^SIZE=' \
-              | tail -1 \
-              | cut -d= -f2-)
-
-            if [ -z "$CURRENT_SIZE" ]; then
-
-              echo "::warning::Ukuran file belum bisa dibaca."
-
-              STABLE_COUNT=0
-
-              sleep "$STABLE_INTERVAL"
-
-              continue
-            fi
-
-            echo "Current size: $CURRENT_SIZE"
-            echo "Previous size: $PREVIOUS_SIZE"
-
-            if [ "$CURRENT_SIZE" = "$PREVIOUS_SIZE" ] && \
-               [ "$CURRENT_SIZE" -gt 1024 ]; then
-
-              STABLE_COUNT=$((STABLE_COUNT + 1))
-
-              echo "Stable check: $STABLE_COUNT/$REQUIRED_STABLE_CHECKS"
-
-            else
-
-              STABLE_COUNT=0
-
-              echo "Ukuran berubah. Reset stability counter."
-
-            fi
-
-            PREVIOUS_SIZE="$CURRENT_SIZE"
-
-            if [ "$STABLE_COUNT" -ge "$REQUIRED_STABLE_CHECKS" ]; then
-
-              echo ""
-              echo "=========================================="
-              echo "OUTPUT FILE SUDAH STABIL"
-              echo "SIZE=$CURRENT_SIZE"
-              echo "=========================================="
-
+            if [ "$REMOTE_SIZE" == "$LOCAL_SIZE" ] && [ "$REMOTE_HASH" == "$LOCAL_HASH" ]; then
+              echo "✅ Upload video terverifikasi utuh."
+              VERIFIED=1
               break
             fi
 
-            sleep "$STABLE_INTERVAL"
+            echo "⚠️  Upload tidak cocok/korup, mencoba lagi dalam 10 detik..."
+            sleep 10
 
           done
 
-          if [ "$STABLE_COUNT" -lt "$REQUIRED_STABLE_CHECKS" ]; then
-
-            echo "::error::Output file tidak pernah menjadi stabil."
+          if [ "$VERIFIED" != "1" ]; then
+            echo "::error::Video gagal terupload utuh ke Colab setelah $MAX_UPLOAD_RETRIES percobaan (kemungkinan channel colab upload tidak stabil untuk file sebesar ini)."
             exit 1
-
           fi
 
-      # ==========================================================
-      # VERIFY MP4 DI COLAB
-      #
-      # Sebelum download, pastikan file memang MP4 valid.
-      # ==========================================================
-      - name: Verify output inside Colab
-        run: |
-          set -e
-
-          cat > verify_output.py <<'PY'
-          import json
-          import os
-          import subprocess
-
-          path = "/content/video_raw_ProPainter_Success.mp4"
-
-          if not os.path.exists(path):
-
-              print("OUTPUT_MISSING")
-              raise SystemExit(1)
-
-          size = os.path.getsize(path)
-
-          print(f"FILE_SIZE={size}")
-
-          if size <= 1024:
-
-              print("OUTPUT_TOO_SMALL")
-              raise SystemExit(1)
-
-          cmd = [
-              "ffprobe",
-              "-v",
-              "error",
-              "-show_entries",
-              "format=duration,size",
-              "-show_entries",
-              "stream=codec_name,width,height",
-              "-of",
-              "json",
-              path
-          ]
-
-          result = subprocess.run(
-              cmd,
-              capture_output=True,
-              text=True
-          )
-
-          print(result.stdout)
-
-          if result.returncode != 0:
-
-              print("FFPROBE_FAILED")
-              print(result.stderr)
-
-              raise SystemExit(1)
-
-          try:
-
-              data = json.loads(result.stdout)
-
-          except Exception:
-
-              print("INVALID_FFPROBE_JSON")
-              raise SystemExit(1)
-
-          streams = data.get("streams", [])
-
-          video_streams = [
-              s for s in streams
-              if s.get("codec_name")
-          ]
-
-          if not video_streams:
-
-              print("NO_VIDEO_STREAM")
-              raise SystemExit(1)
-
-          print("REMOTE_VIDEO_VALID")
-          PY
+          # ----------------------------------------------------
+          # UPLOAD PROPainter SCRIPTS (2 tahap)
+          # ----------------------------------------------------
 
           colab upload \
             -s ciJob \
-            verify_output.py \
-            /content/verify_output.py
+            propainter_gha_stage1.py \
+            /content/propainter_gha_stage1.py
 
-          colab exec \
+          colab upload \
             -s ciJob \
-            -f verify_output.py
+            propainter_gha_stage2.py \
+            /content/propainter_gha_stage2.py
 
-      # ==========================================================
-      # DOWNLOAD OUTPUT
-      #
-      # Jangan stop Colab sebelum bagian ini selesai.
-      # ==========================================================
-      - name: Download ProPainter output
-        run: |
+          # ----------------------------------------------------
+          # HELPER: cek marker file di Colab lewat exec ringan,
+          # dengan retry -- dipakai untuk memverifikasi progres
+          # tanpa bergantung pada balasan RPC dari exec yang berat.
+          # ----------------------------------------------------
+
+          check_marker () {
+            local marker_path="$1"
+            local max_tries="$2"
+            local delay="$3"
+
+            cat > check_marker_run.py <<PYEOF2
+          import os
+          p = "${marker_path}"
+          print("FOUND" if os.path.exists(p) and os.path.getsize(p) > 0 else "MISSING")
+          PYEOF2
+
+            for i in $(seq 1 "$max_tries"); do
+              colab upload -s ciJob check_marker_run.py /content/check_marker_run.py >/dev/null 2>&1 || true
+              colab exec -s ciJob -f check_marker_run.py > marker_check.txt 2>&1 || true
+              if grep -q "FOUND" marker_check.txt; then
+                return 0
+              fi
+              echo "  (marker $marker_path belum ada, percobaan $i/$max_tries, tunggu ${delay}s...)"
+              sleep "$delay"
+            done
+            return 1
+          }
+
+          # ----------------------------------------------------
+          # STAGE 1: ekstraksi + mask + ProPainter (bagian terlama)
+          # ----------------------------------------------------
+          #
+          # CATATAN: google-colab-cli punya bug upstream yang dikenal
+          # (googlecolab/google-colab-cli#14) -- eksekusi yang berjalan
+          # lama kadang membuat koneksi timeout menunggu balasan akhir,
+          # PADAHAL proses di sisi Colab sudah selesai sukses. Jadi kalau
+          # "colab exec" gagal, kita TIDAK langsung nyerah -- kita cek
+          # dulu apakah marker file Stage 1 sudah muncul di Colab
+          # (beberapa kali, dengan jeda), karena marker itu ditulis ke
+          # disk terlepas dari sukses/tidaknya balasan RPC.
+
+          set +e
+          colab exec -s ciJob -f propainter_gha_stage1.py
+          STAGE1_STATUS=$?
           set -e
+
+          if [ "$STAGE1_STATUS" -ne 0 ]; then
+            echo "::warning::Stage 1 (colab exec) keluar dengan status $STAGE1_STATUS (kemungkinan bug google-colab-cli#14). Memverifikasi lewat marker file sebelum menyerah..."
+            if ! check_marker "/content/STAGE1_DONE.marker" 5 20; then
+              echo "::error::Stage 1 gagal DAN marker penyelesaiannya tidak pernah muncul -- prosesnya benar-benar gagal, bukan sekadar bug reply timeout."
+              exit 1
+            fi
+            echo "✅ Marker Stage 1 ditemukan -- proses sebenarnya sudah selesai, lanjut ke Stage 2."
+          fi
+
+          # ----------------------------------------------------
+          # STAGE 2: feather blending + render video akhir
+          # ----------------------------------------------------
+          # Berjalan di sesi Colab YANG SAMA (kernel stateful), jadi
+          # semua variabel & file dari Stage 1 masih tersedia di sini.
+
+          set +e
+          colab exec -s ciJob -f propainter_gha_stage2.py
+          EXEC_STATUS=$?
+          set -e
+
+          if [ "$EXEC_STATUS" -ne 0 ]; then
+            echo "::warning::Stage 2 (colab exec) keluar dengan status $EXEC_STATUS (kemungkinan bug upstream google-colab-cli#14: reply timeout meski proses sebenarnya sudah selesai)."
+          fi
+
+          # ----------------------------------------------------
+          # TAMPILKAN ISI /content SEGERA -- apapun status exec-nya.
+          # Ini bukti langsung di log: apakah video SUDAH ada di disk
+          # Colab tepat setelah proses berhenti, atau memang belum ada
+          # (masih proses tulis/loading, atau sesi benar-benar reset).
+          # Jangan tunda -- makin cepat dicek, makin kecil kemungkinan
+          # sesi keburu idle-timeout duluan.
+          # ----------------------------------------------------
+
+          cat > check_structure.py <<'PYEOF'
+          import os
+
+          print("===== ISI /content =====")
+          try:
+              entries = sorted(os.listdir('/content'))
+          except OSError as e:
+              entries = []
+              print(f"(gagal listdir: {e})")
+
+          for name in entries:
+              p = os.path.join('/content', name)
+              try:
+                  size = os.path.getsize(p)
+              except OSError:
+                  size = -1
+              print(f"{name}\t{size} bytes")
+
+          target = "/content/video_raw_ProPainter_Success.mp4"
+          print()
+          print(f"TARGET_EXISTS={os.path.exists(target)}")
+          if os.path.exists(target):
+              print(f"TARGET_SIZE={os.path.getsize(target)}")
+          PYEOF
+
+          colab upload -s ciJob check_structure.py /content/check_structure.py >/dev/null 2>&1 || true
+          echo ""
+          echo "==> Struktur file di Colab tepat setelah Stage 2 selesai:"
+          colab exec -s ciJob -f check_structure.py || echo "::warning::Cek struktur juga gagal (kemungkinan sesi benar-benar sudah putus)."
+
+          # ----------------------------------------------------
+          # DOWNLOAD OUTPUT -- coba SEGERA, retry 5x dengan delay
+          # kalau gagal (jangan diam terlalu lama supaya sesi tidak
+          # keburu idle-timeout duluan sebelum sempat retry).
+          # ----------------------------------------------------
 
           mkdir -p output
 
           DOWNLOAD_OK=0
+          MAX_DOWNLOAD_RETRIES=5
 
-          for attempt in 1 2 3 4 5; do
-
+          for i in $(seq 1 $MAX_DOWNLOAD_RETRIES); do
             echo ""
-            echo "=========================================="
-            echo "DOWNLOAD ATTEMPT $attempt/5"
-            echo "=========================================="
-
-            rm -f output/video_processed.mp4
-
-            set +e
-
-            colab download \
-              -s ciJob \
-              /content/video_raw_ProPainter_Success.mp4 \
-              output/video_processed.mp4
-
-            DOWNLOAD_STATUS=$?
-
-            set -e
-
-            echo "Download status: $DOWNLOAD_STATUS"
-
-            # ----------------------------------------------------
-            # File lokal harus benar-benar ada
-            # ----------------------------------------------------
-            if [ "$DOWNLOAD_STATUS" -eq 0 ] && \
-               [ -s output/video_processed.mp4 ]; then
-
-              LOCAL_SIZE=$(stat -c%s output/video_processed.mp4)
-
-              echo "Downloaded size: $LOCAL_SIZE"
-
-              if [ "$LOCAL_SIZE" -gt 1024 ]; then
-
-                echo "Download berhasil."
-
-                DOWNLOAD_OK=1
-
-                break
-
-              fi
+            echo "==> Percobaan download $i/$MAX_DOWNLOAD_RETRIES ..."
+            if colab download \
+                  -s ciJob \
+                  /content/video_raw_ProPainter_Success.mp4 \
+                  output/video_processed.mp4 \
+               && [ -s output/video_processed.mp4 ]; then
+              echo "✅ Download berhasil pada percobaan $i."
+              DOWNLOAD_OK=1
+              break
             fi
-
-            echo "::warning::Download belum berhasil."
-
-            if [ "$attempt" -lt 5 ]; then
-
-              echo "Menunggu 20 detik sebelum retry..."
-
-              sleep 20
-
-            fi
-
+            echo "⚠️  Download percobaan $i gagal/kosong, tunggu 15 detik sebelum coba lagi..."
+            sleep 15
           done
 
           if [ "$DOWNLOAD_OK" -ne 1 ]; then
-
-            echo "::error::Gagal mendownload output ProPainter setelah 5 percobaan."
-
+            echo ""
+            echo "==> Semua percobaan download gagal. Cek stabilitas sesi sekali lagi:"
+            colab exec -s ciJob -f check_structure.py || echo "::warning::Sesi sudah tidak responsif -- kemungkinan besar benar-benar putus/reset."
+            echo "::error::Stage 2 exec gagal (status $EXEC_STATUS) DAN file output tidak ditemukan di Colab setelah $MAX_DOWNLOAD_RETRIES percobaan download -- lihat 'Struktur file di Colab' di atas untuk bukti apakah filenya memang tidak pernah ada, atau sempat ada lalu hilang."
             exit 1
           fi
 
-      # ==========================================================
-      # VERIFY LOCAL DOWNLOAD
-      # ==========================================================
-      - name: Verify downloaded ProPainter video
-        run: |
-          set -e
-
           test -s output/video_processed.mp4
 
-          echo "Local output size:"
-          stat -c%s output/video_processed.mp4
+          echo "ProPainter output:"
+          ls -lh output/video_processed.mp4
 
-          echo ""
-          echo "Local ffprobe:"
+          # ----------------------------------------------------
+          # COLAB STOP VIA TRAP
+          # ----------------------------------------------------
 
-          ffprobe \
-            -v error \
-            -show_entries format=duration,size \
-            -show_entries stream=codec_name,width,height \
-            -of default=noprint_wrappers=1 \
-            output/video_processed.mp4
+      # --------------------------------------------------------
+      # UPLOAD
+      # --------------------------------------------------------
 
-      # ==========================================================
-      # UPLOAD ARTIFACT
-      # ==========================================================
-      - name: Upload ProPainter artifact
+      - name: Upload ProPainter result
         uses: actions/upload-artifact@v4
         with:
           name: propainter-video
           path: output/video_processed.mp4
           retention-days: 1
-
-      # ==========================================================
-      # STOP COLAB
-      #
-      # INI SENGAJA DILETAKKAN PALING AKHIR.
-      #
-      # Jadi Colab tidak akan dihentikan ketika file masih dalam
-      # proses download.
-      # ==========================================================
-      - name: Stop Colab
-        if: always()
-        run: |
-          echo "Stopping Colab session..."
-
-          colab stop -s ciJob || true
-
-          echo "Colab session stopped."
 
 
   # ============================================================
