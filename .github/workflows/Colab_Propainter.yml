@@ -1,0 +1,2383 @@
+name: AI Video Pipeline - Gemini + TTS + ProPainter + Subtitle
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      video_url:
+        description: "YouTube URL"
+        required: true
+        type: string
+
+      language:
+        description: "Bahasa narasi"
+        required: true
+        type: choice
+        default: "English"
+        options:
+          - "English"
+          - "Chinese"
+          - "French"
+          - "German"
+          - "Spanish"
+
+      model_size:
+        description: "Qwen3 TTS model"
+        required: true
+        type: choice
+        default: "1.7B"
+        options:
+          - "0.6B"
+          - "1.7B"
+
+      quant:
+        description: "TTS quantization"
+        required: true
+        type: choice
+        default: "Q4_K_M"
+        options:
+          - "Q4_K_M"
+          - "Q8_0"
+          - "BF16"
+
+      ref_audio_path:
+        description: "Reference voice file in repository"
+        required: true
+        type: string
+        default: "MyVoice.wav"
+
+      ref_text:
+        description: "Exact transcript of reference voice"
+        required: false
+        type: string
+        default: ""
+
+      gemini_model:
+        description: "Gemini model"
+        required: true
+        type: string
+        default: "gemini-3.5-flash"
+
+      enable_resequencing:
+        description: "Izinkan Gemini menyarankan resequencing 2-3 klip (video tetap menyambung, tidak jump)"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+
+  # ============================================================
+  # JOB 1
+  # DOWNLOAD VIDEO
+  #
+  # STARTS IMMEDIATELY
+  # RUNS IN PARALLEL WITH GEMINI
+  # ============================================================
+
+  download-video:
+
+    name: Download Source Video
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # FFmpeg
+      # --------------------------------------------------------
+
+      - name: Install FFmpeg
+        run: |
+          mkdir -p ~/.local/bin
+
+          curl -L \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+            | tar -xJ \
+            --strip-components=1 \
+            -C ~/.local/bin
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          ffmpeg -version | head -n 1
+
+      # --------------------------------------------------------
+      # DENO
+      # --------------------------------------------------------
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # --------------------------------------------------------
+      # YT-DLP
+      # --------------------------------------------------------
+
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yt-dlp
+
+          yt-dlp --version
+
+      # --------------------------------------------------------
+      # COOKIE
+      # --------------------------------------------------------
+
+      - name: Create cookies.txt
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
+        run: |
+          if [ -z "$COOKIES_TEXT" ]; then
+            echo "::warning::COOKIE secret kosong."
+          else
+            printf '%s' "$COOKIES_TEXT" > cookies.txt
+          fi
+
+      # --------------------------------------------------------
+      # DOWNLOAD
+      # --------------------------------------------------------
+
+      - name: Download video
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+        run: |
+
+          set -e
+
+          COOKIE_ARG=""
+
+          if [ -s cookies.txt ]; then
+            COOKIE_ARG="--cookies cookies.txt"
+          fi
+
+          yt-dlp \
+            $COOKIE_ARG \
+            --remote-components ejs:github \
+            -f "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --merge-output-format mp4 \
+            --no-playlist \
+            -o "video_raw.mp4" \
+            "$VIDEO_URL"
+
+          test -s video_raw.mp4
+
+          echo "Downloaded video:"
+          ls -lh video_raw.mp4
+
+      # --------------------------------------------------------
+      # VERIFY DOWNLOAD IS ACTUALLY DECODABLE
+      # --------------------------------------------------------
+
+      - name: Verify video integrity
+        run: |
+
+          set -e
+
+          ffprobe -v error -show_format -show_streams video_raw.mp4
+
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=nb_read_frames -of csv=p=0 video_raw.mp4
+
+      # --------------------------------------------------------
+      # ARTIFACT
+      # --------------------------------------------------------
+
+      - name: Upload raw video
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-video
+          path: video_raw.mp4
+          retention-days: 1
+
+
+  # ============================================================
+  # JOB 2
+  # GEMINI ANALYSIS
+  #
+  # STARTS IMMEDIATELY
+  # RUNS IN PARALLEL WITH DOWNLOAD
+  # ============================================================
+
+  gemini-analysis:
+    name: Gemini Analysis + Narrative
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # INSTALL CURL + JQ
+      # --------------------------------------------------------
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl jq
+
+      # --------------------------------------------------------
+      # GEMINI
+      # --------------------------------------------------------
+
+      - name: Analyze real video (YouTube URL) with Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ inputs.gemini_model }}
+          LANGUAGE: ${{ inputs.language }}
+          VIDEO_URL: ${{ inputs.video_url }}
+          ENABLE_RESEQUENCING: ${{ inputs.enable_resequencing }}
+        run: |
+
+          set -euo pipefail
+
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::GEMINI_API_KEY secret belum diset."
+            exit 1
+          fi
+
+          # ----------------------------------------------------
+          # BUILD REQUEST
+          # ----------------------------------------------------
+          # Gemini menonton video ASLI langsung dari URL YouTube
+          # (bukan menebak topik dari judul saja), lalu dalam SATU
+          # panggilan menghasilkan 3 hal sekaligus:
+          #   1) narasi yang benar-benar sinkron dengan isi video
+          #   2) metadata baru (judul/deskripsi/tag) yang menarik tapi
+          #      jujur -- bukan clickbait berlebihan
+          #   3) rencana resequencing 2-3 klip saja (opsional, hanya
+          #      kalau aman & tidak bikin alur jadi "jump")
+          #
+          # responseSchema dipakai supaya Gemini WAJIB balas JSON
+          # dengan struktur yang pasti -- tidak perlu tebak-tebak
+          # parsing teks bebas.
+
+          python3 - <<PY
+          import json
+
+          language = """${LANGUAGE}"""
+          video_url = """${VIDEO_URL}"""
+          allow_reseq = "${ENABLE_RESEQUENCING}".lower() == "true"
+
+          reseq_instruction = (
+              "You may ALSO propose reordering at most 2 to 3 short, "
+              "self-contained clips of the video (never more), but ONLY "
+              "if doing so keeps the visual flow smooth and does not feel "
+              "like a jarring jump. If reordering is not safely possible "
+              "for this video, or no good candidates exist, set "
+              "resequence_plan.feasible to false and return exactly ONE "
+              "segment spanning the full video unchanged. Never sacrifice "
+              "narrative continuity just to force a reorder."
+              if allow_reseq else
+              "Resequencing is DISABLED for this run. Always set "
+              "resequence_plan.feasible to false and return exactly ONE "
+              "segment spanning the full video unchanged (start_sec=0 to "
+              "the video's total duration)."
+          )
+
+          system_text = (
+              "You are an expert short-form video producer, narrator, and "
+              "YouTube growth strategist. You will be given a real YouTube "
+              "video to actually watch and listen to (not just its title). "
+              "Base everything you produce strictly on what you actually "
+              "observe in the video's audio and visuals. Never invent "
+              "details that are not in the video. Return ONLY JSON matching "
+              "the provided schema -- no markdown, no commentary."
+          )
+
+          user_text = (
+              "Watch and analyze this video in full, then produce:\n\n"
+              "1) narration: A natural, engaging spoken narration in "
+              f"{language} that accurately reflects the video's real "
+              "content and key takeaway, written for voice cloning / "
+              "text-to-speech delivery. No emojis, hashtags, stage "
+              "directions, markdown, bullet points, or surrounding "
+              "quotation marks. Do not mention you are an AI.\n\n"
+              "2) metadata: A new title (under 100 characters), a "
+              "description (2-4 short paragraphs), and 8-12 tags, all in "
+              f"{language}. The title should be attention-grabbing and "
+              "optimized for click-through, but strictly honest -- it "
+              "must accurately represent what the video actually shows. "
+              "Avoid exaggerated, misleading, or over-the-top clickbait "
+              "phrasing; a little curiosity/hook is fine, outright "
+              "false promises are not.\n\n"
+              "3) resequence_plan: " + reseq_instruction + " When "
+              "reordering IS used, segments must be given as a FULL, "
+              "contiguous, non-overlapping list of {start_sec, end_sec} "
+              "covering the entire video from 0 to its total duration "
+              "with no gaps -- most segments stay in original chronological "
+              "order, only the 2-3 chosen ones change position. Include a "
+              "short reason in the target language explaining the "
+              "resequencing choice (or why none was made)."
+          )
+
+          request_body = {
+              "system_instruction": {"parts": [{"text": system_text}]},
+              "contents": [
+                  {
+                      "role": "user",
+                      "parts": [
+                          {"file_data": {"file_uri": video_url}},
+                          {"text": user_text},
+                      ],
+                  }
+              ],
+              "generationConfig": {
+                  "temperature": 0.6,
+                  "topP": 0.9,
+                  "maxOutputTokens": 2048,
+                  "responseMimeType": "application/json",
+                  "responseSchema": {
+                      "type": "OBJECT",
+                      "properties": {
+                          "narration": {"type": "STRING"},
+                          "metadata": {
+                              "type": "OBJECT",
+                              "properties": {
+                                  "title": {"type": "STRING"},
+                                  "description": {"type": "STRING"},
+                                  "tags": {
+                                      "type": "ARRAY",
+                                      "items": {"type": "STRING"},
+                                  },
+                              },
+                              "required": ["title", "description", "tags"],
+                          },
+                          "resequence_plan": {
+                              "type": "OBJECT",
+                              "properties": {
+                                  "feasible": {"type": "BOOLEAN"},
+                                  "reason": {"type": "STRING"},
+                                  "segments": {
+                                      "type": "ARRAY",
+                                      "items": {
+                                          "type": "OBJECT",
+                                          "properties": {
+                                              "start_sec": {"type": "NUMBER"},
+                                              "end_sec": {"type": "NUMBER"},
+                                          },
+                                          "required": ["start_sec", "end_sec"],
+                                      },
+                                  },
+                              },
+                              "required": ["feasible", "reason", "segments"],
+                          },
+                      },
+                      "required": ["narration", "metadata", "resequence_plan"],
+                  },
+              },
+          }
+
+          with open("gemini_request.json", "w", encoding="utf-8") as f:
+              json.dump(request_body, f, ensure_ascii=False)
+          PY
+
+          # ----------------------------------------------------
+          # CALL GEMINI
+          # ----------------------------------------------------
+
+          API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}"
+
+          HTTP_CODE=$(curl \
+            -sS \
+            -o gemini_response.json \
+            -w "%{http_code}" \
+            -X POST \
+            "$API_URL" \
+            -H "Content-Type: application/json" \
+            --data-binary @gemini_request.json)
+
+          echo "Gemini HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "========== GEMINI ERROR =========="
+            cat gemini_response.json
+            exit 1
+          fi
+
+          # ----------------------------------------------------
+          # PARSE STRUCTURED RESPONSE -> 3 FILES
+          # ----------------------------------------------------
+
+          python3 - <<'PY'
+          import json
+
+          with open("gemini_response.json", "r", encoding="utf-8") as f:
+              raw = json.load(f)
+
+          try:
+              text = raw["candidates"][0]["content"]["parts"][0]["text"]
+          except Exception:
+              print(json.dumps(raw, ensure_ascii=False, indent=2))
+              raise RuntimeError("Gemini tidak mengembalikan text.")
+
+          try:
+              data = json.loads(text)
+          except json.JSONDecodeError:
+              print("========== RAW TEXT (gagal di-parse sebagai JSON) ==========")
+              print(text)
+              raise RuntimeError("Response Gemini bukan JSON valid meski responseSchema sudah diminta.")
+
+          narration = (data.get("narration") or "").strip()
+          if not narration:
+              raise RuntimeError("Field 'narration' kosong dari Gemini.")
+
+          with open("narration.txt", "w", encoding="utf-8") as f:
+              f.write(narration)
+
+          metadata = data.get("metadata") or {}
+          if not metadata.get("title") or not metadata.get("description"):
+              raise RuntimeError("Field 'metadata' tidak lengkap dari Gemini.")
+
+          with open("metadata.json", "w", encoding="utf-8") as f:
+              json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+          plan = data.get("resequence_plan") or {}
+          segments = plan.get("segments") or []
+
+          # Fallback aman: kalau plan tidak masuk akal (kosong, atau
+          # feasible tapi cuma 1 segmen "penuh"), anggap saja tidak ada
+          # resequencing -- job resequence-video nanti akan skip proses
+          # trim/concat dan cukup pakai video ProPainter apa adanya.
+          if not plan.get("feasible") or len(segments) <= 1:
+              plan = {
+                  "feasible": False,
+                  "reason": plan.get("reason", "Tidak ada resequencing."),
+                  "segments": [],
+              }
+
+          with open("resequence_plan.json", "w", encoding="utf-8") as f:
+              json.dump(plan, f, ensure_ascii=False, indent=2)
+
+          print()
+          print("========== NARRATION ==========")
+          print(narration)
+          print()
+          print("========== METADATA ==========")
+          print(json.dumps(metadata, ensure_ascii=False, indent=2))
+          print()
+          print("========== RESEQUENCE PLAN ==========")
+          print(json.dumps(plan, ensure_ascii=False, indent=2))
+          PY
+
+          test -s narration.txt
+          test -s metadata.json
+          test -s resequence_plan.json
+
+      # --------------------------------------------------------
+      # ARTIFACTS
+      # --------------------------------------------------------
+
+      - name: Upload narration
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-narration
+          path: narration.txt
+          retention-days: 1
+
+      - name: Upload video metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-metadata
+          path: metadata.json
+          retention-days: 7
+
+      - name: Upload resequence plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: resequence-plan
+          path: resequence_plan.json
+          retention-days: 1
+
+
+    # ============================================================
+  # JOB 3 - PROPAINTER
+  # ============================================================
+  propainter:
+    name: ProPainter on Colab T4
+    needs:
+      - download-video
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install google-colab-cli
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv tool install google-colab-cli
+
+      - name: Install jupyter-kernel-client
+        run: |
+          uv tool run --from google-colab-cli \
+            pip install jupyter-kernel-client
+
+      - name: Restore Colab authentication
+        env:
+          COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
+        run: |
+          set -e
+
+          mkdir -p ~/.config/colab
+
+          printf '%s' "$COLAB_TOKEN_JSON_B64" \
+            | base64 -d \
+            > ~/.config/colab/token.json
+
+          test -s ~/.config/colab/token.json
+
+      - name: Download raw video artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: raw-video
+          path: input
+
+      # ==========================================================
+      # CREATE COLAB SESSION
+      # ==========================================================
+      - name: Start Colab T4
+        run: |
+          set -e
+
+          for attempt in 1 2 3; do
+            echo "Mencoba membuat Colab T4 - attempt $attempt/3"
+
+            if colab new -s ciJob --gpu T4; then
+              echo "Colab T4 berhasil dibuat."
+              break
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Gagal membuat Colab T4."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+      # ==========================================================
+      # UPLOAD VIDEO
+      # ==========================================================
+      - name: Upload video to Colab
+        run: |
+          set -e
+
+          LOCAL_SIZE=$(stat -c%s input/video_raw.mp4)
+          LOCAL_SHA=$(sha256sum input/video_raw.mp4 | awk '{print $1}')
+
+          echo "Local size : $LOCAL_SIZE"
+          echo "Local SHA  : $LOCAL_SHA"
+
+          cat > check_video.py <<'PY'
+          import hashlib
+          import os
+
+          path = "/content/video_raw.mp4"
+
+          if not os.path.exists(path):
+              print("REMOTE_MISSING")
+              raise SystemExit(0)
+
+          size = os.path.getsize(path)
+
+          sha = hashlib.sha256()
+
+          with open(path, "rb") as f:
+              while True:
+                  chunk = f.read(1024 * 1024)
+
+                  if not chunk:
+                      break
+
+                  sha.update(chunk)
+
+          print(f"REMOTE_SIZE={size}")
+          print(f"REMOTE_SHA={sha.hexdigest()}")
+          PY
+
+          for attempt in 1 2 3; do
+
+            echo "=========================================="
+            echo "UPLOAD ATTEMPT $attempt/3"
+            echo "=========================================="
+
+            colab upload \
+              -s ciJob \
+              input/video_raw.mp4 \
+              /content/video_raw.mp4
+
+            colab upload \
+              -s ciJob \
+              check_video.py \
+              /content/check_video.py
+
+            set +e
+
+            REMOTE_RESULT=$(colab exec \
+              -s ciJob \
+              -f check_video.py 2>&1)
+
+            set -e
+
+            echo "$REMOTE_RESULT"
+
+            REMOTE_SIZE=$(printf '%s\n' "$REMOTE_RESULT" \
+              | grep '^REMOTE_SIZE=' \
+              | tail -1 \
+              | cut -d= -f2-)
+
+            REMOTE_SHA=$(printf '%s\n' "$REMOTE_RESULT" \
+              | grep '^REMOTE_SHA=' \
+              | tail -1 \
+              | cut -d= -f2-)
+
+            if [ "$LOCAL_SIZE" = "$REMOTE_SIZE" ] && \
+               [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
+
+              echo "=========================================="
+              echo "UPLOAD BERHASIL"
+              echo "SHA256 COCOK"
+              echo "=========================================="
+
+              break
+            fi
+
+            echo "::warning::Hash remote belum cocok."
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Upload video gagal setelah 3 percobaan."
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+      # ==========================================================
+      # UPLOAD PROPAINTER SCRIPT
+      # ==========================================================
+      - name: Upload ProPainter script
+        run: |
+          set -e
+
+          test -f propainter_gha.py
+
+          colab upload \
+            -s ciJob \
+            propainter_gha.py \
+            /content/propainter_gha.py
+
+      # ==========================================================
+      # BACKGROUND LAUNCHER
+      # ==========================================================
+      - name: Create background launcher
+        run: |
+          cat > start_propainter.py <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          SCRIPT = "/content/propainter_gha.py"
+          LOG = "/content/propainter.log"
+          PID_FILE = "/content/propainter.pid"
+          OUTPUT = "/content/video_raw_ProPainter_Success.mp4"
+
+          # ------------------------------------------------------
+          # Kalau output sudah ada, jangan start ulang
+          # ------------------------------------------------------
+          if os.path.exists(OUTPUT):
+              print("OUTPUT_ALREADY_EXISTS")
+              raise SystemExit(0)
+
+          # ------------------------------------------------------
+          # Kalau process masih berjalan, jangan start ulang
+          # ------------------------------------------------------
+          if os.path.exists(PID_FILE):
+
+              try:
+                  with open(PID_FILE, "r") as f:
+                      pid = int(f.read().strip())
+
+                  os.kill(pid, 0)
+
+                  print(f"ALREADY_RUNNING PID={pid}")
+                  raise SystemExit(0)
+
+              except ProcessLookupError:
+                  pass
+
+              except ValueError:
+                  pass
+
+              except PermissionError:
+                  print("PROCESS_EXISTS")
+                  raise SystemExit(0)
+
+          # ------------------------------------------------------
+          # Redirect semua output ke log.
+          #
+          # Sangat penting agar child process tidak bergantung
+          # kepada koneksi Jupyter/kernel.
+          # ------------------------------------------------------
+          log = open(
+              LOG,
+              "a",
+              buffering=1
+          )
+
+          process = subprocess.Popen(
+              [sys.executable, SCRIPT],
+
+              stdin=subprocess.DEVNULL,
+
+              stdout=log,
+
+              stderr=subprocess.STDOUT,
+
+              start_new_session=True,
+
+              close_fds=True
+          )
+
+          with open(PID_FILE, "w") as f:
+              f.write(str(process.pid))
+
+          print(f"STARTED PID={process.pid}")
+          print(f"LOG={LOG}")
+          PY
+
+          colab upload \
+            -s ciJob \
+            start_propainter.py \
+            /content/start_propainter.py
+
+      # ==========================================================
+      # START PROPAINTER
+      #
+      # colab exec hanya menjalankan launcher.
+      # Launcher langsung selesai.
+      # ProPainter tetap berjalan di background.
+      # ==========================================================
+      - name: Start ProPainter in background
+        run: |
+          set -e
+
+          echo "Starting ProPainter..."
+
+          RESULT=$(colab exec \
+            -s ciJob \
+            -f start_propainter.py)
+
+          echo "$RESULT"
+
+          if echo "$RESULT" | grep -q "STARTED PID="; then
+
+            echo "ProPainter berhasil dijalankan."
+
+          elif echo "$RESULT" | grep -q "ALREADY_RUNNING"; then
+
+            echo "ProPainter sudah berjalan."
+
+          elif echo "$RESULT" | grep -q "OUTPUT_ALREADY_EXISTS"; then
+
+            echo "Output sudah tersedia."
+
+          else
+
+            echo "::error::Gagal menjalankan ProPainter."
+            exit 1
+
+          fi
+
+      # ==========================================================
+      # STATUS CHECKER
+      # ==========================================================
+      - name: Create ProPainter status checker
+        run: |
+          cat > status_propainter.py <<'PY'
+          import os
+
+          OUTPUT = "/content/video_raw_ProPainter_Success.mp4"
+          PID_FILE = "/content/propainter.pid"
+
+          # ------------------------------------------------------
+          # OUTPUT EXIST
+          # ------------------------------------------------------
+          if os.path.exists(OUTPUT):
+
+              size = os.path.getsize(OUTPUT)
+
+              if size > 1024:
+                  print("DONE")
+                  print(f"OUTPUT_SIZE={size}")
+                  raise SystemExit(0)
+
+              print("OUTPUT_INVALID")
+              raise SystemExit(2)
+
+          # ------------------------------------------------------
+          # PID TIDAK ADA
+          # ------------------------------------------------------
+          if not os.path.exists(PID_FILE):
+
+              print("NOT_STARTED")
+              raise SystemExit(3)
+
+          # ------------------------------------------------------
+          # BACA PID
+          # ------------------------------------------------------
+          try:
+
+              with open(PID_FILE, "r") as f:
+                  pid = int(f.read().strip())
+
+          except Exception:
+
+              print("PID_INVALID")
+              raise SystemExit(3)
+
+          # ------------------------------------------------------
+          # CEK PROCESS
+          # ------------------------------------------------------
+          try:
+
+              os.kill(pid, 0)
+
+              print("RUNNING")
+              print(f"PID={pid}")
+
+              raise SystemExit(0)
+
+          except ProcessLookupError:
+
+              print("FAILED")
+              raise SystemExit(2)
+
+          except PermissionError:
+
+              print("RUNNING")
+              print(f"PID={pid}")
+
+              raise SystemExit(0)
+          PY
+
+          colab upload \
+            -s ciJob \
+            status_propainter.py \
+            /content/status_propainter.py
+
+      # ==========================================================
+      # WAIT PROPAINTER
+      # ==========================================================
+      - name: Wait for ProPainter
+        run: |
+          set -e
+
+          MAX_WAIT=9000
+          INTERVAL=20
+          ELAPSED=0
+
+          echo "=========================================="
+          echo "WAITING FOR PROPAINTER"
+          echo "=========================================="
+
+          while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+
+            echo ""
+            echo "------------------------------------------"
+            echo "Elapsed: ${ELAPSED}s / ${MAX_WAIT}s"
+            echo "------------------------------------------"
+
+            set +e
+
+            STATUS=$(colab exec \
+              -s ciJob \
+              -f status_propainter.py 2>&1)
+
+            STATUS_CODE=$?
+
+            set -e
+
+            echo "$STATUS"
+
+            # ----------------------------------------------------
+            # DONE
+            # ----------------------------------------------------
+            if echo "$STATUS" | grep -q '^DONE'; then
+
+              echo ""
+              echo "=========================================="
+              echo "PROPAINTER PROCESS SELESAI"
+              echo "=========================================="
+
+              break
+            fi
+
+            # ----------------------------------------------------
+            # RUNNING
+            # ----------------------------------------------------
+            if echo "$STATUS" | grep -q '^RUNNING'; then
+
+              echo "ProPainter masih melakukan processing..."
+
+            # ----------------------------------------------------
+            # FAILED
+            # ----------------------------------------------------
+            elif echo "$STATUS" | grep -q '^FAILED'; then
+
+              echo "::error::ProPainter berhenti tanpa menghasilkan output."
+
+              echo ""
+              echo "Membaca log ProPainter..."
+
+              cat > tail_log.py <<'PY'
+          import os
+
+          path = "/content/propainter.log"
+
+          if not os.path.exists(path):
+              print("LOG_NOT_FOUND")
+              raise SystemExit(0)
+
+          with open(path, "r", errors="replace") as f:
+              lines = f.readlines()
+
+          print("===== LAST 150 LOG LINES =====")
+
+          for line in lines[-150:]:
+              print(line.rstrip())
+          PY
+
+              colab upload \
+                -s ciJob \
+                tail_log.py \
+                /content/tail_log.py || true
+
+              colab exec \
+                -s ciJob \
+                -f tail_log.py || true
+
+              exit 1
+
+            else
+
+              echo "::warning::Status tidak dikenali (exit $STATUS_CODE)."
+
+            fi
+
+            sleep "$INTERVAL"
+
+            ELAPSED=$((ELAPSED + INTERVAL))
+
+          done
+
+          # ------------------------------------------------------
+          # GLOBAL TIMEOUT
+          # ------------------------------------------------------
+          if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
+
+            echo "::error::Timeout menunggu ProPainter."
+
+            cat > tail_log.py <<'PY'
+          import os
+
+          path = "/content/propainter.log"
+
+          if not os.path.exists(path):
+              print("LOG_NOT_FOUND")
+              raise SystemExit(0)
+
+          with open(path, "r", errors="replace") as f:
+              lines = f.readlines()
+
+          print("===== LAST 150 LOG LINES =====")
+
+          for line in lines[-150:]:
+              print(line.rstrip())
+          PY
+
+            colab upload \
+              -s ciJob \
+              tail_log.py \
+              /content/tail_log.py || true
+
+            colab exec \
+              -s ciJob \
+              -f tail_log.py || true
+
+            exit 1
+          fi
+
+      # ==========================================================
+      # NEW:
+      # WAIT UNTIL OUTPUT FILE SIZE IS STABLE
+      #
+      # Ini bagian tambahan untuk kasus yang Anda lihat di
+      # Colab GUI:
+      #
+      # rendering selesai
+      #      ↓
+      # runner terlihat selesai
+      #      ↓
+      # file masih loading
+      #
+      # Kita tidak langsung download.
+      # ==========================================================
+      - name: Wait until output file is stable
+        run: |
+          set -e
+
+          cat > file_stability.py <<'PY'
+          import os
+
+          path = "/content/video_raw_ProPainter_Success.mp4"
+
+          if not os.path.exists(path):
+
+              print("MISSING")
+              raise SystemExit(1)
+
+          size = os.path.getsize(path)
+
+          print(f"SIZE={size}")
+
+          if size <= 1024:
+
+              print("TOO_SMALL")
+              raise SystemExit(2)
+
+          print("READY")
+          PY
+
+          colab upload \
+            -s ciJob \
+            file_stability.py \
+            /content/file_stability.py
+
+          PREVIOUS_SIZE=0
+          STABLE_COUNT=0
+
+          REQUIRED_STABLE_CHECKS=4
+          STABLE_INTERVAL=15
+
+          echo "=========================================="
+          echo "WAITING FOR STABLE OUTPUT FILE"
+          echo "=========================================="
+
+          for i in $(seq 1 40); do
+
+            set +e
+
+            RESULT=$(colab exec \
+              -s ciJob \
+              -f file_stability.py 2>&1)
+
+            STATUS_CODE=$?
+
+            set -e
+
+            echo "$RESULT"
+
+            CURRENT_SIZE=$(printf '%s\n' "$RESULT" \
+              | grep '^SIZE=' \
+              | tail -1 \
+              | cut -d= -f2-)
+
+            if [ -z "$CURRENT_SIZE" ]; then
+
+              echo "::warning::Ukuran file belum bisa dibaca."
+
+              STABLE_COUNT=0
+
+              sleep "$STABLE_INTERVAL"
+
+              continue
+            fi
+
+            echo "Current size: $CURRENT_SIZE"
+            echo "Previous size: $PREVIOUS_SIZE"
+
+            if [ "$CURRENT_SIZE" = "$PREVIOUS_SIZE" ] && \
+               [ "$CURRENT_SIZE" -gt 1024 ]; then
+
+              STABLE_COUNT=$((STABLE_COUNT + 1))
+
+              echo "Stable check: $STABLE_COUNT/$REQUIRED_STABLE_CHECKS"
+
+            else
+
+              STABLE_COUNT=0
+
+              echo "Ukuran berubah. Reset stability counter."
+
+            fi
+
+            PREVIOUS_SIZE="$CURRENT_SIZE"
+
+            if [ "$STABLE_COUNT" -ge "$REQUIRED_STABLE_CHECKS" ]; then
+
+              echo ""
+              echo "=========================================="
+              echo "OUTPUT FILE SUDAH STABIL"
+              echo "SIZE=$CURRENT_SIZE"
+              echo "=========================================="
+
+              break
+            fi
+
+            sleep "$STABLE_INTERVAL"
+
+          done
+
+          if [ "$STABLE_COUNT" -lt "$REQUIRED_STABLE_CHECKS" ]; then
+
+            echo "::error::Output file tidak pernah menjadi stabil."
+            exit 1
+
+          fi
+
+      # ==========================================================
+      # VERIFY MP4 DI COLAB
+      #
+      # Sebelum download, pastikan file memang MP4 valid.
+      # ==========================================================
+      - name: Verify output inside Colab
+        run: |
+          set -e
+
+          cat > verify_output.py <<'PY'
+          import json
+          import os
+          import subprocess
+
+          path = "/content/video_raw_ProPainter_Success.mp4"
+
+          if not os.path.exists(path):
+
+              print("OUTPUT_MISSING")
+              raise SystemExit(1)
+
+          size = os.path.getsize(path)
+
+          print(f"FILE_SIZE={size}")
+
+          if size <= 1024:
+
+              print("OUTPUT_TOO_SMALL")
+              raise SystemExit(1)
+
+          cmd = [
+              "ffprobe",
+              "-v",
+              "error",
+              "-show_entries",
+              "format=duration,size",
+              "-show_entries",
+              "stream=codec_name,width,height",
+              "-of",
+              "json",
+              path
+          ]
+
+          result = subprocess.run(
+              cmd,
+              capture_output=True,
+              text=True
+          )
+
+          print(result.stdout)
+
+          if result.returncode != 0:
+
+              print("FFPROBE_FAILED")
+              print(result.stderr)
+
+              raise SystemExit(1)
+
+          try:
+
+              data = json.loads(result.stdout)
+
+          except Exception:
+
+              print("INVALID_FFPROBE_JSON")
+              raise SystemExit(1)
+
+          streams = data.get("streams", [])
+
+          video_streams = [
+              s for s in streams
+              if s.get("codec_name")
+          ]
+
+          if not video_streams:
+
+              print("NO_VIDEO_STREAM")
+              raise SystemExit(1)
+
+          print("REMOTE_VIDEO_VALID")
+          PY
+
+          colab upload \
+            -s ciJob \
+            verify_output.py \
+            /content/verify_output.py
+
+          colab exec \
+            -s ciJob \
+            -f verify_output.py
+
+      # ==========================================================
+      # DOWNLOAD OUTPUT
+      #
+      # Jangan stop Colab sebelum bagian ini selesai.
+      # ==========================================================
+      - name: Download ProPainter output
+        run: |
+          set -e
+
+          mkdir -p output
+
+          DOWNLOAD_OK=0
+
+          for attempt in 1 2 3 4 5; do
+
+            echo ""
+            echo "=========================================="
+            echo "DOWNLOAD ATTEMPT $attempt/5"
+            echo "=========================================="
+
+            rm -f output/video_processed.mp4
+
+            set +e
+
+            colab download \
+              -s ciJob \
+              /content/video_raw_ProPainter_Success.mp4 \
+              output/video_processed.mp4
+
+            DOWNLOAD_STATUS=$?
+
+            set -e
+
+            echo "Download status: $DOWNLOAD_STATUS"
+
+            # ----------------------------------------------------
+            # File lokal harus benar-benar ada
+            # ----------------------------------------------------
+            if [ "$DOWNLOAD_STATUS" -eq 0 ] && \
+               [ -s output/video_processed.mp4 ]; then
+
+              LOCAL_SIZE=$(stat -c%s output/video_processed.mp4)
+
+              echo "Downloaded size: $LOCAL_SIZE"
+
+              if [ "$LOCAL_SIZE" -gt 1024 ]; then
+
+                echo "Download berhasil."
+
+                DOWNLOAD_OK=1
+
+                break
+
+              fi
+            fi
+
+            echo "::warning::Download belum berhasil."
+
+            if [ "$attempt" -lt 5 ]; then
+
+              echo "Menunggu 20 detik sebelum retry..."
+
+              sleep 20
+
+            fi
+
+          done
+
+          if [ "$DOWNLOAD_OK" -ne 1 ]; then
+
+            echo "::error::Gagal mendownload output ProPainter setelah 5 percobaan."
+
+            exit 1
+          fi
+
+      # ==========================================================
+      # VERIFY LOCAL DOWNLOAD
+      # ==========================================================
+      - name: Verify downloaded ProPainter video
+        run: |
+          set -e
+
+          test -s output/video_processed.mp4
+
+          echo "Local output size:"
+          stat -c%s output/video_processed.mp4
+
+          echo ""
+          echo "Local ffprobe:"
+
+          ffprobe \
+            -v error \
+            -show_entries format=duration,size \
+            -show_entries stream=codec_name,width,height \
+            -of default=noprint_wrappers=1 \
+            output/video_processed.mp4
+
+      # ==========================================================
+      # UPLOAD ARTIFACT
+      # ==========================================================
+      - name: Upload ProPainter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: propainter-video
+          path: output/video_processed.mp4
+          retention-days: 1
+
+      # ==========================================================
+      # STOP COLAB
+      #
+      # INI SENGAJA DILETAKKAN PALING AKHIR.
+      #
+      # Jadi Colab tidak akan dihentikan ketika file masih dalam
+      # proses download.
+      # ==========================================================
+      - name: Stop Colab
+        if: always()
+        run: |
+          echo "Stopping Colab session..."
+
+          colab stop -s ciJob || true
+
+          echo "Colab session stopped."
+
+
+  # ============================================================
+  # JOB 4
+  # RESEQUENCE VIDEO
+  #
+  # WAITS FOR:
+  #   PROPAINTER        (video yang mau di-resequence)
+  #   GEMINI-ANALYSIS   (rencana resequence dari Gemini)
+  #
+  # Kalau resequence_plan.feasible == false (termasuk kalau fitur
+  # dimatikan lewat input enable_resequencing), video ProPainter
+  # dipakai apa adanya TANPA re-encode -- tidak ada resiko kualitas
+  # turun kalau memang tidak ada yang perlu diubah.
+  # ============================================================
+
+  resequence-video:
+
+    name: Resequence Clips (optional)
+
+    needs:
+      - propainter
+      - gemini-analysis
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Download ProPainter video
+        uses: actions/download-artifact@v4
+        with:
+          name: propainter-video
+          path: input
+
+      - name: Download resequence plan
+        uses: actions/download-artifact@v4
+        with:
+          name: resequence-plan
+          path: plan
+
+      - name: Apply resequencing (or pass through unchanged)
+        run: |
+
+          set -e
+
+          mkdir -p output
+
+          test -s input/video_processed.mp4
+          test -s plan/resequence_plan.json
+
+          python3 - <<'PY'
+          import json
+          import subprocess
+          import shutil
+          import sys
+
+          IN_PATH = "input/video_processed.mp4"
+          OUT_PATH = "output/video_resequenced.mp4"
+
+          with open("plan/resequence_plan.json", "r", encoding="utf-8") as f:
+              plan = json.load(f)
+
+          segments = plan.get("segments") or []
+          feasible = bool(plan.get("feasible")) and len(segments) > 1
+
+          if not feasible:
+              print(f"Resequencing tidak dipakai ({plan.get('reason', 'no reason given')}). "
+                    "Menyalin video ProPainter apa adanya (tanpa re-encode).")
+              shutil.copy(IN_PATH, OUT_PATH)
+              sys.exit(0)
+
+          # Validasi ringan tiap segmen sebelum dipakai membangun filter_complex.
+          clean_segments = []
+          for seg in segments:
+              try:
+                  start = float(seg["start_sec"])
+                  end = float(seg["end_sec"])
+              except (KeyError, TypeError, ValueError):
+                  continue
+              if end > start >= 0:
+                  clean_segments.append((start, end))
+
+          if len(clean_segments) <= 1:
+              print("Segmen dari Gemini tidak valid/kurang dari 2. Menyalin video apa adanya.")
+              shutil.copy(IN_PATH, OUT_PATH)
+              sys.exit(0)
+
+          print(f"Menerapkan resequencing: {len(clean_segments)} segmen -> {plan.get('reason', '')}")
+          for i, (s, e) in enumerate(clean_segments):
+              print(f"  segmen {i}: {s:.2f}s - {e:.2f}s")
+
+          filter_parts = []
+          labels = []
+          for i, (start, end) in enumerate(clean_segments):
+              label = f"v{i}"
+              filter_parts.append(
+                  f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[{label}]"
+              )
+              labels.append(f"[{label}]")
+
+          filter_complex = ";".join(filter_parts)
+          filter_complex += f";{''.join(labels)}concat=n={len(labels)}:v=1:a=0[outv]"
+
+          cmd = [
+              "ffmpeg", "-y",
+              "-i", IN_PATH,
+              "-filter_complex", filter_complex,
+              "-map", "[outv]",
+              "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+              "-pix_fmt", "yuv420p",
+              OUT_PATH,
+          ]
+
+          result = subprocess.run(cmd, capture_output=True, text=True)
+
+          if result.returncode != 0:
+              print("========== FFMPEG STDERR ==========")
+              print(result.stderr[-4000:])
+              print("Resequencing GAGAL -- fallback ke video ProPainter asli (tanpa re-encode) "
+                    "supaya pipeline tetap jalan.")
+              shutil.copy(IN_PATH, OUT_PATH)
+          else:
+              print("Resequencing berhasil.")
+          PY
+
+          test -s output/video_resequenced.mp4
+
+          echo "Resequenced video:"
+          ls -lh output/video_resequenced.mp4
+
+      - name: Upload resequenced video
+        uses: actions/upload-artifact@v4
+        with:
+          name: resequenced-video
+          path: output/video_resequenced.mp4
+          retention-days: 1
+
+
+  # ============================================================
+  # JOB 5
+  # TTS
+  #
+  # WAITS FOR GEMINI
+  # ============================================================
+
+  tts:
+
+    name: Qwen3 Voice Clone
+
+    needs:
+      - gemini-analysis
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 350
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # CHECK REFERENCE AUDIO
+      # --------------------------------------------------------
+
+      - name: Check reference audio
+        run: |
+
+          if [ ! -f "${{ inputs.ref_audio_path }}" ]; then
+
+            echo "::error::Reference audio '${{ inputs.ref_audio_path }}' tidak ditemukan."
+
+            exit 1
+
+          fi
+
+      # --------------------------------------------------------
+      # DOWNLOAD GEMINI NARRATION
+      # --------------------------------------------------------
+
+      - name: Download Gemini narration
+        uses: actions/download-artifact@v4
+        with:
+          name: gemini-narration
+          path: narration
+
+      # --------------------------------------------------------
+      # SETUP PYTHON
+      # --------------------------------------------------------
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --------------------------------------------------------
+      # CACHE
+      # --------------------------------------------------------
+
+      - name: Cache pip and model weights
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/huggingface
+            ~/.cache/faster-qwen3-tts
+
+          key: qwen3tts-${{ inputs.model_size }}-${{ inputs.quant }}-${{ runner.os }}
+
+      # --------------------------------------------------------
+      # BUILD DEPENDENCIES
+      # --------------------------------------------------------
+
+      - name: Install build tools
+        run: |
+
+          sudo apt-get update -qq
+
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            patchelf
+
+      # --------------------------------------------------------
+      # CLONE NATIVE
+      # --------------------------------------------------------
+
+      - name: Clone qwentts-cpp-python
+        run: |
+
+          git clone \
+            --depth 1 \
+            https://github.com/andimarafioti/qwentts-cpp-python.git \
+            /tmp/qwentts-cpp-python
+
+          git clone \
+            https://github.com/ServeurpersoCom/qwentts.cpp.git \
+            /tmp/qwentts.cpp
+
+          cd /tmp/qwentts.cpp
+
+          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2ac6
+
+          git submodule update --init --recursive
+
+      # --------------------------------------------------------
+      # BUILD
+      # --------------------------------------------------------
+
+      - name: Build native qwentts.cpp
+        run: |
+
+          cd /tmp/qwentts-cpp-python
+
+          python scripts/build_native.py \
+            --source /tmp/qwentts.cpp \
+            --backend cpu \
+            --clean \
+            --cmake-arg=-GNinja \
+            --cmake-arg=-DGGML_NATIVE=ON \
+            --cmake-arg=-DGGML_CPU_ALL_VARIANTS=OFF \
+            --cmake-arg=-DGGML_AMX_TILE=OFF \
+            --cmake-arg=-DGGML_AMX_INT8=OFF \
+            --cmake-arg=-DGGML_AMX_BF16=OFF
+
+      # --------------------------------------------------------
+      # INSTALL
+      # --------------------------------------------------------
+
+      - name: Install Qwen3 TTS
+        run: |
+
+          pip install --upgrade pip
+
+          pip install /tmp/qwentts-cpp-python
+
+          pip install "faster-qwen3-tts[ggml]"
+
+      # --------------------------------------------------------
+      # PREPARE TEXT
+      # --------------------------------------------------------
+
+      - name: Prepare narration
+        run: |
+
+          mkdir -p outputs
+
+          cp narration/narration.txt narration.txt
+
+          echo "========== NARRATION FOR TTS =========="
+
+          cat narration.txt
+
+          echo
+          echo "======================================="
+
+          test -s narration.txt
+
+      # --------------------------------------------------------
+      # GENERATE TTS
+      # --------------------------------------------------------
+
+      - name: Generate voice clone
+        env:
+          REF_AUDIO: ${{ inputs.ref_audio_path }}
+          REF_TEXT: ${{ inputs.ref_text }}
+          MODEL_SIZE: ${{ inputs.model_size }}
+          QUANT: ${{ inputs.quant }}
+          LANGUAGE: ${{ inputs.language }}
+        run: |
+
+          set -e
+
+          TTS_TEXT="$(cat narration.txt)"
+
+          XVEC_FLAG=""
+
+          if [ -z "$REF_TEXT" ]; then
+            XVEC_FLAG="--xvec-only"
+            echo "Reference text kosong -> x-vector-only"
+          fi
+
+          faster-qwen3-tts \
+            --backend ggml \
+            --quant "$QUANT" \
+            clone \
+            --model "Qwen/Qwen3-TTS-12Hz-${MODEL_SIZE}-Base" \
+            --ref-audio "$REF_AUDIO" \
+            --ref-text "$REF_TEXT" \
+            $XVEC_FLAG \
+            --text "$TTS_TEXT" \
+            --language "$LANGUAGE" \
+            --output outputs/narration.wav
+
+          test -s outputs/narration.wav
+
+          echo
+          echo "TTS generated:"
+          ls -lh outputs/narration.wav
+
+          # Ratakan (flatten) ke root workspace supaya struktur artifact
+          # tidak ikut membawa folder "outputs/" -- upload-artifact
+          # mempertahankan path relatif apa adanya, jadi kalau tidak
+          # diratakan di sini, hasil download-artifact di job lain akan
+          # jadi "<path>/outputs/narration.wav", bukan "<path>/narration.wav"
+          # seperti yang diharapkan ffmpeg di job auto-subtitle & final-video.
+          cp outputs/narration.wav narration.wav
+
+      # --------------------------------------------------------
+      # ARTIFACT
+      # --------------------------------------------------------
+
+      - name: Upload TTS audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: tts-audio
+          path: |
+            narration.wav
+            narration.txt
+          retention-days: 1
+
+
+  # ============================================================
+  # JOB 6
+  # AUTO SUBTITLE
+  #
+  # WAITS ONLY FOR TTS
+  #
+  # IMPORTANT:
+  # We already know the exact narration from Gemini.
+  # Therefore NO Canary transcription.
+  # Direct Forced Alignment.
+  # ============================================================
+
+  auto-subtitle:
+
+    name: Auto Subtitle - NeMo Forced Alignment
+
+    needs:
+      - tts
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 300
+
+    env:
+
+      OMP_NUM_THREADS: 4
+
+      MKL_NUM_THREADS: 4
+
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+
+      NEMO_CACHE_DIR: ${{ github.workspace }}/.cache/nemo
+
+      ALIGNMENT_MODEL: "stt_en_fastconformer_hybrid_large_pc"
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # DOWNLOAD TTS
+      # --------------------------------------------------------
+
+      - name: Download TTS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tts-audio
+          path: tts
+
+      # --------------------------------------------------------
+      # PYTHON
+      # --------------------------------------------------------
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # --------------------------------------------------------
+      # SYSTEM
+      # --------------------------------------------------------
+
+      - name: Install FFmpeg and libsndfile
+        run: |
+
+          sudo apt-get update -y
+
+          sudo apt-get install -y \
+            ffmpeg \
+            libsndfile1
+
+      # --------------------------------------------------------
+      # CACHE PIP
+      # --------------------------------------------------------
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-nfa-${{ env.ALIGNMENT_MODEL }}
+          restore-keys: |
+            ${{ runner.os }}-pip-nfa-
+
+      # --------------------------------------------------------
+      # CACHE MODELS
+      # --------------------------------------------------------
+
+      - name: Cache NeMo models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/huggingface
+            ${{ github.workspace }}/.cache/nemo
+          key: nemo-model-${{ env.ALIGNMENT_MODEL }}
+          restore-keys: |
+            nemo-model-
+
+      # --------------------------------------------------------
+      # INSTALL NEMO
+      # --------------------------------------------------------
+
+      - name: Install NeMo
+        run: |
+
+          python -m pip install --upgrade pip
+
+          pip install torch \
+            --index-url https://download.pytorch.org/whl/cpu
+
+          pip install "nemo_toolkit[asr]"
+
+          pip install soundfile
+
+      # --------------------------------------------------------
+      # FETCH NFA
+      # --------------------------------------------------------
+
+      - name: Fetch NeMo Forced Aligner
+        run: |
+
+          git clone \
+            --depth 1 \
+            --filter=blob:none \
+            --sparse \
+            https://github.com/NVIDIA/NeMo.git \
+            nfa_repo
+
+          cd nfa_repo
+
+          git sparse-checkout set \
+            tools/nemo_forced_aligner
+
+      # --------------------------------------------------------
+      # PREPARE
+      # --------------------------------------------------------
+
+      - name: Prepare audio
+        run: |
+
+          mkdir -p work
+
+          ffmpeg \
+            -y \
+            -i "tts/narration.wav" \
+            -ar 16000 \
+            -ac 1 \
+            -c:a pcm_s16le \
+            work/audio_16k.wav
+
+          test -s work/audio_16k.wav
+
+      # --------------------------------------------------------
+      # USE EXACT GEMINI NARRATION
+      # --------------------------------------------------------
+
+      - name: Prepare exact narration text
+        run: |
+
+          cp tts/narration.txt work/script_clean.txt
+
+          python3 - <<'PY'
+          import re
+
+          path = "work/script_clean.txt"
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          text = text.strip()
+
+          if not text:
+              raise RuntimeError("Narration kosong.")
+
+          # Remove emojis
+          emoji_pattern = re.compile(
+              "["
+              "\U0001F300-\U0001F5FF"
+              "\U0001F600-\U0001F64F"
+              "\U0001F680-\U0001F6FF"
+              "\U0001F700-\U0001F77F"
+              "\U0001F780-\U0001F7FF"
+              "\U0001F800-\U0001F8FF"
+              "\U0001F900-\U0001F9FF"
+              "\U0001FA00-\U0001FA6F"
+              "\U0001FA70-\U0001FAFF"
+              "\U00002600-\U000026FF"
+              "\U00002700-\U000027BF"
+              "\U0001F1E0-\U0001F1FF"
+              "\U00002190-\U000021FF"
+              "\U00002300-\U000023FF"
+              "\U0000FE00-\U0000FE0F"
+              "\U0001F000-\U0001F0FF"
+              "]+",
+              flags=re.UNICODE
+          )
+
+          text = emoji_pattern.sub(" ", text)
+
+          # Keep letters/numbers/basic punctuation
+          text = re.sub(
+              r"[^\w\s.,!?'\-]",
+              " ",
+              text,
+              flags=re.UNICODE
+          )
+
+          text = re.sub(r"([.,!?])\1+", r"\1", text)
+
+          text = re.sub(r"\s+", " ", text).strip()
+
+          if not text:
+              raise RuntimeError("Narration kosong setelah cleaning.")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("========== ALIGNMENT TEXT ==========")
+          print(text)
+          print("====================================")
+          PY
+
+      # --------------------------------------------------------
+      # BUILD MANIFEST
+      # --------------------------------------------------------
+
+      - name: Build NFA manifest
+        run: |
+
+          python3 - <<'PY'
+          import json
+
+          with open("work/script_clean.txt", "r", encoding="utf-8") as f:
+              text = f.read().strip()
+
+          manifest = {
+              "audio_filepath": "work/audio_16k.wav",
+              "text": text
+          }
+
+          with open("work/manifest.json", "w", encoding="utf-8") as f:
+              json.dump(
+                  manifest,
+                  f,
+                  ensure_ascii=False
+              )
+
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          PY
+
+      # --------------------------------------------------------
+      # FORCED ALIGNMENT
+      # --------------------------------------------------------
+
+      - name: Run NeMo Forced Aligner
+        run: |
+
+          python nfa_repo/tools/nemo_forced_aligner/align.py \
+            pretrained_name="${{ env.ALIGNMENT_MODEL }}" \
+            manifest_filepath="work/manifest.json" \
+            output_dir="work/nfa_output" \
+            save_output_file_formats='["ctm"]' \
+            ctm_file_config.remove_blank_tokens=true
+
+      # --------------------------------------------------------
+      # CTM → WORD SRT
+      # --------------------------------------------------------
+
+      - name: Convert CTM to word-by-word SRT
+        run: |
+
+          python3 - <<'PY'
+          import glob
+
+          STRIP_CHARS = ".,!?'-\""
+
+          def fmt_ts(seconds: float):
+
+              if seconds < 0:
+                  seconds = 0
+
+              ms_total = round(seconds * 1000)
+
+              hh, rem = divmod(
+                  ms_total,
+                  3_600_000
+              )
+
+              mm, rem = divmod(
+                  rem,
+                  60_000
+              )
+
+              ss, ms = divmod(
+                  rem,
+                  1000
+              )
+
+              return (
+                  f"{hh:02d}:"
+                  f"{mm:02d}:"
+                  f"{ss:02d},"
+                  f"{ms:03d}"
+              )
+
+          ctm_files = glob.glob(
+              "work/nfa_output/ctm/words/*.ctm"
+          )
+
+          if not ctm_files:
+              raise RuntimeError(
+                  "No CTM output found."
+              )
+
+          raw_entries = []
+
+          with open(
+              ctm_files[0],
+              "r",
+              encoding="utf-8"
+          ) as f:
+
+              for line in f:
+
+                  parts = line.strip().split()
+
+                  if len(parts) < 5:
+                      continue
+
+                  start = float(parts[2])
+                  duration = float(parts[3])
+                  word = parts[4]
+
+                  raw_entries.append(
+                      (
+                          start,
+                          start + duration,
+                          word
+                      )
+                  )
+
+          entries = []
+
+          for start, end, word in raw_entries:
+
+              clean_word = word.strip(
+                  STRIP_CHARS
+              )
+
+              if not clean_word:
+                  continue
+
+              entries.append(
+                  (
+                      start,
+                      end,
+                      clean_word.upper()
+                  )
+              )
+
+          output = "subtitle.srt"
+
+          with open(
+              output,
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+              for i, (start, end, word) in enumerate(
+                  entries,
+                  start=1
+              ):
+
+                  f.write(
+                      f"{i}\n"
+                      f"{fmt_ts(start)} --> "
+                      f"{fmt_ts(end)}\n"
+                      f"{word}\n\n"
+                  )
+
+          print(
+              f"Wrote {len(entries)} "
+              f"word-level subtitle entries."
+          )
+          PY
+
+          test -s subtitle.srt
+
+      # --------------------------------------------------------
+      # ARTIFACT
+      # --------------------------------------------------------
+
+      - name: Upload subtitle
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle
+          path: subtitle.srt
+          retention-days: 1
+
+
+  # ============================================================
+  # JOB 7
+  # FINAL VIDEO
+  #
+  # WAITS FOR:
+  #   RESEQUENCE-VIDEO  (sudah mencakup propainter sebagai dependency)
+  #   AUTO SUBTITLE
+  #
+  # TTS is already included as dependency through subtitle.
+  # ============================================================
+
+  final-video:
+
+    name: Build Final Video
+
+    needs:
+      - resequence-video
+      - auto-subtitle
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # FFMPEG
+      # --------------------------------------------------------
+
+      - name: Install FFmpeg
+        run: |
+
+          sudo apt-get update -qq
+
+          sudo apt-get install -y ffmpeg
+
+      # --------------------------------------------------------
+      # DOWNLOAD RESEQUENCED VIDEO
+      # --------------------------------------------------------
+
+      - name: Download processed video
+        uses: actions/download-artifact@v4
+        with:
+          name: resequenced-video
+          path: input
+
+      # --------------------------------------------------------
+      # DOWNLOAD TTS
+      # --------------------------------------------------------
+
+      - name: Download TTS
+        uses: actions/download-artifact@v4
+        with:
+          name: tts-audio
+          path: audio
+
+      # --------------------------------------------------------
+      # DOWNLOAD SUBTITLE
+      # --------------------------------------------------------
+
+      - name: Download subtitle
+        uses: actions/download-artifact@v4
+        with:
+          name: subtitle
+          path: subtitle
+
+      # --------------------------------------------------------
+      # CHECK
+      # --------------------------------------------------------
+
+      - name: Check inputs
+        run: |
+
+          set -e
+
+          test -s input/video_resequenced.mp4
+          test -s audio/narration.wav
+          test -s subtitle/subtitle.srt
+
+          echo "VIDEO:"
+          ls -lh input/video_resequenced.mp4
+
+          echo "AUDIO:"
+          ls -lh audio/narration.wav
+
+          echo "SUBTITLE:"
+          ls -lh subtitle/subtitle.srt
+
+      # --------------------------------------------------------
+      # CREATE FINAL VIDEO
+      # --------------------------------------------------------
+
+      - name: Combine video + new narration + subtitles
+        run: |
+
+          set -e
+
+          ffmpeg \
+            -y \
+            -i input/video_resequenced.mp4 \
+            -i audio/narration.wav \
+            -vf "subtitles=subtitle/subtitle.srt:force_style='FontName=Arial,FontSize=18,Bold=1,Outline=2,Shadow=1,Alignment=2,MarginV=70'" \
+            -map 0:v:0 \
+            -map 1:a:0 \
+            -c:v libx264 \
+            -preset medium \
+            -crf 20 \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            -b:a 192k \
+            -shortest \
+            -movflags +faststart \
+            final_video.mp4
+
+          test -s final_video.mp4
+
+          echo
+          echo "=========================================="
+          echo "FINAL VIDEO CREATED"
+          echo "=========================================="
+
+          ls -lh final_video.mp4
+
+      # --------------------------------------------------------
+      # VIDEO INFO
+      # --------------------------------------------------------
+
+      - name: Show final video information
+        run: |
+
+          ffprobe \
+            -v error \
+            -show_entries \
+            format=duration,size \
+            -of default=noprint_wrappers=1 \
+            final_video.mp4
+
+      # --------------------------------------------------------
+      # ARTIFACT
+      # --------------------------------------------------------
+
+      - name: Upload final video
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: final_video.mp4
+          retention-days: 7
+
+
+  # ============================================================
+  # JOB 8
+  # GITHUB RELEASE
+  # ============================================================
+
+  release:
+
+    name: Publish MP4 to GitHub Release
+
+    needs:
+      - final-video
+      - gemini-analysis
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Download final video
+        uses: actions/download-artifact@v4
+        with:
+          name: final-video
+          path: release
+
+      - name: Download video metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: video-metadata
+          path: metadata
+
+      # --------------------------------------------------------
+      # BUILD RELEASE TITLE + NOTES FROM GEMINI METADATA
+      # --------------------------------------------------------
+
+      - name: Build release notes from metadata
+        run: |
+
+          set -e
+
+          test -s metadata/metadata.json
+
+          python3 - <<'PY'
+          import json
+
+          with open("metadata/metadata.json", "r", encoding="utf-8") as f:
+              meta = json.load(f)
+
+          title = (meta.get("title") or "AI Video").strip()
+          description = (meta.get("description") or "").strip()
+          tags = meta.get("tags") or []
+
+          with open("release_title.txt", "w", encoding="utf-8") as f:
+              f.write(title)
+
+          notes_lines = [description, ""]
+          if tags:
+              notes_lines.append("**Tags:** " + ", ".join(tags))
+              notes_lines.append("")
+          notes_lines.append("_Generated automatically by the AI video pipeline._")
+
+          with open("release_notes.md", "w", encoding="utf-8") as f:
+              f.write("\n".join(notes_lines))
+
+          print("========== RELEASE TITLE ==========")
+          print(title)
+          print("========== RELEASE NOTES ==========")
+          print("\n".join(notes_lines))
+          PY
+
+      # --------------------------------------------------------
+      # RELEASE TAG
+      # --------------------------------------------------------
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          set -e
+
+          TAG="ai-video-${GITHUB_RUN_ID}"
+
+          TITLE="$(cat release_title.txt)"
+
+          gh release create "$TAG" \
+            release/final_video.mp4 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "$TITLE" \
+            --notes-file release_notes.md
+
+          echo
+          echo "=========================================="
+          echo "RELEASE CREATED"
+          echo "=========================================="
+          echo "Tag: $TAG"
+          echo "Title: $TITLE"
