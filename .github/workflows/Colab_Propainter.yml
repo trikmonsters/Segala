@@ -706,18 +706,21 @@ jobs:
           fi
 
           # ----------------------------------------------------
-          # UPLOAD PROPainter SCRIPTS (2 tahap)
+          # UPLOAD STAGE 1 SCRIPT (satu-satunya yang jalan di Colab)
           # ----------------------------------------------------
+          #
+          # Blending + render final TIDAK LAGI dijalankan di Colab
+          # (dulu "Stage 2"). Sesi Colab beberapa kali mati/di-revoke
+          # (404/401) di ujung proses karena sesi terlalu lama hidup
+          # (Stage 1 + Stage 2 gabungan bisa >1 jam). Karena blending
+          # murni CPU (tidak butuh GPU), tahap itu sekarang dipindah
+          # ke runner GHA sendiri -- sesi Colab cukup hidup selama
+          # ProPainter saja, lalu langsung ditutup begitu selesai.
 
           colab upload \
             -s ciJob \
             propainter_gha_stage1.py \
             /content/propainter_gha_stage1.py
-
-          colab upload \
-            -s ciJob \
-            propainter_gha_stage2.py \
-            /content/propainter_gha_stage2.py
 
           # ----------------------------------------------------
           # HELPER: cek marker file di Colab lewat exec ringan,
@@ -749,7 +752,9 @@ jobs:
           }
 
           # ----------------------------------------------------
-          # STAGE 1: ekstraksi + mask + ProPainter (bagian terlama)
+          # STAGE 1: ekstraksi + mask + ProPainter (satu-satunya
+          # bagian yang butuh GPU, jadi satu-satunya yang jalan di
+          # Colab)
           # ----------------------------------------------------
           #
           # CATATAN: google-colab-cli punya bug upstream yang dikenal
@@ -768,114 +773,82 @@ jobs:
 
           if [ "$STAGE1_STATUS" -ne 0 ]; then
             echo "::warning::Stage 1 (colab exec) keluar dengan status $STAGE1_STATUS (kemungkinan bug google-colab-cli#14). Memverifikasi lewat marker file sebelum menyerah..."
-            if ! check_marker "/content/STAGE1_DONE.marker" 5 20; then
+            if ! check_marker "/content/STAGE1_DONE.marker" 5 15; then
               echo "::error::Stage 1 gagal DAN marker penyelesaiannya tidak pernah muncul -- prosesnya benar-benar gagal, bukan sekadar bug reply timeout."
               exit 1
             fi
-            echo "✅ Marker Stage 1 ditemukan -- proses sebenarnya sudah selesai, lanjut ke Stage 2."
+            echo "✅ Marker Stage 1 ditemukan -- proses sebenarnya sudah selesai."
           fi
 
           # ----------------------------------------------------
-          # STAGE 2: feather blending + render video akhir
-          # ----------------------------------------------------
-          # Berjalan di sesi Colab YANG SAMA (kernel stateful), jadi
-          # semua variabel & file dari Stage 1 masih tersedia di sini.
-
-          set +e
-          colab exec -s ciJob -f propainter_gha_stage2.py
-          EXEC_STATUS=$?
-          set -e
-
-          if [ "$EXEC_STATUS" -ne 0 ]; then
-            echo "::warning::Stage 2 (colab exec) keluar dengan status $EXEC_STATUS (kemungkinan bug upstream google-colab-cli#14: reply timeout meski proses sebenarnya sudah selesai)."
-          fi
-
-          # ----------------------------------------------------
-          # TAMPILKAN ISI /content SEGERA -- apapun status exec-nya.
-          # Ini bukti langsung di log: apakah video SUDAH ada di disk
-          # Colab tepat setelah proses berhenti, atau memang belum ada
-          # (masih proses tulis/loading, atau sesi benar-benar reset).
-          # Jangan tunda -- makin cepat dicek, makin kecil kemungkinan
-          # sesi keburu idle-timeout duluan.
+          # DOWNLOAD 3 FILE KOMPAK SEGERA -- jangan tunda sama sekali.
+          # Begitu Stage 1 selesai, sesi sudah "berumur" panjang (bisa
+          # 40-50+ menit), jadi makin cepat file-file ini diambil,
+          # makin kecil peluang sesi keburu mati sebelum sempat download.
+          # Tiap file dicoba dengan retry singkat -- kalau satu file
+          # sudah berhasil, tidak diulang percuma.
           # ----------------------------------------------------
 
-          cat > check_structure.py <<'PYEOF'
-          import os
+          mkdir -p stage1_output
 
-          print("===== ISI /content =====")
-          try:
-              entries = sorted(os.listdir('/content'))
-          except OSError as e:
-              entries = []
-              print(f"(gagal listdir: {e})")
+          download_with_retry () {
+            local remote_path="$1"
+            local local_path="$2"
+            local max_tries="$3"
 
-          for name in entries:
-              p = os.path.join('/content', name)
-              try:
-                  size = os.path.getsize(p)
-              except OSError:
-                  size = -1
-              print(f"{name}\t{size} bytes")
+            for i in $(seq 1 "$max_tries"); do
+              if colab download -s ciJob "$remote_path" "$local_path" \
+                  && [ -s "$local_path" ]; then
+                echo "  ✅ $(basename "$remote_path") berhasil diunduh (percobaan $i)."
+                return 0
+              fi
+              echo "  ⚠️  $(basename "$remote_path") gagal diunduh, percobaan $i/$max_tries..."
+              sleep 5
+            done
+            return 1
+          }
 
-          target = "/content/video_raw_ProPainter_Success.mp4"
-          print()
-          print(f"TARGET_EXISTS={os.path.exists(target)}")
-          if os.path.exists(target):
-              print(f"TARGET_SIZE={os.path.getsize(target)}")
-          PYEOF
-
-          colab upload -s ciJob check_structure.py /content/check_structure.py >/dev/null 2>&1 || true
           echo ""
-          echo "==> Struktur file di Colab tepat setelah Stage 2 selesai:"
-          colab exec -s ciJob -f check_structure.py || echo "::warning::Cek struktur juga gagal (kemungkinan sesi benar-benar sudah putus)."
+          echo "==> Mengunduh hasil Stage 1 (video inpainted + mask + metadata)..."
 
-          # ----------------------------------------------------
-          # DOWNLOAD OUTPUT -- coba SEGERA, retry 5x dengan delay
-          # kalau gagal (jangan diam terlalu lama supaya sesi tidak
-          # keburu idle-timeout duluan sebelum sempat retry).
-          # ----------------------------------------------------
+          DL_OK=1
+          download_with_retry "/content/propainter_inpainted.mp4" "stage1_output/propainter_inpainted.mp4" 5 || DL_OK=0
+          download_with_retry "/content/propainter_masks.mkv"     "stage1_output/propainter_masks.mkv"     5 || DL_OK=0
+          download_with_retry "/content/stage1_meta.json"         "stage1_output/stage1_meta.json"         5 || DL_OK=0
 
-          mkdir -p output
-
-          DOWNLOAD_OK=0
-          MAX_DOWNLOAD_RETRIES=5
-
-          for i in $(seq 1 $MAX_DOWNLOAD_RETRIES); do
-            echo ""
-            echo "==> Percobaan download $i/$MAX_DOWNLOAD_RETRIES ..."
-            if colab download \
-                  -s ciJob \
-                  /content/video_raw_ProPainter_Success.mp4 \
-                  output/video_processed.mp4 \
-               && [ -s output/video_processed.mp4 ]; then
-              echo "✅ Download berhasil pada percobaan $i."
-              DOWNLOAD_OK=1
-              break
-            fi
-            echo "⚠️  Download percobaan $i gagal/kosong, tunggu 15 detik sebelum coba lagi..."
-            sleep 15
-          done
-
-          if [ "$DOWNLOAD_OK" -ne 1 ]; then
-            echo ""
-            echo "==> Semua percobaan download gagal. Cek stabilitas sesi sekali lagi:"
-            colab exec -s ciJob -f check_structure.py || echo "::warning::Sesi sudah tidak responsif -- kemungkinan besar benar-benar putus/reset."
-            echo "::error::Stage 2 exec gagal (status $EXEC_STATUS) DAN file output tidak ditemukan di Colab setelah $MAX_DOWNLOAD_RETRIES percobaan download -- lihat 'Struktur file di Colab' di atas untuk bukti apakah filenya memang tidak pernah ada, atau sempat ada lalu hilang."
+          if [ "$DL_OK" -ne 1 ]; then
+            echo "::error::Gagal mengunduh satu atau lebih file hasil Stage 1 dari Colab -- kemungkinan sesi mati sebelum sempat diambil."
             exit 1
           fi
+
+          echo "Semua file Stage 1 berhasil diunduh:"
+          ls -lh stage1_output/
+
+          # ----------------------------------------------------
+          # COLAB STOP VIA TRAP (sesi tidak perlu hidup lebih lama
+          # lagi -- blending+render dikerjakan di step berikutnya,
+          # di runner GHA ini sendiri, bukan di Colab)
+          # ----------------------------------------------------
+
+      # --------------------------------------------------------
+      # BLENDING + RENDER FINAL (DI GHA, BUKAN COLAB -- murni CPU)
+      # --------------------------------------------------------
+
+      - name: Install blending dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install --break-system-packages --quiet opencv-python-headless numpy
+
+      - name: Blend + render final video (CPU, on this runner)
+        run: |
+          set -e
+          python3 blend_and_render.py
 
           test -s output/video_processed.mp4
 
           echo "ProPainter output:"
           ls -lh output/video_processed.mp4
-
-          # ----------------------------------------------------
-          # COLAB STOP VIA TRAP
-          # ----------------------------------------------------
-
-      # --------------------------------------------------------
-      # UPLOAD
-      # --------------------------------------------------------
 
       - name: Upload ProPainter result
         uses: actions/upload-artifact@v4
