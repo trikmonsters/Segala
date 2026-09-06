@@ -346,8 +346,23 @@ nbr_len = CONFIG["neighbor_length"]
 weight_fallback_tried = False
 
 chunk_size = max(1, CONFIG["chunk_frames"])
+
+# RAFT butuh minimal 2 frame berurutan untuk menghitung optical flow; kalau
+# chunk terakhir cuma sisa 1 (atau sangat sedikit) frame, gabungkan ke chunk
+# sebelumnya alih-alih dibiarkan jadi chunk tersendiri (fix: "cannot reshape
+# tensor of 0 elements" saat chunk terakhir cuma berisi 1 frame).
+min_chunk_frames = max(2, CONFIG["neighbor_length"] * 2 + 1)
+
 chunk_ranges = [(s, min(s + chunk_size, frame_idx)) for s in range(0, frame_idx, chunk_size)]
-print(f"  Video dipecah menjadi {len(chunk_ranges)} chunk (~{chunk_size} frame/chunk).")
+
+if len(chunk_ranges) > 1:
+    last_start, last_end = chunk_ranges[-1]
+    if (last_end - last_start) < min_chunk_frames:
+        prev_start, _ = chunk_ranges[-2]
+        chunk_ranges[-2] = (prev_start, last_end)
+        chunk_ranges.pop()
+
+print(f"  Video dipecah menjadi {len(chunk_ranges)} chunk (~{chunk_size} frame/chunk, minimum {min_chunk_frames} frame/chunk).")
 
 global_out_idx = 0
 
