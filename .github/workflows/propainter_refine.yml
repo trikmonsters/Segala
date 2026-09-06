@@ -1,0 +1,837 @@
+name: AI Video Pipeline - Gemini + TTS + ProPainter + Subtitle
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "YouTube URL"
+        required: true
+        type: string
+
+      language:
+        description: "Bahasa narasi"
+        required: true
+        type: choice
+        default: "English"
+        options:
+          - "English"
+          - "Chinese"
+          - "French"
+          - "German"
+          - "Spanish"
+
+      model_size:
+        description: "Qwen3 TTS model"
+        required: true
+        type: choice
+        default: "1.7B"
+        options:
+          - "0.6B"
+          - "1.7B"
+
+      quant:
+        description: "TTS quantization"
+        required: true
+        type: choice
+        default: "Q4_K_M"
+        options:
+          - "Q4_K_M"
+          - "Q8_0"
+          - "BF16"
+
+      ref_audio_path:
+        description: "Reference voice file in repository"
+        required: true
+        type: string
+        default: "MyVoice.wav"
+
+      ref_text:
+        description: "Exact transcript of reference voice"
+        required: false
+        type: string
+        default: ""
+
+      gemini_model:
+        description: "Gemini model"
+        required: true
+        type: string
+        default: "gemini-3.5-flash"
+
+jobs:
+
+  download-video:
+    name: Download Source Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          mkdir -p ~/.local/bin
+          curl -L \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+            | tar -xJ --strip-components=1 -C ~/.local/bin
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          ffmpeg -version | head -n 1
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yt-dlp
+          yt-dlp --version
+
+      - name: Create cookies.txt
+        env:
+          COOKIES_TEXT: ${{ secrets.COOKIE }}
+        run: |
+          if [ -z "$COOKIES_TEXT" ]; then
+            echo "::warning::COOKIE secret kosong."
+          else
+            printf '%s' "$COOKIES_TEXT" > cookies.txt
+          fi
+
+      - name: Download video
+        env:
+          VIDEO_URL: ${{ inputs.video_url }}
+        run: |
+          set -e
+          COOKIE_ARG=""
+          if [ -s cookies.txt ]; then
+            COOKIE_ARG="--cookies cookies.txt"
+          fi
+          yt-dlp \
+            $COOKIE_ARG \
+            --remote-components ejs:github \
+            -f "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --merge-output-format mp4 \
+            --no-playlist \
+            -o "video_raw.mp4" \
+            "$VIDEO_URL"
+          test -s video_raw.mp4
+          ls -lh video_raw.mp4
+
+      - name: Verify video integrity
+        run: |
+          set -e
+          ffprobe -v error -show_format -show_streams video_raw.mp4
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=nb_read_frames -of csv=p=0 video_raw.mp4
+
+      - name: Upload raw video
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-video
+          path: video_raw.mp4
+          retention-days: 1
+
+
+  gemini-analysis:
+    name: Gemini Analysis + Narrative
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl jq
+
+      - name: Generate narrative with Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ inputs.gemini_model }}
+          LANGUAGE: ${{ inputs.language }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::GEMINI_API_KEY secret belum diset."
+            exit 1
+          fi
+
+          cat > gemini_request.json <<'JSONEOF'
+          {
+            "system_instruction": {
+              "parts": [
+                {
+                  "text": "You are an expert short-form video narrator. Create a natural, engaging narration suitable for voice cloning and short-form video. Do not include emojis, hashtags, stage directions, markdown, bullet points, titles, or quotation marks around the entire answer. Return only the narration."
+                }
+              ]
+            },
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "Create a concise but engaging narration for a short-form video. The narration should explain the likely key idea or useful takeaway behind the video topic. Language: LANGUAGE_PLACEHOLDER. Make the narration natural for spoken delivery, with clear sentences and smooth transitions. Do not mention that you are an AI. Return narration only."
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "temperature": 0.7,
+              "topP": 0.9,
+              "maxOutputTokens": 900
+            }
+          }
+          JSONEOF
+
+          python3 - <<'PY'
+          import json
+
+          path = "gemini_request.json"
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          language = "${{ inputs.language }}"
+          text = data["contents"][0]["parts"][0]["text"].replace("LANGUAGE_PLACEHOLDER", language)
+          data["contents"][0]["parts"][0]["text"] = text
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False)
+          PY
+
+          API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}"
+
+          HTTP_CODE=$(curl -sS -o gemini_response.json -w "%{http_code}" \
+            -X POST "$API_URL" \
+            -H "Content-Type: application/json" \
+            --data-binary @gemini_request.json)
+
+          echo "Gemini HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            cat gemini_response.json
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import re
+
+          with open("gemini_response.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          try:
+              text = data["candidates"][0]["content"]["parts"][0]["text"]
+          except Exception:
+              print(json.dumps(data, ensure_ascii=False, indent=2))
+              raise RuntimeError("Gemini tidak mengembalikan text.")
+
+          text = text.strip()
+          text = re.sub(r"^```(?:text)?\s*", "", text, flags=re.I)
+          text = re.sub(r"\s*```$", "", text)
+
+          if len(text) >= 2:
+              if (text[0] == '"' and text[-1] == '"') or (text[0] == "'" and text[-1] == "'"):
+                  text = text[1:-1].strip()
+
+          text = re.sub(r"\s+", " ", text).strip()
+
+          if not text:
+              raise RuntimeError("Narration kosong.")
+
+          with open("narration.txt", "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("========== GEMINI NARRATION ==========")
+          print(text)
+          PY
+
+          test -s narration.txt
+
+      - name: Upload narration
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-narration
+          path: narration.txt
+          retention-days: 1
+
+
+  propainter:
+    name: ProPainter Blend on Colab T4
+    needs:
+      - download-video
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv and Colab CLI
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+
+          uv tool install "git+https://github.com/googlecolab/google-colab-cli.git"
+
+          COLAB_VENV="$HOME/.local/share/uv/tools/google-colab-cli"
+          uv pip install \
+            --python "$COLAB_VENV" \
+            "git+https://github.com/googlecolab/jupyter-kernel-client.git"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore Colab authentication
+        env:
+          COLAB_TOKEN_JSON_B64: ${{ secrets.COLAB_TOKEN_JSON_B64 }}
+        run: |
+          set -e
+          if [ -z "$COLAB_TOKEN_JSON_B64" ]; then
+            echo "::error::COLAB_TOKEN_JSON_B64 belum diset."
+            exit 1
+          fi
+          mkdir -p ~/.config/colab-cli
+          printf '%s' "$COLAB_TOKEN_JSON_B64" | base64 -d > ~/.config/colab-cli/token.json
+
+      - name: Download raw video artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: raw-video
+          path: input
+
+      - name: Run ProPainter blend on Colab T4
+        run: |
+          set -e
+          trap 'colab stop -s ciJob || true' EXIT
+
+          MAX_NEW_RETRIES=5
+          CREATED=0
+
+          for attempt in $(seq 1 $MAX_NEW_RETRIES); do
+            echo "==> Membuat sesi Colab, percobaan $attempt/$MAX_NEW_RETRIES ..."
+            if colab new -s ciJob --gpu T4; then
+              CREATED=1
+              break
+            fi
+            WAIT=$((attempt * 30))
+            echo "Gagal membuat sesi, menunggu ${WAIT}s sebelum coba lagi..."
+            sleep "$WAIT"
+          done
+
+          if [ "$CREATED" != "1" ]; then
+            echo "::error::Gagal membuat sesi Colab setelah $MAX_NEW_RETRIES percobaan."
+            exit 1
+          fi
+
+          echo "Colab T4 started."
+
+          LOCAL_SIZE=$(stat -c%s input/video_raw.mp4)
+          LOCAL_HASH=$(sha256sum input/video_raw.mp4 | awk '{print $1}')
+          echo "Local video: size=$LOCAL_SIZE sha256=$LOCAL_HASH"
+
+          cat > check_video.py <<'PYEOF'
+          import hashlib, os
+
+          path = "/content/video_raw.mp4"
+
+          if not os.path.exists(path):
+              print("MISSING 0")
+          else:
+              size = os.path.getsize(path)
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              print(f"{size} {h.hexdigest()}")
+          PYEOF
+
+          MAX_UPLOAD_RETRIES=3
+          VERIFIED=0
+
+          for attempt in $(seq 1 $MAX_UPLOAD_RETRIES); do
+            echo "==> Upload video percobaan $attempt/$MAX_UPLOAD_RETRIES ..."
+
+            colab upload -s ciJob input/video_raw.mp4 /content/video_raw.mp4
+            colab upload -s ciJob check_video.py /content/check_video.py
+            colab exec -s ciJob -f check_video.py > remote_check.txt || true
+
+            REMOTE_LINE=$(tail -n 1 remote_check.txt | tr -d '\r')
+            REMOTE_SIZE=$(echo "$REMOTE_LINE" | awk '{print $1}')
+            REMOTE_HASH=$(echo "$REMOTE_LINE" | awk '{print $2}')
+            echo "Remote video: size=$REMOTE_SIZE sha256=$REMOTE_HASH"
+
+            if [ "$REMOTE_SIZE" == "$LOCAL_SIZE" ] && [ "$REMOTE_HASH" == "$LOCAL_HASH" ]; then
+              echo "Upload video terverifikasi utuh."
+              VERIFIED=1
+              break
+            fi
+
+            echo "Upload tidak cocok, mencoba lagi dalam 10 detik..."
+            sleep 10
+          done
+
+          if [ "$VERIFIED" != "1" ]; then
+            echo "::error::Video gagal terupload utuh ke Colab setelah $MAX_UPLOAD_RETRIES percobaan."
+            exit 1
+          fi
+
+          colab upload -s ciJob propainter_gha.py /content/propainter_gha.py
+
+          set +e
+          colab exec -s ciJob -f propainter_gha.py
+          EXEC_STATUS=$?
+          set -e
+
+          if [ "$EXEC_STATUS" -ne 0 ]; then
+            echo "::warning::colab exec keluar dengan status $EXEC_STATUS, mencoba tetap mengambil output..."
+          fi
+
+          mkdir -p output
+
+          if ! colab download -s ciJob /content/video_raw_ProPainter_Success.mp4 output/video_processed.mp4; then
+            echo "::error::colab exec gagal (status $EXEC_STATUS) dan file output tidak ditemukan di Colab."
+            exit 1
+          fi
+
+          test -s output/video_processed.mp4
+          ls -lh output/video_processed.mp4
+
+      - name: Upload ProPainter blend result
+        uses: actions/upload-artifact@v4
+        with:
+          name: propainter-video
+          path: output/video_processed.mp4
+          retention-days: 1
+
+
+  tts:
+    name: Qwen3 Voice Clone
+    needs:
+      - gemini-analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check reference audio
+        run: |
+          if [ ! -f "${{ inputs.ref_audio_path }}" ]; then
+            echo "::error::Reference audio '${{ inputs.ref_audio_path }}' tidak ditemukan."
+            exit 1
+          fi
+
+      - name: Download Gemini narration
+        uses: actions/download-artifact@v4
+        with:
+          name: gemini-narration
+          path: narration
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip and model weights
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/huggingface
+            ~/.cache/faster-qwen3-tts
+          key: qwen3tts-${{ inputs.model_size }}-${{ inputs.quant }}-${{ runner.os }}
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build patchelf
+
+      - name: Clone qwentts-cpp-python
+        run: |
+          git clone --depth 1 https://github.com/andimarafioti/qwentts-cpp-python.git /tmp/qwentts-cpp-python
+          git clone https://github.com/ServeurpersoCom/qwentts.cpp.git /tmp/qwentts.cpp
+          cd /tmp/qwentts.cpp
+          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2ac6
+          git submodule update --init --recursive
+
+      - name: Build native qwentts.cpp
+        run: |
+          cd /tmp/qwentts-cpp-python
+          python scripts/build_native.py \
+            --source /tmp/qwentts.cpp \
+            --backend cpu \
+            --clean \
+            --cmake-arg=-GNinja \
+            --cmake-arg=-DGGML_NATIVE=ON \
+            --cmake-arg=-DGGML_CPU_ALL_VARIANTS=OFF \
+            --cmake-arg=-DGGML_AMX_TILE=OFF \
+            --cmake-arg=-DGGML_AMX_INT8=OFF \
+            --cmake-arg=-DGGML_AMX_BF16=OFF
+
+      - name: Install Qwen3 TTS
+        run: |
+          pip install --upgrade pip
+          pip install /tmp/qwentts-cpp-python
+          pip install "faster-qwen3-tts[ggml]"
+
+      - name: Prepare narration
+        run: |
+          mkdir -p outputs
+          cp narration/narration.txt narration.txt
+          cat narration.txt
+          test -s narration.txt
+
+      - name: Generate voice clone
+        env:
+          REF_AUDIO: ${{ inputs.ref_audio_path }}
+          REF_TEXT: ${{ inputs.ref_text }}
+          MODEL_SIZE: ${{ inputs.model_size }}
+          QUANT: ${{ inputs.quant }}
+          LANGUAGE: ${{ inputs.language }}
+        run: |
+          set -e
+          TTS_TEXT="$(cat narration.txt)"
+
+          XVEC_FLAG=""
+          if [ -z "$REF_TEXT" ]; then
+            XVEC_FLAG="--xvec-only"
+          fi
+
+          faster-qwen3-tts \
+            --backend ggml \
+            --quant "$QUANT" \
+            clone \
+            --model "Qwen/Qwen3-TTS-12Hz-${MODEL_SIZE}-Base" \
+            --ref-audio "$REF_AUDIO" \
+            --ref-text "$REF_TEXT" \
+            $XVEC_FLAG \
+            --text "$TTS_TEXT" \
+            --language "$LANGUAGE" \
+            --output outputs/narration.wav
+
+          test -s outputs/narration.wav
+          ls -lh outputs/narration.wav
+
+          cp outputs/narration.wav narration.wav
+
+      - name: Upload TTS audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: tts-audio
+          path: |
+            narration.wav
+            narration.txt
+          retention-days: 1
+
+
+  auto-subtitle:
+    name: Auto Subtitle - NeMo Forced Alignment
+    needs:
+      - tts
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      OMP_NUM_THREADS: 4
+      MKL_NUM_THREADS: 4
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+      NEMO_CACHE_DIR: ${{ github.workspace }}/.cache/nemo
+      ALIGNMENT_MODEL: "stt_en_fastconformer_hybrid_large_pc"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download TTS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tts-audio
+          path: tts
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install FFmpeg and libsndfile
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-nfa-${{ env.ALIGNMENT_MODEL }}
+          restore-keys: |
+            ${{ runner.os }}-pip-nfa-
+
+      - name: Cache NeMo models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/huggingface
+            ${{ github.workspace }}/.cache/nemo
+          key: nemo-model-${{ env.ALIGNMENT_MODEL }}
+          restore-keys: |
+            nemo-model-
+
+      - name: Install NeMo
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "nemo_toolkit[asr]"
+          pip install soundfile
+
+      - name: Fetch NeMo Forced Aligner
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/NVIDIA/NeMo.git nfa_repo
+          cd nfa_repo
+          git sparse-checkout set tools/nemo_forced_aligner
+
+      - name: Prepare audio
+        run: |
+          mkdir -p work
+          ffmpeg -y -i "tts/narration.wav" -ar 16000 -ac 1 -c:a pcm_s16le work/audio_16k.wav
+          test -s work/audio_16k.wav
+
+      - name: Prepare exact narration text
+        run: |
+          cp tts/narration.txt work/script_clean.txt
+
+          python3 - <<'PY'
+          import re
+
+          path = "work/script_clean.txt"
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read().strip()
+
+          if not text:
+              raise RuntimeError("Narration kosong.")
+
+          emoji_pattern = re.compile(
+              "["
+              "\U0001F300-\U0001F5FF"
+              "\U0001F600-\U0001F64F"
+              "\U0001F680-\U0001F6FF"
+              "\U0001F700-\U0001F77F"
+              "\U0001F780-\U0001F7FF"
+              "\U0001F800-\U0001F8FF"
+              "\U0001F900-\U0001F9FF"
+              "\U0001FA00-\U0001FA6F"
+              "\U0001FA70-\U0001FAFF"
+              "\U00002600-\U000026FF"
+              "\U00002700-\U000027BF"
+              "\U0001F1E0-\U0001F1FF"
+              "\U00002190-\U000021FF"
+              "\U00002300-\U000023FF"
+              "\U0000FE00-\U0000FE0F"
+              "\U0001F000-\U0001F0FF"
+              "]+",
+              flags=re.UNICODE
+          )
+          text = emoji_pattern.sub(" ", text)
+          text = re.sub(r"[^\w\s.,!?'\-]", " ", text, flags=re.UNICODE)
+          text = re.sub(r"([.,!?])\1+", r"\1", text)
+          text = re.sub(r"\s+", " ", text).strip()
+
+          if not text:
+              raise RuntimeError("Narration kosong setelah cleaning.")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print(text)
+          PY
+
+      - name: Build NFA manifest
+        run: |
+          python3 - <<'PY'
+          import json
+
+          with open("work/script_clean.txt", "r", encoding="utf-8") as f:
+              text = f.read().strip()
+
+          manifest = {"audio_filepath": "work/audio_16k.wav", "text": text}
+
+          with open("work/manifest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False)
+
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Run NeMo Forced Aligner
+        run: |
+          python nfa_repo/tools/nemo_forced_aligner/align.py \
+            pretrained_name="${{ env.ALIGNMENT_MODEL }}" \
+            manifest_filepath="work/manifest.json" \
+            output_dir="work/nfa_output" \
+            save_output_file_formats='["ctm"]' \
+            ctm_file_config.remove_blank_tokens=true
+
+      - name: Convert CTM to word-by-word SRT
+        run: |
+          python3 - <<'PY'
+          import glob
+
+          STRIP_CHARS = ".,!?'-\""
+
+          def fmt_ts(seconds: float):
+              if seconds < 0:
+                  seconds = 0
+              ms_total = round(seconds * 1000)
+              hh, rem = divmod(ms_total, 3_600_000)
+              mm, rem = divmod(rem, 60_000)
+              ss, ms = divmod(rem, 1000)
+              return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
+
+          ctm_files = glob.glob("work/nfa_output/ctm/words/*.ctm")
+          if not ctm_files:
+              raise RuntimeError("No CTM output found.")
+
+          raw_entries = []
+          with open(ctm_files[0], "r", encoding="utf-8") as f:
+              for line in f:
+                  parts = line.strip().split()
+                  if len(parts) < 5:
+                      continue
+                  start = float(parts[2])
+                  duration = float(parts[3])
+                  word = parts[4]
+                  raw_entries.append((start, start + duration, word))
+
+          entries = []
+          for start, end, word in raw_entries:
+              clean_word = word.strip(STRIP_CHARS)
+              if not clean_word:
+                  continue
+              entries.append((start, end, clean_word.upper()))
+
+          output = "subtitle.srt"
+          with open(output, "w", encoding="utf-8") as f:
+              for i, (start, end, word) in enumerate(entries, start=1):
+                  f.write(f"{i}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{word}\n\n")
+
+          print(f"Wrote {len(entries)} word-level subtitle entries.")
+          PY
+
+          test -s subtitle.srt
+
+      - name: Upload subtitle
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle
+          path: subtitle.srt
+          retention-days: 1
+
+
+  final-video:
+    name: Build Final Video (Render in GHA)
+    needs:
+      - propainter
+      - auto-subtitle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      - name: Download processed video
+        uses: actions/download-artifact@v4
+        with:
+          name: propainter-video
+          path: input
+
+      - name: Download TTS
+        uses: actions/download-artifact@v4
+        with:
+          name: tts-audio
+          path: audio
+
+      - name: Download subtitle
+        uses: actions/download-artifact@v4
+        with:
+          name: subtitle
+          path: subtitle
+
+      - name: Check inputs
+        run: |
+          set -e
+          test -s input/video_processed.mp4
+          test -s audio/narration.wav
+          test -s subtitle/subtitle.srt
+          ls -lh input/video_processed.mp4 audio/narration.wav subtitle/subtitle.srt
+
+      - name: Combine video + new narration + subtitles
+        run: |
+          set -e
+          ffmpeg \
+            -y \
+            -i input/video_processed.mp4 \
+            -i audio/narration.wav \
+            -vf "subtitles=subtitle/subtitle.srt:force_style='FontName=Arial,FontSize=18,Bold=1,Outline=2,Shadow=1,Alignment=2,MarginV=70'" \
+            -map 0:v:0 \
+            -map 1:a:0 \
+            -c:v libx264 \
+            -preset medium \
+            -crf 20 \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            -b:a 192k \
+            -shortest \
+            -movflags +faststart \
+            final_video.mp4
+
+          test -s final_video.mp4
+          ls -lh final_video.mp4
+
+      - name: Show final video information
+        run: |
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 final_video.mp4
+
+      - name: Upload final video
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: final_video.mp4
+          retention-days: 7
+
+
+  release:
+    name: Publish MP4 to GitHub Release
+    needs:
+      - final-video
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download final video
+        uses: actions/download-artifact@v4
+        with:
+          name: final-video
+          path: release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="ai-video-${GITHUB_RUN_ID}"
+          TITLE="AI Video ${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" \
+            release/final_video.mp4 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "$TITLE" \
+            --notes "Automatically generated AI video pipeline."
+
+          echo "Tag: $TAG"
