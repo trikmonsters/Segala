@@ -1,18 +1,18 @@
-name: Duck.ai Scraper with Fortress
+name: Duck.ai Image Generator with Fortress
 
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: 'Prompt untuk dikirim ke Duck.ai'
+        description: 'Prompt untuk generate image di Duck.ai'
         required: true
-        default: 'Apa itu kecerdasan buatan?'
+        default: 'A cute squirrel holding an acorn, 3D cartoon style'
 
 jobs:
-  scrape:
+  generate:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -25,7 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright
+          pip install playwright requests
           playwright install --with-deps chromium
 
       - name: Start Fortress via Docker
@@ -35,17 +35,28 @@ jobs:
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
 
-      - name: Run Duck.ai scraper
+      - name: Run Duck.ai Image Generator
         env:
           DUCKAI_PROMPT: ${{ github.event.inputs.prompt }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cat > duckai_scraper.py << 'EOF'
+          cat > duckai_image.py << 'EOF'
           import asyncio
           import os
+          import base64
+          import requests
+          from datetime import datetime
           from playwright.async_api import async_playwright
 
           async def main():
-              prompt = os.environ.get("DUCKAI_PROMPT", "Hello")
+              prompt = os.environ.get("DUCKAI_PROMPT", "A cute squirrel")
+              github_token = os.environ.get("GITHUB_TOKEN")
+              repo = os.environ.get("GITHUB_REPOSITORY")
+              
+              # Timestamp untuk nama file unik
+              timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+              image_filename = f"duckai_image_{timestamp}.png"
               
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp("http://localhost:9222")
@@ -56,12 +67,26 @@ jobs:
                   await page.goto("https://duck.ai", wait_until="networkidle")
                   await page.wait_for_timeout(3000)
 
+                  # Klik menu "New Image" untuk mode image generation
+                  print("Mencari menu New Image...")
+                  try:
+                      new_image_btn = page.locator('text=New Image')
+                      if await new_image_btn.count() > 0:
+                          await new_image_btn.first.click()
+                          print("Menu New Image diklik.")
+                          await page.wait_for_timeout(2000)
+                      else:
+                          print("Menu New Image tidak ditemukan, melanjutkan dengan input biasa.")
+                  except Exception as e:
+                      print(f"Error klik New Image: {e}")
+
                   # Cari input chat dan kirim prompt
                   print(f"Mengirim prompt: {prompt}")
                   
                   selectors = [
                       'textarea[placeholder*="Ask"]',
                       'textarea[placeholder*="message"]',
+                      'textarea[placeholder*="image"]',
                       'textarea',
                       'input[type="text"]'
                   ]
@@ -79,60 +104,150 @@ jobs:
                           continue
                   
                   if not input_found:
-                      print("Input chat tidak ditemukan. Cek screenshot untuk debugging.")
+                      print("Input tidak ditemukan. Screenshot debugging...")
                       await page.screenshot(path="debug_no_input.png")
                       await browser.close()
                       return
 
-                  # === HANDLE TOMBOL CONTINUE (PERSETUJUAN ToS) ===
+                  # Handle tombol Continue (ToS)
                   print("Memeriksa tombol Continue...")
-                  await page.wait_for_timeout(2000)  # Beri waktu untuk UI render
-                  
+                  await page.wait_for_timeout(2000)
                   try:
                       continue_button = page.locator('button:has-text("Continue")')
                       if await continue_button.count() > 0:
                           print("Tombol Continue ditemukan. Mengklik...")
                           await continue_button.first.click()
                           await page.wait_for_timeout(3000)
-                          print("Tombol Continue berhasil diklik.")
-                      else:
-                          print("Tombol Continue tidak ditemukan, melanjutkan...")
                   except Exception as e:
-                      print(f"Error saat menangani tombol Continue: {e}")
+                      print(f"Error tombol Continue: {e}")
 
-                  # Tunggu respons AI
-                  print("Menunggu respons AI...")
-                  await page.wait_for_timeout(12000)  # Perpanjang waktu tunggu
+                  # Tunggu gambar di-generate (lebih lama dari teks)
+                  print("Menunggu gambar di-generate...")
+                  await page.wait_for_timeout(20000)  # 20 detik untuk image generation
 
-                  # Ambil screenshot hasil
-                  await page.screenshot(path="duckai_result.png", full_page=True)
-                  print("Screenshot disimpan: duckai_result.png")
-
-                  # Ekstrak teks respons
+                  # === CARI GAMBAR HASIL GENERATE ===
+                  print("Mencari gambar hasil generate...")
+                  image_saved = False
+                  
+                  # Strategi 1: Cari img dengan src data:image atau blob
                   try:
-                      response_text = await page.inner_text("body")
-                      print("=== Respons Duck.ai ===")
-                      print(response_text[:3000])
+                      images = await page.locator('img').all()
+                      print(f"Ditemukan {len(images)} elemen img")
+                      
+                      for i, img in enumerate(images):
+                          src = await img.get_attribute('src')
+                          if src and ('data:image' in src or 'blob:' in src):
+                              # Skip icon/logo kecil
+                              width = await img.evaluate('el => el.naturalWidth')
+                              height = await img.evaluate('el => el.naturalHeight')
+                              
+                              if width > 200 and height > 200:  # Filter gambar besar
+                                  print(f"Gambar ditemukan: {width}x{height}, src: {src[:50]}...")
+                                  
+                                  if 'data:image' in src:
+                                      # Extract base64
+                                      base64_data = src.split(',')[1]
+                                      image_bytes = base64.b64decode(base64_data)
+                                      with open(image_filename, 'wb') as f:
+                                          f.write(image_bytes)
+                                      print(f"Gambar disimpan: {image_filename}")
+                                      image_saved = True
+                                      break
+                                  elif 'blob:' in src:
+                                      # Screenshot elemen untuk blob
+                                      await img.screenshot(path=image_filename)
+                                      print(f"Gambar (blob) disimpan via screenshot: {image_filename}")
+                                      image_saved = True
+                                      break
                   except Exception as e:
-                      print(f"Gagal ekstrak teks: {e}")
+                      print(f"Error mencari gambar: {e}")
+
+                  # Strategi 2: Screenshot area chat jika gambar tidak ditemukan
+                  if not image_saved:
+                      print("Gambar tidak ditemukan via img tag. Mengambil screenshot area chat...")
+                      await page.screenshot(path=image_filename, full_page=True)
+                      image_saved = True
+                      print(f"Screenshot disimpan: {image_filename}")
+
+                  # Screenshot full page untuk debugging
+                  await page.screenshot(path="debug_full_page.png", full_page=True)
+                  print("Debug screenshot: debug_full_page.png")
 
                   await browser.close()
+              
+              # === UPLOAD KE GITHUB RELEASE ===
+              if image_saved and os.path.exists(image_filename):
+                  print("Mengupload ke GitHub Release...")
+                  
+                  # Buat tag baru
+                  tag_name = f"duckai-image-{timestamp}"
+                  
+                  # Buat release
+                  headers = {
+                      "Authorization": f"token {github_token}",
+                      "Accept": "application/vnd.github.v3+json"
+                  }
+                  
+                  release_data = {
+                      "tag_name": tag_name,
+                      "name": f"Duck.ai Image - {timestamp}",
+                      "body": f"Prompt: {prompt}\n\nGenerated at: {timestamp}",
+                      "draft": False,
+                      "prerelease": False
+                  }
+                  
+                  # Cek apakah tag sudah ada, jika ya hapus dulu
+                  check_url = f"https://api.github.com/repos/{repo}/releases/tags/{tag_name}"
+                  check_resp = requests.get(check_url, headers=headers)
+                  if check_resp.status_code == 200:
+                      release_id = check_resp.json()["id"]
+                      requests.delete(f"https://api.github.com/repos/{repo}/releases/{release_id}", headers=headers)
+                  
+                  # Buat release baru
+                  release_url = f"https://api.github.com/repos/{repo}/releases"
+                  resp = requests.post(release_url, headers=headers, json=release_data)
+                  
+                  if resp.status_code == 201:
+                      release = resp.json()
+                      upload_url = release["upload_url"].replace("{?name,label}", "")
+                      
+                      # Upload gambar
+                      with open(image_filename, 'rb') as f:
+                          upload_headers = {
+                              "Authorization": f"token {github_token}",
+                              "Content-Type": "image/png"
+                          }
+                          upload_resp = requests.post(
+                              f"{upload_url}?name={image_filename}",
+                              headers=upload_headers,
+                              data=f
+                          )
+                          
+                          if upload_resp.status_code == 201:
+                              print(f"✅ Gambar berhasil diupload!")
+                              print(f"URL: {upload_resp.json()['browser_download_url']}")
+                          else:
+                              print(f"❌ Gagal upload: {upload_resp.status_code}")
+                              print(upload_resp.text)
+                  else:
+                      print(f"❌ Gagal buat release: {resp.status_code}")
+                      print(resp.text)
 
           if __name__ == "__main__":
               asyncio.run(main())
           EOF
           
-          python duckai_scraper.py
+          python duckai_image.py
 
-      - name: Upload screenshot
+      - name: Upload debug artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: duckai-screenshot
+          name: debug-screenshots
           path: |
-            duckai_result.png
             debug_no_input.png
-          retention-days: 7
+            debug_full_page.png
+          retention-days: 3
 
       - name: Stop Fortress
         if: always()
