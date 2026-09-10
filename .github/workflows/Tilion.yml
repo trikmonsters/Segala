@@ -47,7 +47,6 @@ jobs:
           async def main():
               prompt = os.environ.get("DUCKAI_PROMPT", "Hello")
               
-              # Hubungkan Playwright ke Fortress via CDP
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp("http://localhost:9222")
                   page = await browser.new_page()
@@ -85,9 +84,25 @@ jobs:
                       await browser.close()
                       return
 
+                  # === HANDLE TOMBOL CONTINUE (PERSETUJUAN ToS) ===
+                  print("Memeriksa tombol Continue...")
+                  await page.wait_for_timeout(2000)  # Beri waktu untuk UI render
+                  
+                  try:
+                      continue_button = page.locator('button:has-text("Continue")')
+                      if await continue_button.count() > 0:
+                          print("Tombol Continue ditemukan. Mengklik...")
+                          await continue_button.first.click()
+                          await page.wait_for_timeout(3000)
+                          print("Tombol Continue berhasil diklik.")
+                      else:
+                          print("Tombol Continue tidak ditemukan, melanjutkan...")
+                  except Exception as e:
+                      print(f"Error saat menangani tombol Continue: {e}")
+
                   # Tunggu respons AI
                   print("Menunggu respons AI...")
-                  await page.wait_for_timeout(8000)
+                  await page.wait_for_timeout(12000)  # Perpanjang waktu tunggu
 
                   # Ambil screenshot hasil
                   await page.screenshot(path="duckai_result.png", full_page=True)
@@ -97,7 +112,7 @@ jobs:
                   try:
                       response_text = await page.inner_text("body")
                       print("=== Respons Duck.ai ===")
-                      print(response_text[:2000])
+                      print(response_text[:3000])
                   except Exception as e:
                       print(f"Gagal ekstrak teks: {e}")
 
