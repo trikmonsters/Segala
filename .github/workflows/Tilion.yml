@@ -1,0 +1,127 @@
+name: Duck.ai Scraper with Tilion
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Prompt untuk dikirim ke Duck.ai'
+        required: true
+        default: 'Apa itu kecerdasan buatan?'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install tilion playwright
+          playwright install --with-deps chromium
+
+      - name: Run Duck.ai scraper
+        env:
+          DUCKAI_PROMPT: ${{ github.event.inputs.prompt }}
+        run: |
+          cat > duckai_scraper.py << 'EOF'
+          import asyncio
+          import os
+          from tilion import Tilion
+          from playwright.async_api import async_playwright
+
+          async def main():
+              prompt = os.environ.get("DUCKAI_PROMPT", "Hello")
+              
+              # 1. Mulai Tilion stealth browser
+              print("Memulai Tilion...")
+              t = await Tilion().start()
+              cdp_url = t.cdp_url
+              print(f"Tilion running. CDP URL: {cdp_url}")
+
+              # 2. Hubungkan Playwright ke browser stealth
+              async with async_playwright() as p:
+                  browser = await p.chromium.connect_over_cdp(cdp_url)
+                  page = await browser.new_page()
+
+                  # 3. Buka Duck.ai
+                  print("Membuka Duck.ai...")
+                  await page.goto("https://duck.ai", wait_until="networkidle")
+                  await page.wait_for_timeout(3000)
+
+                  # 4. Cari input chat dan kirim prompt
+                  # Catatan: Selector mungkin perlu disesuaikan jika UI Duck.ai berubah
+                  print(f"Mengirim prompt: {prompt}")
+                  
+                  # Coba beberapa selector umum untuk input chat
+                  selectors = [
+                      'textarea[placeholder*="Ask"]',
+                      'textarea[placeholder*="message"]',
+                      'textarea',
+                      'input[type="text"]'
+                  ]
+                  
+                  input_found = False
+                  for selector in selectors:
+                      try:
+                          await page.wait_for_selector(selector, timeout=5000)
+                          await page.fill(selector, prompt)
+                          await page.keyboard.press("Enter")
+                          input_found = True
+                          print(f"Input ditemukan dengan selector: {selector}")
+                          break
+                      except:
+                          continue
+                  
+                  if not input_found:
+                      print("Input chat tidak ditemukan. Cek screenshot untuk debugging.")
+                      await page.screenshot(path="debug_no_input.png")
+                      await browser.close()
+                      await t.close()
+                      return
+
+                  # 5. Tunggu respons AI
+                  print("Menunggu respons AI...")
+                  await page.wait_for_timeout(8000)
+
+                  # 6. Ambil screenshot hasil
+                  await page.screenshot(path="duckai_result.png", full_page=True)
+                  print("Screenshot disimpan: duckai_result.png")
+
+                  # 7. Coba ekstrak teks respons
+                  try:
+                      # Cari elemen respons AI
+                      response_text = await page.inner_text("body")
+                      print("=== Respons Duck.ai ===")
+                      print(response_text[:2000])  # Print 2000 karakter pertama
+                  except Exception as e:
+                      print(f"Gagal ekstrak teks: {e}")
+
+                  await browser.close()
+
+              await t.close()
+              print("Selesai.")
+
+          if __name__ == "__main__":
+              asyncio.run(main())
+          EOF
+          
+          python duckai_scraper.py
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: duckai-screenshot
+          path: |
+            duckai_result.png
+            debug_no_input.png
+          retention-days: 7
