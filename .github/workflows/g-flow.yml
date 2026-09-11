@@ -1,0 +1,145 @@
+name: Flow Login Verification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Start Fortress via Docker
+        run: |
+          docker run -d --rm -p 9222:9222 --name fortress tilion/fortress:latest
+          echo "Menunggu Fortress siap..."
+          sleep 10
+          curl -s http://localhost:9222/json/version && echo "Fortress siap!"
+
+      - name: Verify Flow Login
+        env:
+          FLOW_COOKIES: ${{ secrets.FLOW_COOKIES }}
+        run: |
+          cat > verify_login.py << 'EOF'
+          import asyncio
+          import os
+          from playwright.async_api import async_playwright
+
+          def parse_netscape_cookies(cookie_text):
+              cookies = []
+              for line in cookie_text.splitlines():
+                  line = line.strip()
+                  if not line or line.startswith('#'):
+                      continue
+                  parts = line.split('\t')
+                  if len(parts) < 7:
+                      continue
+                  cookie = {
+                      'name': parts[5],
+                      'value': parts[6],
+                      'domain': parts[0].lstrip('#HttpOnly_'),
+                      'path': parts[2],
+                      'secure': parts[3].upper() == 'TRUE',
+                      'httpOnly': parts[0].startswith('#HttpOnly_'),
+                      'expires': int(parts[4]) if parts[4].isdigit() else -1,
+                  }
+                  cookies.append(cookie)
+              return cookies
+
+          async def main():
+              cookie_text = os.environ.get("FLOW_COOKIES", "")
+              cookies = parse_netscape_cookies(cookie_text)
+              print(f"Berhasil parse {len(cookies)} cookies")
+              
+              async with async_playwright() as p:
+                  browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+                  context = await browser.new_context()
+                  await context.add_cookies(cookies)
+                  print("Cookies diset.")
+                  
+                  page = await context.new_page()
+
+                  # Buka Flow
+                  print("Membuka flow.google.com...")
+                  await page.goto("https://flow.google.com/?pli=1", wait_until="networkidle", timeout=60000)
+                  await page.wait_for_timeout(8000)
+                  
+                  # === VERIFIKASI LOGIN ===
+                  current_url = page.url
+                  page_title = await page.title()
+                  page_content = await page.content()
+                  
+                  print("=" * 60)
+                  print(f"URL saat ini   : {current_url}")
+                  print(f"Judul halaman  : {page_title}")
+                  print("=" * 60)
+                  
+                  # Cek indikator login
+                  indicators = {
+                      "URL mengandung 'accounts.google.com'": "accounts.google.com" in current_url,
+                      "URL mengandung 'signin'": "signin" in current_url.lower(),
+                      "Halaman mengandung 'Sign in'": "Sign in" in page_content,
+                      "Halaman mengandung 'Sign in to continue'": "Sign in to continue" in page_content,
+                      "Halaman mengandung 'Choose an account'": "Choose an account" in page_content,
+                      "Halaman mengandung 'Welcome'": "Welcome" in page_content,
+                  }
+                  
+                  print("\n📋 Indikator Login:")
+                  for desc, result in indicators.items():
+                      status = "✅ ADA" if result else "❌ TIDAK"
+                      print(f"  {status} - {desc}")
+                  
+                  # Kesimpulan
+                  print("\n" + "=" * 60)
+                  if "accounts.google.com" in current_url or "signin" in current_url.lower():
+                      print("❌ KESIMPULAN: BELUM LOGIN (redirect ke halaman login)")
+                  elif "Sign in" in page_content and "Welcome" not in page_content:
+                      print("⚠️ KESIMPULAN: MUNGKIN BELUM LOGIN (ada tombol Sign in)")
+                  else:
+                      print("✅ KESIMPULAN: KEMUNGKINAN SUDAH LOGIN")
+                  print("=" * 60)
+                  
+                  # Screenshot full page
+                  await page.screenshot(path="verify_login.png", full_page=True)
+                  print("\nScreenshot disimpan: verify_login.png")
+                  
+                  # Simpan HTML untuk inspeksi
+                  with open("verify_page.html", "w", encoding="utf-8") as f:
+                      f.write(page_content)
+                  print("HTML disimpan: verify_page.html")
+                  
+                  await context.close()
+
+          if __name__ == "__main__":
+              asyncio.run(main())
+          EOF
+          
+          python verify_login.py
+
+      - name: Upload verification artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: flow-login-verification
+          path: |
+            verify_login.png
+            verify_page.html
+          retention-days: 7
+
+      - name: Stop Fortress
+        if: always()
+        run: docker stop fortress || true
