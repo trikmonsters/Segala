@@ -1,4 +1,4 @@
-name: Dola.com Login Verification
+name: Dola.com Verification with Proxy
 
 on:
   workflow_dispatch:
@@ -30,13 +30,14 @@ jobs:
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
 
-      - name: Run Dola.com Login Verification
+      - name: Run Dola.com Verification
         env:
           DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          PROXY_SERVER: "http://108.137.124.195:47014"
         run: |
-          cat > dola_verify.py << 'EOF'
+          cat > /tmp/dola_verify.py << 'PYEOF'
           import asyncio
           import os
           import requests
@@ -44,26 +45,21 @@ jobs:
           from playwright.async_api import async_playwright
 
           def parse_netscape_cookies(content):
-              """Parse Netscape HTTP Cookie File format into Playwright cookie list."""
               cookies = []
               for line in content.splitlines():
                   line = line.strip()
                   if not line:
                       continue
-                  # Handle HttpOnly prefixed lines
                   if line.startswith('#HttpOnly_'):
                       line = line[10:]
                   elif line.startswith('#'):
                       continue
-                  
                   parts = line.split('\t')
                   if len(parts) < 7:
                       continue
-                  
                   domain = parts[0]
                   if not domain.startswith('.'):
                       domain = '.' + domain
-                  
                   cookie = {
                       'name': parts[5],
                       'value': parts[6],
@@ -86,80 +82,66 @@ jobs:
               cookie_content = os.environ.get("DOLA_COOKIES", "")
               github_token = os.environ.get("GITHUB_TOKEN")
               repo = os.environ.get("GITHUB_REPOSITORY")
-              
+              proxy_server = os.environ.get("PROXY_SERVER", "")
+
               cookies = parse_netscape_cookies(cookie_content)
               print(f"Parsed {len(cookies)} cookies")
-              
+              print(f"Using proxy: {proxy_server}")
+
               timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
               screenshot_filename = f"dola_verify_{timestamp}.png"
-              
+
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp("http://localhost:9222")
-                  context = await browser.new_context()
+
+                  context_options = {}
+                  if proxy_server:
+                      context_options["proxy"] = {"server": proxy_server}
+                      print(f"Proxy dikonfigurasi: {proxy_server}")
+
+                  context = await browser.new_context(**context_options)
                   await context.add_cookies(cookies)
                   print("Cookies added to browser context")
-                  
+
                   page = await context.new_page()
-                  
+
+                  try:
+                      await page.goto("https://api.ipify.org?format=json", timeout=15000)
+                      ip_content = await page.inner_text("body")
+                      print(f"IP yang terlihat: {ip_content}")
+                  except Exception as e:
+                      print(f"Gagal cek IP: {e}")
+
                   target_url = "https://www.dola.com/chat/38417525406339601"
-                  print(f"Membuka {target_url}...")
-                  await page.goto(target_url, wait_until="networkidle")
-                  await page.wait_for_timeout(8000)  # Tunggu render penuh
-                  
-                  # === VERIFIKASI LOGIN ===
+                  print(f"\nMembuka {target_url}...")
+                  await page.goto(target_url, wait_until="networkidle", timeout=60000)
+                  await page.wait_for_timeout(8000)
+
                   print("\n=== VERIFIKASI LOGIN ===")
                   current_url = page.url
                   page_title = await page.title()
                   print(f"URL saat ini: {current_url}")
                   print(f"Judul halaman: {page_title}")
-                  
-                  # Cek apakah diarahkan ke halaman login
+
                   if "login" in current_url.lower() or "signin" in current_url.lower():
-                      print("❌ LOGIN GAGAL: Dialihkan ke halaman login")
+                      print("LOGIN GAGAL: Dialihkan ke halaman login")
                   else:
-                      print("✅ URL tidak dialihkan ke login")
-                  
-                  # Cek elemen yang menandakan login berhasil
-                  # Cari elemen yang hanya muncul saat login (misal: avatar, menu user)
-                  login_indicators = [
-                      'img[alt*="avatar"]',
-                      'img[alt*="profile"]',
-                      '[class*="avatar"]',
-                      '[class*="user"]',
-                      'button:has-text("Logout")',
-                      'button:has-text("Sign out")',
-                  ]
-                  
-                  login_confirmed = False
-                  for selector in login_indicators:
-                      try:
-                          count = await page.locator(selector).count()
-                          if count > 0:
-                              print(f"✅ Elemen login ditemukan: {selector} ({count} elemen)")
-                              login_confirmed = True
-                              break
-                      except:
-                          continue
-                  
-                  if not login_confirmed:
-                      print("⚠️ Tidak ada elemen login yang terdeteksi secara eksplisit")
-                  
-                  # Cek apakah ada konten chat (bukan halaman kosong)
+                      print("URL tidak dialihkan ke login")
+
                   body_text = await page.inner_text("body")
                   print(f"\nPanjang body text: {len(body_text)} karakter")
                   print(f"Preview: {body_text[:500]}")
-                  
-                  # Simpan screenshot full page
+
+                  if "tidak tersedia" in body_text.lower() or "not available" in body_text.lower():
+                      print("MASIH TERBLOKIR: Proxy tidak berfungsi atau IP masih diblokir")
+                  else:
+                      print("Halaman tidak menampilkan pesan blokir wilayah")
+
                   await page.screenshot(path=screenshot_filename, full_page=True)
                   print(f"\nScreenshot disimpan: {screenshot_filename}")
-                  
-                  # Simpan juga screenshot viewport untuk perbandingan
-                  await page.screenshot(path="debug_viewport.png")
-                  print("Debug viewport screenshot: debug_viewport.png")
-                  
+
                   await browser.close()
-              
-              # === UPLOAD KE GITHUB RELEASE ===
+
               if os.path.exists(screenshot_filename):
                   print("\nMengupload ke GitHub Release...")
                   tag_name = f"dola-verify-{timestamp}"
@@ -167,28 +149,28 @@ jobs:
                       "Authorization": f"token {github_token}",
                       "Accept": "application/vnd.github.v3+json"
                   }
-                  
+
                   release_data = {
                       "tag_name": tag_name,
                       "name": f"Dola Verification - {timestamp}",
-                      "body": f"Verification screenshot for Dola chat at {timestamp}",
+                      "body": f"Verification with proxy at {timestamp}",
                       "draft": False,
                       "prerelease": False
                   }
-                  
+
                   check_url = f"https://api.github.com/repos/{repo}/releases/tags/{tag_name}"
                   check_resp = requests.get(check_url, headers=headers)
                   if check_resp.status_code == 200:
                       release_id = check_resp.json()["id"]
                       requests.delete(f"https://api.github.com/repos/{repo}/releases/{release_id}", headers=headers)
-                  
+
                   release_url = f"https://api.github.com/repos/{repo}/releases"
                   resp = requests.post(release_url, headers=headers, json=release_data)
-                  
+
                   if resp.status_code == 201:
                       release = resp.json()
                       upload_url = release["upload_url"].replace("{?name,label}", "")
-                      
+
                       with open(screenshot_filename, 'rb') as f:
                           upload_headers = {
                               "Authorization": f"token {github_token}",
@@ -199,30 +181,20 @@ jobs:
                               headers=upload_headers,
                               data=f
                           )
-                          
+
                           if upload_resp.status_code == 201:
-                              print(f"✅ Screenshot berhasil diupload!")
+                              print(f"Screenshot berhasil diupload!")
                               print(f"URL: {upload_resp.json()['browser_download_url']}")
                           else:
-                              print(f"❌ Gagal upload: {upload_resp.status_code}")
+                              print(f"Gagal upload: {upload_resp.status_code}")
                   else:
-                      print(f"❌ Gagal buat release: {resp.status_code}")
-                      print(resp.text)
+                      print(f"Gagal buat release: {resp.status_code}")
 
           if __name__ == "__main__":
               asyncio.run(main())
-          EOF
-          
-          python dola_verify.py
+          PYEOF
 
-      - name: Upload debug artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: debug-screenshots
-          path: |
-            debug_viewport.png
-          retention-days: 3
+          python /tmp/dola_verify.py
 
       - name: Stop Fortress
         if: always()
