@@ -1,4 +1,4 @@
-name: Google Vids Login - Wait for Manual Confirmation
+name: Google Vids Login - Show Verification Code in Log
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
 jobs:
   login:
     runs-on: ubuntu-latest
-    timeout-minutes: 15          # Batas maksimal 15 menit (cukup untuk konfirmasi manual)
+    timeout-minutes: 15
     permissions:
       contents: write
 
@@ -36,19 +36,96 @@ jobs:
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
 
-      - name: Login and Wait for Confirmation
+      - name: Login and Show Verification Code
         env:
           TEST_EMAIL: ${{ github.event.inputs.email }}
           TEST_PASSWORD: "Muntakul1967#"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cat > login_wait.py << 'EOF'
+          cat > login_show_code.py << 'EOF'
           import asyncio
           import os
+          import re
           import requests
           from datetime import datetime
           from playwright.async_api import async_playwright
+
+          async def extract_verification_code(page):
+              """Ekstrak angka verifikasi dari halaman Google Prompt."""
+              code = None
+              candidates = []
+              
+              # === STRATEGI 1: Cari elemen dengan font besar (angka utama) ===
+              print("\n--- Strategi 1: Cari elemen font besar ---")
+              try:
+                  elements = await page.locator('div, span, p, h1, h2').all()
+                  for el in elements:
+                      try:
+                          text = await el.inner_text()
+                          text = text.strip()
+                          if re.fullmatch(r'\d{2}', text):
+                              font_size = await el.evaluate(
+                                  'el => window.getComputedStyle(el).fontSize'
+                              )
+                              size_px = int(font_size.replace('px', '')) if font_size else 0
+                              candidates.append((text, size_px))
+                              print(f"  Kandidat: '{text}' | font-size: {size_px}px")
+                              if size_px >= 40 and not code:
+                                  code = text
+                                  print(f"  ✅ Kode terpilih: {code} (font-size: {size_px}px)")
+                      except:
+                          continue
+              except Exception as e:
+                  print(f"  Error strategi 1: {e}")
+              
+              # === STRATEGI 2: Regex "tap XX" di body text ===
+              if not code:
+                  print("\n--- Strategi 2: Regex 'tap XX' ---")
+                  try:
+                      body_text = await page.inner_text('body')
+                      patterns = [
+                          r'tap\s+(\d{2})\s+on',
+                          r'tap\s+(\d{2})\s+di',
+                          r'ketuk\s+(\d{2})',
+                          r'pilih\s+(\d{2})',
+                          r'select\s+(\d{2})',
+                      ]
+                      for pat in patterns:
+                          match = re.search(pat, body_text, re.IGNORECASE)
+                          if match:
+                              code = match.group(1)
+                              print(f"  ✅ Kode ditemukan via regex '{pat}': {code}")
+                              break
+                  except Exception as e:
+                      print(f"  Error strategi 2: {e}")
+              
+              # === STRATEGI 3: Semua angka 2 digit sebagai fallback ===
+              if not code:
+                  print("\n--- Strategi 3: Semua angka 2 digit ---")
+                  try:
+                      body_text = await page.inner_text('body')
+                      matches = re.findall(r'\b(\d{2})\b', body_text)
+                      unique = list(dict.fromkeys(matches))
+                      print(f"  Semua angka 2 digit: {unique}")
+                      for m in unique:
+                          num = int(m)
+                          if 10 <= num <= 99:
+                              code = m
+                              print(f"  ⚠️ Kode kandidat (fallback): {code}")
+                              break
+                  except Exception as e:
+                      print(f"  Error strategi 3: {e}")
+              
+              # === RINGKASAN DEBUG ===
+              print("\n--- Ringkasan Kandidat ---")
+              if candidates:
+                  # Urutkan berdasarkan font size terbesar
+                  candidates.sort(key=lambda x: x[1], reverse=True)
+                  for text, size in candidates[:10]:
+                      print(f"  Angka: {text} | Font: {size}px")
+              
+              return code
 
           async def main():
               email = os.environ.get("TEST_EMAIL", "")
@@ -59,20 +136,24 @@ jobs:
               timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
               screenshots = []
               is_logged_in = False
+              verification_code = None
               
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp("http://localhost:9222")
                   context = await browser.new_context()
                   page = await context.new_page()
                   
-                  # 1. Buka Google Vids (redirect ke login)
+                  # 1. Buka Google Vids
                   print(f"Membuka https://docs.google.com/videos/u/4/ ...")
-                  await page.goto("https://docs.google.com/videos/u/4/", wait_until="domcontentloaded")
+                  await page.goto(
+                      "https://docs.google.com/videos/u/4/",
+                      wait_until="domcontentloaded"
+                  )
                   await page.wait_for_timeout(5000)
                   print(f"URL: {page.url}")
                   
                   # 2. Isi email
-                  print(f"Mengisi email: {email}")
+                  print(f"\nMengisi email: {email}")
                   email_selectors = [
                       'input[type="email"]',
                       'input[name="identifier"]',
@@ -117,7 +198,7 @@ jobs:
                   print(f"URL setelah Next: {page.url}")
                   
                   # 5. Isi password
-                  print("Mengisi password...")
+                  print("\nMengisi password...")
                   password_selectors = [
                       'input[type="password"]',
                       'input[name="password"]',
@@ -151,38 +232,59 @@ jobs:
                       except:
                           continue
                   
-                  # 7. TUNGGU KONFIRMASI MANUAL (polling)
-                  print("=" * 60)
-                  print("MENUNGGU KONFIRMASI DARI HP ANDA...")
-                  print("Silakan buka notifikasi Google di HP Anda,")
-                  print("tap 'Yes' lalu tap angka yang muncul.")
-                  print("Script akan terus memeriksa setiap 5 detik.")
+                  # 7. Tunggu halaman verifikasi muncul
+                  print("\nMenunggu halaman verifikasi...")
+                  await page.wait_for_timeout(8000)
+                  print(f"URL verifikasi: {page.url}")
+                  print(f"Title: {await page.title()}")
+                  
+                  # === EKSTRAK KODE VERIFIKASI ===
+                  print("\n" + "=" * 60)
+                  print("MENCARI KODE VERIFIKASI DI HALAMAN...")
                   print("=" * 60)
                   
-                  max_wait = 600          # Maksimal 10 menit
+                  verification_code = await extract_verification_code(page)
+                  
+                  print("\n" + "=" * 60)
+                  if verification_code:
+                      print(f"🔢 KODE VERIFIKASI: {verification_code}")
+                      print(f"👉 Silakan tap angka {verification_code} di HP Anda!")
+                  else:
+                      print("⚠️ Kode verifikasi tidak ditemukan otomatis.")
+                      print("Cek screenshot di bawah untuk melihat kode manual.")
+                  print("=" * 60)
+                  
+                  # Screenshot halaman verifikasi
+                  ss_verify = f"verification_{timestamp}.png"
+                  await page.screenshot(path=ss_verify, full_page=True)
+                  screenshots.append(ss_verify)
+                  print(f"📸 Screenshot: {ss_verify}")
+                  
+                  # === TUNGGU KONFIRMASI MANUAL ===
+                  print("\n" + "=" * 60)
+                  print("MENUNGGU KONFIRMASI DARI HP ANDA...")
+                  if verification_code:
+                      print(f"Tap 'Yes' lalu tap angka {verification_code} di HP.")
+                  else:
+                      print("Selesaikan verifikasi di HP Anda.")
+                  print("=" * 60)
+                  
+                  max_wait = 600
                   elapsed = 0
-                  check_interval = 5      # Cek setiap 5 detik
+                  check_interval = 5
                   
                   while elapsed < max_wait:
                       current_url = page.url
-                      title = await page.title()
-                      print(f"[{elapsed}s] URL: {current_url[:80]}... | Title: {title[:50]}")
                       
-                      # Cek apakah sudah masuk Google Vids
                       if "docs.google.com/videos" in current_url:
                           is_logged_in = True
-                          print("✅ LOGIN BERHASIL! Konfirmasi diterima.")
+                          print(f"\n✅ LOGIN BERHASIL pada detik ke-{elapsed}!")
                           break
                       
-                      # Cek apakah masih di halaman verifikasi
-                      if "accounts.google.com" in current_url:
-                          if "challenge" in current_url.lower() or "verify" in title.lower():
-                              # Masih menunggu konfirmasi
-                              pass
-                          else:
-                              print("⚠️ Masih di halaman login Google.")
+                      if elapsed % 30 == 0:
+                          print(f"[{elapsed}s] Masih menunggu... URL: {current_url[:80]}")
                       
-                      # Ambil screenshot berkala (setiap 1 menit)
+                      # Screenshot berkala setiap 1 menit
                       if elapsed % 60 == 0 and elapsed > 0:
                           ss = f"waiting_{elapsed}s_{timestamp}.png"
                           await page.screenshot(path=ss, full_page=True)
@@ -192,11 +294,11 @@ jobs:
                       await page.wait_for_timeout(check_interval * 1000)
                       elapsed += check_interval
                   
-                  # 8. Screenshot akhir
+                  # Screenshot akhir
                   final_ss = f"final_{timestamp}.png"
                   await page.screenshot(path=final_ss, full_page=True)
                   screenshots.append(final_ss)
-                  print(f"📸 Screenshot akhir: {final_ss}")
+                  print(f"\n📸 Screenshot akhir: {final_ss}")
                   print(f"URL akhir: {page.url}")
                   
                   if is_logged_in:
@@ -207,7 +309,7 @@ jobs:
                   await browser.close()
               
               # === UPLOAD KE GITHUB RELEASE ===
-              print("Upload ke GitHub Release...")
+              print("\nUpload ke GitHub Release...")
               tag_name = f"google-vids-login-{timestamp}"
               
               headers = {
@@ -215,10 +317,16 @@ jobs:
                   "Accept": "application/vnd.github.v3+json"
               }
               
+              body_text = f"Email: {email}\n"
+              body_text += f"Status: {'BERHASIL' if is_logged_in else 'MENUNGGU/GAGAL'}\n"
+              if verification_code:
+                  body_text += f"Kode Verifikasi: {verification_code}\n"
+              body_text += f"Timestamp: {timestamp}"
+              
               release_data = {
                   "tag_name": tag_name,
                   "name": f"Google Vids Login - {timestamp}",
-                  "body": f"Email: {email}\nStatus: {'BERHASIL' if is_logged_in else 'MENUNGGU/GAGAL'}\nTimestamp: {timestamp}",
+                  "body": body_text,
                   "draft": False,
                   "prerelease": False
               }
@@ -236,7 +344,10 @@ jobs:
                           with open(filename, 'rb') as f:
                               upload_resp = requests.post(
                                   f"{upload_url}?name={filename}",
-                                  headers={"Authorization": f"token {github_token}", "Content-Type": "image/png"},
+                                  headers={
+                                      "Authorization": f"token {github_token}",
+                                      "Content-Type": "image/png"
+                                  },
                                   data=f
                               )
                               if upload_resp.status_code == 201:
@@ -251,7 +362,7 @@ jobs:
               asyncio.run(main())
           EOF
           
-          python login_wait.py
+          python login_show_code.py
 
       - name: Stop Fortress
         if: always()
