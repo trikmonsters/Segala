@@ -1,10 +1,15 @@
-name: Google Docs Login Verify with Cookie
+name: Google Vids Login Page Test
 
 on:
   workflow_dispatch:
+    inputs:
+      email:
+        description: 'Email untuk diisi di halaman login'
+        required: true
+        default: 'kucingpaskib@gmail.com'
 
 jobs:
-  verify:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,13 +35,13 @@ jobs:
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
 
-      - name: Verify Google Login with Cookie
+      - name: Test Google Vids Login Page
         env:
-          GOOGLE_COOKIES: ${{ secrets.GOOGLE_COOKIES }}
+          TEST_EMAIL: ${{ github.event.inputs.email }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cat > verify_login.py << 'EOF'
+          cat > test_login.py << 'EOF'
           import asyncio
           import os
           import requests
@@ -44,95 +49,89 @@ jobs:
           from playwright.async_api import async_playwright
 
           async def main():
-              cookies_raw = os.environ.get("GOOGLE_COOKIES", "")
+              email = os.environ.get("TEST_EMAIL", "test@example.com")
               github_token = os.environ.get("GITHUB_TOKEN")
               repo = os.environ.get("GITHUB_REPOSITORY")
               
               timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-              screenshot_filename = f"google_login_{timestamp}.png"
-              
-              # Parse cookies dari format Netscape
-              cookies = []
-              for line in cookies_raw.splitlines():
-                  line = line.strip()
-                  if not line or line.startswith("#"):
-                      # Handle HttpOnly cookies (baris dimulai dengan #HttpOnly_)
-                      if line.startswith("#HttpOnly_"):
-                          line = line.replace("#HttpOnly_", "")
-                      else:
-                          continue
-                  
-                  parts = line.split("\t")
-                  if len(parts) >= 7:
-                      domain = parts[0]
-                      path = parts[2]
-                      secure = parts[3].upper() == "TRUE"
-                      expires = int(parts[4]) if parts[4].isdigit() else -1
-                      name = parts[5]
-                      value = parts[6]
-                      
-                      cookies.append({
-                          "name": name,
-                          "value": value,
-                          "domain": domain,
-                          "path": path,
-                          "secure": secure,
-                          "expires": expires,
-                          "httpOnly": False,
-                          "sameSite": "None"
-                      })
-              
-              print(f"Total cookies parsed: {len(cookies)}")
+              screenshot_before = f"login_before_{timestamp}.png"
+              screenshot_after = f"login_after_{timestamp}.png"
               
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp("http://localhost:9222")
                   context = await browser.new_context()
-                  
-                  # Set cookies ke context
-                  await context.add_cookies(cookies)
-                  print("Cookies berhasil di-set ke browser context.")
-                  
                   page = await context.new_page()
                   
-                  # Buka halaman Google Docs yang dilindungi login
+                  # 1. Buka halaman Google Vids (akan redirect ke login)
                   target_url = "https://docs.google.com/videos/u/4/"
                   print(f"Membuka {target_url}...")
-                  await page.goto(target_url, wait_until="networkidle")
+                  await page.goto(target_url, wait_until="domcontentloaded")
                   await page.wait_for_timeout(5000)
                   
-                  # Cek apakah login berhasil
                   current_url = page.url
-                  page_title = await page.title()
-                  print(f"URL saat ini: {current_url}")
-                  print(f"Judul halaman: {page_title}")
+                  print(f"URL setelah redirect: {current_url}")
                   
-                  # Deteksi apakah diarahkan ke halaman login
-                  is_logged_in = True
-                  if "accounts.google.com" in current_url or "signin" in current_url.lower():
-                      is_logged_in = False
-                      print("❌ LOGIN GAGAL: Dialihkan ke halaman login.")
-                  elif "docs.google.com" in current_url:
-                      print("✅ LOGIN BERHASIL: Berada di halaman Google Docs.")
+                  # 2. Screenshot halaman login sebelum diisi
+                  await page.screenshot(path=screenshot_before, full_page=True)
+                  print(f"Screenshot sebelum: {screenshot_before}")
+                  
+                  # 3. Cari field email dan isi
+                  print(f"Mengisi email: {email}")
+                  email_selectors = [
+                      'input[type="email"]',
+                      'input[name="identifier"]',
+                      'input[type="text"]',
+                      'input[aria-label*="Email"]',
+                      'input[aria-label*="email"]'
+                  ]
+                  
+                  email_filled = False
+                  for selector in email_selectors:
+                      try:
+                          await page.wait_for_selector(selector, timeout=3000)
+                          await page.fill(selector, email)
+                          email_filled = True
+                          print(f"Email diisi dengan selector: {selector}")
+                          break
+                      except:
+                          continue
+                  
+                  if not email_filled:
+                      print("⚠️ Field email tidak ditemukan.")
+                      await page.screenshot(path=screenshot_after, full_page=True)
                   else:
-                      print(f"⚠️ Status tidak pasti. URL: {current_url}")
-                  
-                  # Ambil screenshot
-                  await page.screenshot(path=screenshot_filename, full_page=True)
-                  print(f"Screenshot disimpan: {screenshot_filename}")
-                  
-                  # Simpan juga status login ke file teks
-                  status_filename = f"login_status_{timestamp}.txt"
-                  with open(status_filename, "w") as f:
-                      f.write(f"Status: {'BERHASIL' if is_logged_in else 'GAGAL'}\n")
-                      f.write(f"URL: {current_url}\n")
-                      f.write(f"Title: {page_title}\n")
-                      f.write(f"Timestamp: {timestamp}\n")
+                      # 4. Klik tombol Next
+                      print("Mengklik tombol Next...")
+                      next_selectors = [
+                          'button:has-text("Next")',
+                          'button:has-text("Berikutnya")',
+                          'button[type="submit"]',
+                          '#identifierNext'
+                      ]
+                      
+                      for selector in next_selectors:
+                          try:
+                              btn = page.locator(selector).first
+                              if await btn.count() > 0:
+                                  await btn.click()
+                                  print(f"Tombol Next diklik dengan selector: {selector}")
+                                  break
+                          except:
+                              continue
+                      
+                      # 5. Tunggu respons setelah klik Next
+                      await page.wait_for_timeout(5000)
+                      current_url_after = page.url
+                      print(f"URL setelah klik Next: {current_url_after}")
+                      
+                      await page.screenshot(path=screenshot_after, full_page=True)
+                      print(f"Screenshot setelah: {screenshot_after}")
                   
                   await browser.close()
               
               # === UPLOAD KE GITHUB RELEASE ===
               print("Mengupload ke GitHub Release...")
-              tag_name = f"google-login-{timestamp}"
+              tag_name = f"google-vids-test-{timestamp}"
               
               headers = {
                   "Authorization": f"token {github_token}",
@@ -141,8 +140,8 @@ jobs:
               
               release_data = {
                   "tag_name": tag_name,
-                  "name": f"Google Login Verify - {timestamp}",
-                  "body": f"Status: {'BERHASIL' if is_logged_in else 'GAGAL'}\nURL: {current_url}",
+                  "name": f"Google Vids Login Test - {timestamp}",
+                  "body": f"Email yang diuji: {email}\nTimestamp: {timestamp}",
                   "draft": False,
                   "prerelease": False
               }
@@ -154,13 +153,12 @@ jobs:
                   release = resp.json()
                   upload_url = release["upload_url"].replace("{?name,label}", "")
                   
-                  # Upload screenshot
-                  for filename in [screenshot_filename, status_filename]:
+                  for filename in [screenshot_before, screenshot_after]:
                       if os.path.exists(filename):
                           with open(filename, 'rb') as f:
                               upload_headers = {
                                   "Authorization": f"token {github_token}",
-                                  "Content-Type": "image/png" if filename.endswith(".png") else "text/plain"
+                                  "Content-Type": "image/png"
                               }
                               upload_resp = requests.post(
                                   f"{upload_url}?name={filename}",
@@ -181,7 +179,7 @@ jobs:
               asyncio.run(main())
           EOF
           
-          python verify_login.py
+          python test_login.py
 
       - name: Stop Fortress
         if: always()
