@@ -1,4 +1,4 @@
-name: Google Vids Login Test (Hardcoded)
+name: Google Vids Login - Wait for Manual Confirmation
 
 on:
   workflow_dispatch:
@@ -6,11 +6,12 @@ on:
       email:
         description: 'Email Google'
         required: true
-        default: 'kucingpaskib@gmail.com'
+        default: 'monscliped@gmail.com'
 
 jobs:
-  test:
+  login:
     runs-on: ubuntu-latest
+    timeout-minutes: 15          # Batas maksimal 15 menit (cukup untuk konfirmasi manual)
     permissions:
       contents: write
 
@@ -35,14 +36,14 @@ jobs:
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
 
-      - name: Test Google Vids Login
+      - name: Login and Wait for Confirmation
         env:
           TEST_EMAIL: ${{ github.event.inputs.email }}
           TEST_PASSWORD: "Muntakul1967#"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cat > test_login_password.py << 'EOF'
+          cat > login_wait.py << 'EOF'
           import asyncio
           import os
           import requests
@@ -65,11 +66,10 @@ jobs:
                   page = await context.new_page()
                   
                   # 1. Buka Google Vids (redirect ke login)
-                  target_url = "https://docs.google.com/videos/u/4/"
-                  print(f"Membuka {target_url}...")
-                  await page.goto(target_url, wait_until="domcontentloaded")
+                  print(f"Membuka https://docs.google.com/videos/u/4/ ...")
+                  await page.goto("https://docs.google.com/videos/u/4/", wait_until="domcontentloaded")
                   await page.wait_for_timeout(5000)
-                  print(f"URL setelah redirect: {page.url}")
+                  print(f"URL: {page.url}")
                   
                   # 2. Isi email
                   print(f"Mengisi email: {email}")
@@ -79,7 +79,6 @@ jobs:
                       'input[type="text"]',
                       'input[aria-label*="Email"]'
                   ]
-                  
                   email_filled = False
                   for selector in email_selectors:
                       try:
@@ -93,25 +92,16 @@ jobs:
                   
                   if not email_filled:
                       print("❌ Field email tidak ditemukan.")
-                      ss = f"error_email_{timestamp}.png"
-                      await page.screenshot(path=ss, full_page=True)
-                      screenshots.append(ss)
                       await browser.close()
                       return
                   
-                  ss1 = f"step1_email_{timestamp}.png"
-                  await page.screenshot(path=ss1, full_page=True)
-                  screenshots.append(ss1)
-                  
                   # 3. Klik Next
-                  print("Klik Next...")
                   next_selectors = [
                       'button:has-text("Next")',
                       'button:has-text("Berikutnya")',
                       'button[type="submit"]',
                       '#identifierNext'
                   ]
-                  
                   for selector in next_selectors:
                       try:
                           btn = page.locator(selector).first
@@ -123,13 +113,8 @@ jobs:
                           continue
                   
                   # 4. Tunggu halaman password
-                  print("Menunggu halaman password...")
                   await page.wait_for_timeout(5000)
-                  print(f"URL: {page.url}")
-                  
-                  ss2 = f"step2_password_{timestamp}.png"
-                  await page.screenshot(path=ss2, full_page=True)
-                  screenshots.append(ss2)
+                  print(f"URL setelah Next: {page.url}")
                   
                   # 5. Isi password
                   print("Mengisi password...")
@@ -139,7 +124,6 @@ jobs:
                       'input[aria-label*="password"]',
                       'input[aria-label*="Password"]'
                   ]
-                  
                   password_filled = False
                   for selector in password_selectors:
                       try:
@@ -153,18 +137,10 @@ jobs:
                   
                   if not password_filled:
                       print("❌ Field password tidak ditemukan.")
-                      ss = f"error_password_{timestamp}.png"
-                      await page.screenshot(path=ss, full_page=True)
-                      screenshots.append(ss)
                       await browser.close()
                       return
                   
-                  ss3 = f"step3_password_filled_{timestamp}.png"
-                  await page.screenshot(path=ss3, full_page=True)
-                  screenshots.append(ss3)
-                  
                   # 6. Klik Next untuk login
-                  print("Klik Next untuk login...")
                   for selector in next_selectors:
                       try:
                           btn = page.locator(selector).first
@@ -175,30 +151,58 @@ jobs:
                       except:
                           continue
                   
-                  # 7. Tunggu proses login
-                  print("Menunggu proses login...")
-                  await page.wait_for_timeout(10000)
+                  # 7. TUNGGU KONFIRMASI MANUAL (polling)
+                  print("=" * 60)
+                  print("MENUNGGU KONFIRMASI DARI HP ANDA...")
+                  print("Silakan buka notifikasi Google di HP Anda,")
+                  print("tap 'Yes' lalu tap angka yang muncul.")
+                  print("Script akan terus memeriksa setiap 5 detik.")
+                  print("=" * 60)
                   
-                  current_url = page.url
-                  page_title = await page.title()
-                  print(f"URL: {current_url}")
-                  print(f"Title: {page_title}")
+                  max_wait = 600          # Maksimal 10 menit
+                  elapsed = 0
+                  check_interval = 5      # Cek setiap 5 detik
                   
-                  # 8. Cek status login
-                  if "docs.google.com/videos" in current_url:
-                      is_logged_in = True
-                      print("✅ LOGIN BERHASIL")
-                  elif "accounts.google.com" in current_url:
-                      if "challenge" in current_url.lower():
-                          print("⚠️ VERIFIKASI DIPERLUKAN (2FA/CAPTCHA)")
-                      else:
-                          print("❌ LOGIN GAGAL: Masih di halaman login")
+                  while elapsed < max_wait:
+                      current_url = page.url
+                      title = await page.title()
+                      print(f"[{elapsed}s] URL: {current_url[:80]}... | Title: {title[:50]}")
+                      
+                      # Cek apakah sudah masuk Google Vids
+                      if "docs.google.com/videos" in current_url:
+                          is_logged_in = True
+                          print("✅ LOGIN BERHASIL! Konfirmasi diterima.")
+                          break
+                      
+                      # Cek apakah masih di halaman verifikasi
+                      if "accounts.google.com" in current_url:
+                          if "challenge" in current_url.lower() or "verify" in title.lower():
+                              # Masih menunggu konfirmasi
+                              pass
+                          else:
+                              print("⚠️ Masih di halaman login Google.")
+                      
+                      # Ambil screenshot berkala (setiap 1 menit)
+                      if elapsed % 60 == 0 and elapsed > 0:
+                          ss = f"waiting_{elapsed}s_{timestamp}.png"
+                          await page.screenshot(path=ss, full_page=True)
+                          screenshots.append(ss)
+                          print(f"📸 Screenshot progres: {ss}")
+                      
+                      await page.wait_for_timeout(check_interval * 1000)
+                      elapsed += check_interval
+                  
+                  # 8. Screenshot akhir
+                  final_ss = f"final_{timestamp}.png"
+                  await page.screenshot(path=final_ss, full_page=True)
+                  screenshots.append(final_ss)
+                  print(f"📸 Screenshot akhir: {final_ss}")
+                  print(f"URL akhir: {page.url}")
+                  
+                  if is_logged_in:
+                      print("🎉 BERHASIL masuk ke Google Vids!")
                   else:
-                      print(f"⚠️ Status tidak pasti: {current_url}")
-                  
-                  ss4 = f"step4_result_{timestamp}.png"
-                  await page.screenshot(path=ss4, full_page=True)
-                  screenshots.append(ss4)
+                      print("⏰ Waktu habis atau konfirmasi tidak diterima.")
                   
                   await browser.close()
               
@@ -214,45 +218,40 @@ jobs:
               release_data = {
                   "tag_name": tag_name,
                   "name": f"Google Vids Login - {timestamp}",
-                  "body": f"Email: {email}\nStatus: {'BERHASIL' if is_logged_in else 'GAGAL'}\nURL Akhir: {current_url}\nTimestamp: {timestamp}",
+                  "body": f"Email: {email}\nStatus: {'BERHASIL' if is_logged_in else 'MENUNGGU/GAGAL'}\nTimestamp: {timestamp}",
                   "draft": False,
                   "prerelease": False
               }
               
-              release_url = f"https://api.github.com/repos/{repo}/releases"
-              resp = requests.post(release_url, headers=headers, json=release_data)
+              resp = requests.post(
+                  f"https://api.github.com/repos/{repo}/releases",
+                  headers=headers,
+                  json=release_data
+              )
               
               if resp.status_code == 201:
-                  release = resp.json()
-                  upload_url = release["upload_url"].replace("{?name,label}", "")
-                  
+                  upload_url = resp.json()["upload_url"].replace("{?name,label}", "")
                   for filename in screenshots:
                       if os.path.exists(filename):
                           with open(filename, 'rb') as f:
-                              upload_headers = {
-                                  "Authorization": f"token {github_token}",
-                                  "Content-Type": "image/png"
-                              }
                               upload_resp = requests.post(
                                   f"{upload_url}?name={filename}",
-                                  headers=upload_headers,
+                                  headers={"Authorization": f"token {github_token}", "Content-Type": "image/png"},
                                   data=f
                               )
-                              
                               if upload_resp.status_code == 201:
                                   print(f"✅ {filename} diupload!")
                                   print(f"URL: {upload_resp.json()['browser_download_url']}")
                               else:
-                                  print(f"❌ Gagal upload {filename}: {upload_resp.status_code}")
+                                  print(f"❌ Gagal upload {filename}")
               else:
                   print(f"❌ Gagal buat release: {resp.status_code}")
-                  print(resp.text)
 
           if __name__ == "__main__":
               asyncio.run(main())
           EOF
           
-          python test_login_password.py
+          python login_wait.py
 
       - name: Stop Fortress
         if: always()
