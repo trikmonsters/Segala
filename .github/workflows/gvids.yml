@@ -1,4 +1,4 @@
-name: Google Vids Login - Show Verification Code in Log
+name: Google Vids Login - Show All Elements Real-Time
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
 jobs:
   login:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write
 
@@ -36,14 +36,14 @@ jobs:
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
 
-      - name: Login and Show Verification Code
+      - name: Login and Dump All Elements
         env:
           TEST_EMAIL: ${{ github.event.inputs.email }}
           TEST_PASSWORD: "Muntakul1967#"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          cat > login_show_code.py << 'EOF'
+          cat > dump_elements.py << 'EOF'
           import asyncio
           import os
           import re
@@ -51,81 +51,72 @@ jobs:
           from datetime import datetime
           from playwright.async_api import async_playwright
 
-          async def extract_verification_code(page):
-              """Ekstrak angka verifikasi dari halaman Google Prompt."""
-              code = None
-              candidates = []
-              
-              # === STRATEGI 1: Cari elemen dengan font besar (angka utama) ===
-              print("\n--- Strategi 1: Cari elemen font besar ---")
+          def write_summary(text, append=True):
+              """Tulis ke GitHub Step Summary."""
+              summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary_file:
+                  mode = "a" if append else "w"
+                  with open(summary_file, mode) as f:
+                      f.write(text + "\n")
+
+          async def dump_page_elements(page):
+              """Ambil SEMUA elemen teks di halaman dan kembalikan sebagai list."""
+              elements_data = []
               try:
-                  elements = await page.locator('div, span, p, h1, h2').all()
+                  # Ambil semua elemen yang punya teks langsung
+                  elements = await page.locator(
+                      'div, span, p, h1, h2, h3, h4, h5, h6, '
+                      'button, a, label, strong, b, em, li, td, th'
+                  ).all()
+                  
                   for el in elements:
                       try:
                           text = await el.inner_text()
                           text = text.strip()
-                          if re.fullmatch(r'\d{2}', text):
-                              font_size = await el.evaluate(
-                                  'el => window.getComputedStyle(el).fontSize'
-                              )
-                              size_px = int(font_size.replace('px', '')) if font_size else 0
-                              candidates.append((text, size_px))
-                              print(f"  Kandidat: '{text}' | font-size: {size_px}px")
-                              if size_px >= 40 and not code:
-                                  code = text
-                                  print(f"  ✅ Kode terpilih: {code} (font-size: {size_px}px)")
+                          if not text or len(text) > 100:
+                              continue
+                          
+                          # Ambil info tambahan
+                          tag = await el.evaluate('el => el.tagName')
+                          font_size = await el.evaluate(
+                              'el => window.getComputedStyle(el).fontSize'
+                          )
+                          size_px = int(font_size.replace('px', '')) if font_size else 0
+                          
+                          # Cek apakah hanya angka 2 digit
+                          is_code_candidate = bool(re.fullmatch(r'\d{2}', text))
+                          
+                          elements_data.append({
+                              "tag": tag,
+                              "text": text,
+                              "font_size": size_px,
+                              "is_code": is_code_candidate,
+                          })
                       except:
                           continue
               except Exception as e:
-                  print(f"  Error strategi 1: {e}")
+                  print(f"Error dump: {e}")
               
-              # === STRATEGI 2: Regex "tap XX" di body text ===
-              if not code:
-                  print("\n--- Strategi 2: Regex 'tap XX' ---")
-                  try:
-                      body_text = await page.inner_text('body')
-                      patterns = [
-                          r'tap\s+(\d{2})\s+on',
-                          r'tap\s+(\d{2})\s+di',
-                          r'ketuk\s+(\d{2})',
-                          r'pilih\s+(\d{2})',
-                          r'select\s+(\d{2})',
-                      ]
-                      for pat in patterns:
-                          match = re.search(pat, body_text, re.IGNORECASE)
-                          if match:
-                              code = match.group(1)
-                              print(f"  ✅ Kode ditemukan via regex '{pat}': {code}")
-                              break
-                  except Exception as e:
-                      print(f"  Error strategi 2: {e}")
-              
-              # === STRATEGI 3: Semua angka 2 digit sebagai fallback ===
-              if not code:
-                  print("\n--- Strategi 3: Semua angka 2 digit ---")
-                  try:
-                      body_text = await page.inner_text('body')
-                      matches = re.findall(r'\b(\d{2})\b', body_text)
-                      unique = list(dict.fromkeys(matches))
-                      print(f"  Semua angka 2 digit: {unique}")
-                      for m in unique:
-                          num = int(m)
-                          if 10 <= num <= 99:
-                              code = m
-                              print(f"  ⚠️ Kode kandidat (fallback): {code}")
-                              break
-                  except Exception as e:
-                      print(f"  Error strategi 3: {e}")
-              
-              # === RINGKASAN DEBUG ===
-              print("\n--- Ringkasan Kandidat ---")
-              if candidates:
-                  # Urutkan berdasarkan font size terbesar
-                  candidates.sort(key=lambda x: x[1], reverse=True)
-                  for text, size in candidates[:10]:
-                      print(f"  Angka: {text} | Font: {size}px")
-              
-              return code
+              # Urutkan: kandidat kode dulu (angka 2 digit, font besar)
+              elements_data.sort(
+                  key=lambda x: (not x["is_code"], -x["font_size"])
+              )
+              return elements_data
+
+          def format_elements(elements_data, title="ELEMEN HALAMAN"):
+              """Format elemen jadi teks untuk summary."""
+              lines = [f"### {title}", ""]
+              lines.append("| # | Tag | Teks | Font | Kandidat Kode |")
+              lines.append("|---|-----|------|------|---------------|")
+              for i, el in enumerate(elements_data[:50]):  # Batasi 50 elemen
+                  marker = "✅" if el["is_code"] else ""
+                  # Escape pipe di teks
+                  safe_text = el["text"].replace("|", "\\|")[:50]
+                  lines.append(
+                      f"| {i+1} | `{el['tag']}` | `{safe_text}` | "
+                      f"{el['font_size']}px | {marker} |"
+                  )
+              return "\n".join(lines)
 
           async def main():
               email = os.environ.get("TEST_EMAIL", "")
@@ -136,7 +127,17 @@ jobs:
               timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
               screenshots = []
               is_logged_in = False
-              verification_code = None
+              last_url = ""
+              last_element_count = 0
+              
+              # Inisialisasi summary
+              write_summary(
+                  f"# 🔐 Google Vids Login\n\n"
+                  f"**Email:** `{email}`\n"
+                  f"**Status:** ⏳ Berjalan...\n\n"
+                  f"---\n",
+                  append=False
+              )
               
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp("http://localhost:9222")
@@ -144,172 +145,212 @@ jobs:
                   page = await context.new_page()
                   
                   # 1. Buka Google Vids
-                  print(f"Membuka https://docs.google.com/videos/u/4/ ...")
+                  print(f"[INFO] Membuka https://docs.google.com/videos/u/4/ ...")
                   await page.goto(
                       "https://docs.google.com/videos/u/4/",
                       wait_until="domcontentloaded"
                   )
                   await page.wait_for_timeout(5000)
-                  print(f"URL: {page.url}")
+                  print(f"[INFO] URL: {page.url}")
                   
                   # 2. Isi email
-                  print(f"\nMengisi email: {email}")
-                  email_selectors = [
+                  print(f"[INFO] Mengisi email: {email}")
+                  for selector in [
                       'input[type="email"]',
                       'input[name="identifier"]',
                       'input[type="text"]',
                       'input[aria-label*="Email"]'
-                  ]
-                  email_filled = False
-                  for selector in email_selectors:
+                  ]:
                       try:
                           await page.wait_for_selector(selector, timeout=3000)
                           await page.fill(selector, email)
-                          email_filled = True
-                          print(f"✅ Email diisi: {selector}")
+                          print(f"[OK] Email diisi: {selector}")
                           break
                       except:
                           continue
                   
-                  if not email_filled:
-                      print("❌ Field email tidak ditemukan.")
-                      await browser.close()
-                      return
-                  
                   # 3. Klik Next
-                  next_selectors = [
+                  for selector in [
                       'button:has-text("Next")',
                       'button:has-text("Berikutnya")',
                       'button[type="submit"]',
                       '#identifierNext'
-                  ]
-                  for selector in next_selectors:
+                  ]:
                       try:
                           btn = page.locator(selector).first
                           if await btn.count() > 0:
                               await btn.click()
-                              print(f"✅ Next diklik: {selector}")
+                              print(f"[OK] Next diklik: {selector}")
                               break
                       except:
                           continue
                   
-                  # 4. Tunggu halaman password
                   await page.wait_for_timeout(5000)
-                  print(f"URL setelah Next: {page.url}")
                   
-                  # 5. Isi password
-                  print("\nMengisi password...")
-                  password_selectors = [
+                  # 4. Isi password
+                  print(f"[INFO] Mengisi password...")
+                  for selector in [
                       'input[type="password"]',
                       'input[name="password"]',
-                      'input[aria-label*="password"]',
-                      'input[aria-label*="Password"]'
-                  ]
-                  password_filled = False
-                  for selector in password_selectors:
+                      'input[aria-label*="password"]'
+                  ]:
                       try:
                           await page.wait_for_selector(selector, timeout=5000)
                           await page.fill(selector, password)
-                          password_filled = True
-                          print(f"✅ Password diisi: {selector}")
+                          print(f"[OK] Password diisi: {selector}")
                           break
                       except:
                           continue
                   
-                  if not password_filled:
-                      print("❌ Field password tidak ditemukan.")
-                      await browser.close()
-                      return
-                  
-                  # 6. Klik Next untuk login
-                  for selector in next_selectors:
+                  # 5. Klik Next
+                  for selector in [
+                      'button:has-text("Next")',
+                      'button:has-text("Berikutnya")',
+                      'button[type="submit"]',
+                      '#identifierNext'
+                  ]:
                       try:
                           btn = page.locator(selector).first
                           if await btn.count() > 0:
                               await btn.click()
-                              print(f"✅ Next diklik: {selector}")
+                              print(f"[OK] Next diklik: {selector}")
                               break
                       except:
                           continue
                   
-                  # 7. Tunggu halaman verifikasi muncul
-                  print("\nMenunggu halaman verifikasi...")
+                  # 6. Tunggu halaman verifikasi
+                  print(f"[INFO] Menunggu halaman verifikasi...")
                   await page.wait_for_timeout(8000)
-                  print(f"URL verifikasi: {page.url}")
-                  print(f"Title: {await page.title()}")
                   
-                  # === EKSTRAK KODE VERIFIKASI ===
-                  print("\n" + "=" * 60)
-                  print("MENCARI KODE VERIFIKASI DI HALAMAN...")
-                  print("=" * 60)
+                  # === LOOP UTAMA: DUMP ELEMEN REAL-TIME ===
+                  print("\n" + "=" * 70)
+                  print("MEMANTAU HALAMAN VERIFIKASI SECARA REAL-TIME")
+                  print("Semua elemen teks akan ditampilkan di Step Summary.")
+                  print("Silakan cek tab 'Summary' di halaman Actions.")
+                  print("=" * 70 + "\n")
                   
-                  verification_code = await extract_verification_code(page)
-                  
-                  print("\n" + "=" * 60)
-                  if verification_code:
-                      print(f"🔢 KODE VERIFIKASI: {verification_code}")
-                      print(f"👉 Silakan tap angka {verification_code} di HP Anda!")
-                  else:
-                      print("⚠️ Kode verifikasi tidak ditemukan otomatis.")
-                      print("Cek screenshot di bawah untuk melihat kode manual.")
-                  print("=" * 60)
-                  
-                  # Screenshot halaman verifikasi
-                  ss_verify = f"verification_{timestamp}.png"
-                  await page.screenshot(path=ss_verify, full_page=True)
-                  screenshots.append(ss_verify)
-                  print(f"📸 Screenshot: {ss_verify}")
-                  
-                  # === TUNGGU KONFIRMASI MANUAL ===
-                  print("\n" + "=" * 60)
-                  print("MENUNGGU KONFIRMASI DARI HP ANDA...")
-                  if verification_code:
-                      print(f"Tap 'Yes' lalu tap angka {verification_code} di HP.")
-                  else:
-                      print("Selesaikan verifikasi di HP Anda.")
-                  print("=" * 60)
-                  
-                  max_wait = 600
+                  max_wait = 900       # 15 menit
                   elapsed = 0
-                  check_interval = 5
+                  dump_interval = 10   # Dump setiap 10 detik
+                  last_dump_time = -999
                   
                   while elapsed < max_wait:
                       current_url = page.url
                       
+                      # Cek apakah sudah login
                       if "docs.google.com/videos" in current_url:
                           is_logged_in = True
-                          print(f"\n✅ LOGIN BERHASIL pada detik ke-{elapsed}!")
+                          print(f"\n[SUCCESS] LOGIN BERHASIL pada detik ke-{elapsed}!")
+                          write_summary(
+                              f"\n---\n\n## ✅ LOGIN BERHASIL\n\n"
+                              f"URL: `{current_url}`\n",
+                              append=True
+                          )
                           break
                       
-                      if elapsed % 30 == 0:
-                          print(f"[{elapsed}s] Masih menunggu... URL: {current_url[:80]}")
+                      # Dump elemen setiap interval
+                      if elapsed - last_dump_time >= dump_interval:
+                          last_dump_time = elapsed
+                          
+                          print(f"\n[{elapsed}s] URL: {current_url[:80]}")
+                          print(f"[{elapsed}s] Mengambil semua elemen...")
+                          
+                          elements_data = await dump_page_elements(page)
+                          print(f"[{elapsed}s] Total elemen: {len(elements_data)}")
+                          
+                          # Tampilkan kandidat kode di log
+                          code_candidates = [
+                              e for e in elements_data if e["is_code"]
+                          ]
+                          if code_candidates:
+                              print(f"[{elapsed}s] 🎯 Kandidat kode (angka 2 digit):")
+                              for c in code_candidates:
+                                  print(
+                                      f"    - '{c['text']}' "
+                                      f"(font: {c['font_size']}px, tag: {c['tag']})"
+                                  )
+                          
+                          # Tampilkan semua elemen di log (max 30)
+                          print(f"[{elapsed}s] Semua elemen (max 30):")
+                          for i, el in enumerate(elements_data[:30]):
+                              marker = "🎯" if el["is_code"] else "  "
+                              print(
+                                  f"  {marker} [{i+1}] <{el['tag']}> "
+                                  f"font={el['font_size']}px | '{el['text'][:60]}'"
+                              )
+                          
+                          # Update Step Summary
+                          write_summary(
+                              f"\n---\n\n"
+                              f"## ⏱️ Update @ {elapsed}s\n\n"
+                              f"**URL:** `{current_url[:100]}`\n\n"
+                              f"**Total elemen:** {len(elements_data)}\n\n"
+                              f"**Kandidat kode (angka 2 digit):** "
+                              f"{len(code_candidates)}\n\n",
+                              append=True
+                          )
+                          
+                          # Tabel elemen kandidat kode
+                          if code_candidates:
+                              write_summary(
+                                  "### 🎯 Kandidat Kode Verifikasi\n\n"
+                                  "| # | Angka | Font | Tag |\n"
+                                  "|---|-------|------|-----|\n",
+                                  append=True
+                              )
+                              for i, c in enumerate(code_candidates):
+                                  write_summary(
+                                      f"| {i+1} | **`{c['text']}`** | "
+                                      f"{c['font_size']}px | `{c['tag']}` |",
+                                      append=True
+                                  )
+                          
+                          # Tabel semua elemen (max 40)
+                          write_summary(
+                              f"\n<details>\n<summary>📋 Semua Elemen "
+                              f"(klik untuk expand)</summary>\n\n"
+                              f"| # | Tag | Teks | Font | Kode? |\n"
+                              f"|---|-----|------|------|-------|\n",
+                              append=True
+                          )
+                          for i, el in enumerate(elements_data[:40]):
+                              marker = "✅" if el["is_code"] else ""
+                              safe_text = el["text"].replace("|", "\\|").replace(
+                                  "\n", " "
+                              )[:60]
+                              write_summary(
+                                  f"| {i+1} | `{el['tag']}` | `{safe_text}` | "
+                                  f"{el['font_size']}px | {marker} |",
+                                  append=True
+                              )
+                          write_summary("</details>\n", append=True)
+                          
+                          # Screenshot setiap 2 menit
+                          if elapsed > 0 and elapsed % 120 == 0:
+                              ss = f"progress_{elapsed}s_{timestamp}.png"
+                              await page.screenshot(path=ss, full_page=True)
+                              screenshots.append(ss)
+                              print(f"[{elapsed}s] 📸 Screenshot: {ss}")
                       
-                      # Screenshot berkala setiap 1 menit
-                      if elapsed % 60 == 0 and elapsed > 0:
-                          ss = f"waiting_{elapsed}s_{timestamp}.png"
-                          await page.screenshot(path=ss, full_page=True)
-                          screenshots.append(ss)
-                          print(f"📸 Screenshot progres: {ss}")
-                      
-                      await page.wait_for_timeout(check_interval * 1000)
-                      elapsed += check_interval
+                      await page.wait_for_timeout(5000)
+                      elapsed += 5
                   
                   # Screenshot akhir
                   final_ss = f"final_{timestamp}.png"
                   await page.screenshot(path=final_ss, full_page=True)
                   screenshots.append(final_ss)
-                  print(f"\n📸 Screenshot akhir: {final_ss}")
-                  print(f"URL akhir: {page.url}")
+                  print(f"\n[INFO] Screenshot akhir: {final_ss}")
+                  print(f"[INFO] URL akhir: {page.url}")
                   
                   if is_logged_in:
-                      print("🎉 BERHASIL masuk ke Google Vids!")
+                      print("[SUCCESS] 🎉 BERHASIL masuk ke Google Vids!")
                   else:
-                      print("⏰ Waktu habis atau konfirmasi tidak diterima.")
+                      print("[TIMEOUT] ⏰ Waktu habis.")
                   
                   await browser.close()
               
-              # === UPLOAD KE GITHUB RELEASE ===
-              print("\nUpload ke GitHub Release...")
+              # Upload ke Release
+              print("\n[INFO] Upload ke GitHub Release...")
               tag_name = f"google-vids-login-{timestamp}"
               
               headers = {
@@ -318,23 +359,18 @@ jobs:
               }
               
               body_text = f"Email: {email}\n"
-              body_text += f"Status: {'BERHASIL' if is_logged_in else 'MENUNGGU/GAGAL'}\n"
-              if verification_code:
-                  body_text += f"Kode Verifikasi: {verification_code}\n"
-              body_text += f"Timestamp: {timestamp}"
-              
-              release_data = {
-                  "tag_name": tag_name,
-                  "name": f"Google Vids Login - {timestamp}",
-                  "body": body_text,
-                  "draft": False,
-                  "prerelease": False
-              }
+              body_text += f"Status: {'BERHASIL' if is_logged_in else 'TIMEOUT'}\n"
               
               resp = requests.post(
                   f"https://api.github.com/repos/{repo}/releases",
                   headers=headers,
-                  json=release_data
+                  json={
+                      "tag_name": tag_name,
+                      "name": f"Google Vids Login - {timestamp}",
+                      "body": body_text,
+                      "draft": False,
+                      "prerelease": False
+                  }
               )
               
               if resp.status_code == 201:
@@ -351,18 +387,15 @@ jobs:
                                   data=f
                               )
                               if upload_resp.status_code == 201:
-                                  print(f"✅ {filename} diupload!")
-                                  print(f"URL: {upload_resp.json()['browser_download_url']}")
-                              else:
-                                  print(f"❌ Gagal upload {filename}")
+                                  print(f"[OK] {filename} diupload!")
               else:
-                  print(f"❌ Gagal buat release: {resp.status_code}")
+                  print(f"[ERROR] Gagal buat release: {resp.status_code}")
 
           if __name__ == "__main__":
               asyncio.run(main())
           EOF
           
-          python login_show_code.py
+          python dump_elements.py
 
       - name: Stop Fortress
         if: always()
