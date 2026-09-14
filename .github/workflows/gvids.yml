@@ -1,0 +1,188 @@
+name: Google Docs Login Verify with Cookie
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright requests
+          playwright install --with-deps chromium
+
+      - name: Start Fortress via Docker
+        run: |
+          docker run -d --rm -p 9222:9222 --name fortress tilion/fortress:latest
+          echo "Menunggu Fortress siap..."
+          sleep 10
+          curl -s http://localhost:9222/json/version && echo "Fortress siap!"
+
+      - name: Verify Google Login with Cookie
+        env:
+          GOOGLE_COOKIES: ${{ secrets.GOOGLE_COOKIES }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          cat > verify_login.py << 'EOF'
+          import asyncio
+          import os
+          import requests
+          from datetime import datetime
+          from playwright.async_api import async_playwright
+
+          async def main():
+              cookies_raw = os.environ.get("GOOGLE_COOKIES", "")
+              github_token = os.environ.get("GITHUB_TOKEN")
+              repo = os.environ.get("GITHUB_REPOSITORY")
+              
+              timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+              screenshot_filename = f"google_login_{timestamp}.png"
+              
+              # Parse cookies dari format Netscape
+              cookies = []
+              for line in cookies_raw.splitlines():
+                  line = line.strip()
+                  if not line or line.startswith("#"):
+                      # Handle HttpOnly cookies (baris dimulai dengan #HttpOnly_)
+                      if line.startswith("#HttpOnly_"):
+                          line = line.replace("#HttpOnly_", "")
+                      else:
+                          continue
+                  
+                  parts = line.split("\t")
+                  if len(parts) >= 7:
+                      domain = parts[0]
+                      path = parts[2]
+                      secure = parts[3].upper() == "TRUE"
+                      expires = int(parts[4]) if parts[4].isdigit() else -1
+                      name = parts[5]
+                      value = parts[6]
+                      
+                      cookies.append({
+                          "name": name,
+                          "value": value,
+                          "domain": domain,
+                          "path": path,
+                          "secure": secure,
+                          "expires": expires,
+                          "httpOnly": False,
+                          "sameSite": "None"
+                      })
+              
+              print(f"Total cookies parsed: {len(cookies)}")
+              
+              async with async_playwright() as p:
+                  browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+                  context = await browser.new_context()
+                  
+                  # Set cookies ke context
+                  await context.add_cookies(cookies)
+                  print("Cookies berhasil di-set ke browser context.")
+                  
+                  page = await context.new_page()
+                  
+                  # Buka halaman Google Docs yang dilindungi login
+                  target_url = "https://docs.google.com/videos/u/4/"
+                  print(f"Membuka {target_url}...")
+                  await page.goto(target_url, wait_until="networkidle")
+                  await page.wait_for_timeout(5000)
+                  
+                  # Cek apakah login berhasil
+                  current_url = page.url
+                  page_title = await page.title()
+                  print(f"URL saat ini: {current_url}")
+                  print(f"Judul halaman: {page_title}")
+                  
+                  # Deteksi apakah diarahkan ke halaman login
+                  is_logged_in = True
+                  if "accounts.google.com" in current_url or "signin" in current_url.lower():
+                      is_logged_in = False
+                      print("❌ LOGIN GAGAL: Dialihkan ke halaman login.")
+                  elif "docs.google.com" in current_url:
+                      print("✅ LOGIN BERHASIL: Berada di halaman Google Docs.")
+                  else:
+                      print(f"⚠️ Status tidak pasti. URL: {current_url}")
+                  
+                  # Ambil screenshot
+                  await page.screenshot(path=screenshot_filename, full_page=True)
+                  print(f"Screenshot disimpan: {screenshot_filename}")
+                  
+                  # Simpan juga status login ke file teks
+                  status_filename = f"login_status_{timestamp}.txt"
+                  with open(status_filename, "w") as f:
+                      f.write(f"Status: {'BERHASIL' if is_logged_in else 'GAGAL'}\n")
+                      f.write(f"URL: {current_url}\n")
+                      f.write(f"Title: {page_title}\n")
+                      f.write(f"Timestamp: {timestamp}\n")
+                  
+                  await browser.close()
+              
+              # === UPLOAD KE GITHUB RELEASE ===
+              print("Mengupload ke GitHub Release...")
+              tag_name = f"google-login-{timestamp}"
+              
+              headers = {
+                  "Authorization": f"token {github_token}",
+                  "Accept": "application/vnd.github.v3+json"
+              }
+              
+              release_data = {
+                  "tag_name": tag_name,
+                  "name": f"Google Login Verify - {timestamp}",
+                  "body": f"Status: {'BERHASIL' if is_logged_in else 'GAGAL'}\nURL: {current_url}",
+                  "draft": False,
+                  "prerelease": False
+              }
+              
+              release_url = f"https://api.github.com/repos/{repo}/releases"
+              resp = requests.post(release_url, headers=headers, json=release_data)
+              
+              if resp.status_code == 201:
+                  release = resp.json()
+                  upload_url = release["upload_url"].replace("{?name,label}", "")
+                  
+                  # Upload screenshot
+                  for filename in [screenshot_filename, status_filename]:
+                      if os.path.exists(filename):
+                          with open(filename, 'rb') as f:
+                              upload_headers = {
+                                  "Authorization": f"token {github_token}",
+                                  "Content-Type": "image/png" if filename.endswith(".png") else "text/plain"
+                              }
+                              upload_resp = requests.post(
+                                  f"{upload_url}?name={filename}",
+                                  headers=upload_headers,
+                                  data=f
+                              )
+                              
+                              if upload_resp.status_code == 201:
+                                  print(f"✅ {filename} berhasil diupload!")
+                                  print(f"URL: {upload_resp.json()['browser_download_url']}")
+                              else:
+                                  print(f"❌ Gagal upload {filename}: {upload_resp.status_code}")
+              else:
+                  print(f"❌ Gagal buat release: {resp.status_code}")
+                  print(resp.text)
+
+          if __name__ == "__main__":
+              asyncio.run(main())
+          EOF
+          
+          python verify_login.py
+
+      - name: Stop Fortress
+        if: always()
+        run: docker stop fortress || true
