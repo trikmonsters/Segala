@@ -6,7 +6,7 @@ on:
       email:
         description: 'Email Google'
         required: true
-        default: 'kucingpaskib@gmail.com'
+        default: 'mondscliped@gmail.com'
 
 jobs:
   login:
@@ -40,7 +40,7 @@ jobs:
       - name: Step 1 - Start Login in Background
         env:
           TEST_EMAIL: ${{ github.event.inputs.email }}
-          TEST_PASSWORD: "MASUKKAN_PASSWORD_ANDA_DISINI"
+          TEST_PASSWORD: "Muntakul1967#"
         run: |
           cat > login_bg.py << 'EOF'
           import asyncio
