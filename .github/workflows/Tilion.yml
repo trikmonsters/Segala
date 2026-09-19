@@ -1,4 +1,4 @@
-name: Google Vids Login - Stream to Log
+name: Google Vids Login - Stream to Log (Fixed)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       email:
         description: 'Email Google'
         required: true
-        default: 'mondscliped@gmail.com'
+        default: 'monscliped@gmail.com'
 
 jobs:
   login:
@@ -47,17 +47,15 @@ jobs:
           import os
           import re
           import json
-          import sys
           from datetime import datetime
+          from urllib.parse import urlparse
           from playwright.async_api import async_playwright
 
-          # File untuk komunikasi antar step
           STATE_FILE = "/tmp/login_state.json"
           LOG_FILE = "/tmp/login_log.txt"
           ELEMENTS_FILE = "/tmp/elements.json"
 
           def log(msg):
-              """Tulis ke log file DAN stdout, flush langsung."""
               timestamp = datetime.now().strftime("%H:%M:%S")
               line = f"[{timestamp}] {msg}"
               print(line, flush=True)
@@ -67,6 +65,25 @@ jobs:
           def save_state(state):
               with open(STATE_FILE, "w") as f:
                   json.dump(state, f)
+
+          def is_logged_in_url(url):
+              """Cek apakah URL benar-benar di docs.google.com/videos."""
+              try:
+                  parsed = urlparse(url)
+                  host = parsed.hostname or ""
+                  path = parsed.path or ""
+                  # Harus hostname docs.google.com DAN path mengandung /videos
+                  return host == "docs.google.com" and "/videos" in path
+              except:
+                  return False
+
+          def is_verification_page(url, title):
+              """Cek apakah ini halaman verifikasi."""
+              if "accounts.google.com" not in url:
+                  return False
+              title_lower = (title or "").lower()
+              keywords = ["verify", "challenge", "confirm", "sign in", "2-step", "security"]
+              return any(k in title_lower for k in keywords) or "challenge" in url.lower()
 
           async def dump_page_elements(page):
               elements_data = []
@@ -104,9 +121,7 @@ jobs:
               email = os.environ.get("TEST_EMAIL", "")
               password = os.environ.get("TEST_PASSWORD", "")
               
-              # Reset log
               open(LOG_FILE, "w").close()
-              
               save_state({"status": "starting", "url": "", "logged_in": False})
               
               async with async_playwright() as p:
@@ -184,69 +199,84 @@ jobs:
                   # 6. Tunggu halaman verifikasi
                   log("Menunggu halaman verifikasi...")
                   await page.wait_for_timeout(8000)
-                  log(f"URL verifikasi: {page.url}")
+                  
+                  current_url = page.url
+                  current_title = await page.title()
+                  log(f"URL verifikasi: {current_url}")
+                  log(f"Title: {current_title}")
+                  log(f"is_logged_in? {is_logged_in_url(current_url)}")
+                  log(f"is_verification? {is_verification_page(current_url, current_title)}")
                   
                   save_state({
                       "status": "waiting",
-                      "url": page.url,
+                      "url": current_url,
+                      "title": current_title,
                       "logged_in": False
                   })
                   
-                  # === LOOP UTAMA: DUMP SETIAP 10 DETIK ===
+                  # === LOOP UTAMA ===
                   max_wait = 900
                   elapsed = 0
                   last_dump = -999
                   
                   while elapsed < max_wait:
                       current_url = page.url
+                      current_title = await page.title()
+                      logged_in = is_logged_in_url(current_url)
+                      
+                      # Cek login BERHASIL (hostname harus docs.google.com)
+                      if logged_in:
+                          log(f"✅ LOGIN BERHASIL pada detik ke-{elapsed}!")
+                          log(f"   URL: {current_url}")
+                          save_state({
+                              "status": "success",
+                              "url": current_url,
+                              "title": current_title,
+                              "logged_in": True,
+                              "elapsed": elapsed
+                          })
+                          break
                       
                       # Update state
                       save_state({
                           "status": "waiting",
                           "url": current_url,
+                          "title": current_title,
                           "logged_in": False,
                           "elapsed": elapsed
                       })
-                      
-                      # Cek login berhasil
-                      if "docs.google.com/videos" in current_url:
-                          log(f"LOGIN BERHASIL pada detik ke-{elapsed}!")
-                          save_state({
-                              "status": "success",
-                              "url": current_url,
-                              "logged_in": True,
-                              "elapsed": elapsed
-                          })
-                          break
                       
                       # Dump elemen setiap 10 detik
                       if elapsed - last_dump >= 10:
                           last_dump = elapsed
                           
                           log(f"--- Dump @ {elapsed}s ---")
+                          log(f"    URL: {current_url[:100]}")
+                          log(f"    Title: {current_title}")
+                          
                           elements_data = await dump_page_elements(page)
                           
-                          # Simpan ke file
                           with open(ELEMENTS_FILE, "w") as f:
                               json.dump({
                                   "elapsed": elapsed,
                                   "url": current_url,
+                                  "title": current_title,
                                   "elements": elements_data
                               }, f, indent=2)
                           
-                          # Print kandidat kode ke log
                           code_candidates = [
                               e for e in elements_data if e["is_code"]
                           ]
                           if code_candidates:
-                              log(f"KANDIDAT KODE ({len(code_candidates)}):")
+                              log(f"🎯 KANDIDAT KODE ({len(code_candidates)}):")
                               for c in code_candidates:
-                                  log(f"  >>> {c['text']} <<< "
+                                  log(f"   >>> {c['text']} <<< "
                                       f"(font {c['font_size']}px, {c['tag']})")
+                          else:
+                              log("   (Tidak ada kandidat kode 2 digit)")
                           
-                          # Print semua elemen ke log (max 20)
-                          log(f"Semua elemen ({len(elements_data)}, max 20):")
-                          for i, el in enumerate(elements_data[:20]):
+                          log(f"Semua elemen ({len(elements_data)}, max 15):")
+                          for i, el in enumerate(elements_data[:15]):
                               marker = ">>" if el["is_code"] else "  "
                               log(f"  {marker} [{i+1}] <{el['tag']}> "
                                   f"font={el['font_size']}px | '{el['text'][:50]}'")
@@ -255,16 +285,15 @@ jobs:
                       elapsed += 5
                   
                   # Screenshot akhir
-                  await page.screenshot(
-                      path=f"/tmp/final.png", full_page=True
-                  )
+                  await page.screenshot(path="/tmp/final.png", full_page=True)
                   
                   if elapsed >= max_wait:
-                      log(f"TIMEOUT setelah {elapsed}s")
+                      log(f"⏰ TIMEOUT setelah {elapsed}s")
                       save_state({
                           "status": "timeout",
                           "url": page.url,
-                          "logged_in": False
+                          "logged_in": False,
+                          "elapsed": elapsed
                       })
                   
                   await browser.close()
@@ -273,44 +302,37 @@ jobs:
               asyncio.run(main())
           EOF
           
-          # Jalankan di background
           nohup python login_bg.py > /tmp/login_bg.log 2>&1 &
           echo "Login script berjalan di background (PID: $!)"
 
-      # ===== STEP 2: TUNGGU SEBENTAR, LALU TAMPILKAN LOG =====
+      # ===== STEP 2: TUNGGU AWAL =====
       - name: Step 2 - Show Initial Log
         if: always()
         run: |
-          echo "Menunggu 60 detik agar login sampai halaman verifikasi..."
-          sleep 60
-          echo "=== LOG SAAT INI ==="
+          echo "Menunggu 45 detik..."
+          sleep 45
+          echo "=== LOG ==="
           cat /tmp/login_log.txt 2>/dev/null || echo "Log belum ada"
-          echo ""
-          echo "=== ELEMENTS ==="
-          cat /tmp/elements.json 2>/dev/null | head -100 || echo "Elements belum ada"
 
-      # ===== STEP 3: LOOP MONITORING (LIHAT LOG BERKALA) =====
+      # ===== STEP 3: MONITORING LOOP =====
       - name: Step 3 - Monitor Loop
         if: always()
         run: |
-          # Loop 12 kali, setiap 30 detik, tampilkan log
-          for i in $(seq 1 12); do
+          for i in $(seq 1 20); do
             echo ""
             echo "═══════════════════════════════════════"
             echo "MONITORING ROUND $i @ $(date +%H:%M:%S)"
             echo "═══════════════════════════════════════"
             
-            # Cek state
             if [ -f /tmp/login_state.json ]; then
               echo "--- STATE ---"
               cat /tmp/login_state.json
               echo ""
             fi
             
-            # Tampilkan log terbaru
             if [ -f /tmp/login_log.txt ]; then
-              echo "--- LOG (20 baris terakhir) ---"
-              tail -20 /tmp/login_log.txt
+              echo "--- LOG (15 baris terakhir) ---"
+              tail -15 /tmp/login_log.txt
             fi
             
             # Tampilkan kandidat kode
@@ -324,19 +346,23 @@ jobs:
                   data = json.load(f)
               codes = [e for e in data['elements'] if e.get('is_code')]
               print(f'Elapsed: {data[\"elapsed\"]}s')
-              for c in codes[:5]:
-                  print(f'  🎯 {c[\"text\"]} (font {c[\"font_size\"]}px)')
+              print(f'Title: {data.get(\"title\",\"\")}')
+              if codes:
+                  for c in codes[:5]:
+                      print(f'  🎯 {c[\"text\"]} (font {c[\"font_size\"]}px)')
+              else:
+                  print('  (tidak ada kandidat)')
           except Exception as e:
               print(f'Error: {e}')
-          " 2>/dev/null || echo "Belum ada kandidat"
+          " 2>/dev/null
             fi
             
-            # Cek apakah sudah login
+            # Cek status
             if [ -f /tmp/login_state.json ]; then
               STATUS=$(python3 -c "import json; print(json.load(open('/tmp/login_state.json')).get('status',''))" 2>/dev/null)
               if [ "$STATUS" = "success" ]; then
                 echo ""
-                echo "🎉 LOGIN BERHASIL! Berhenti monitoring."
+                echo "🎉 LOGIN BERHASIL!"
                 break
               fi
             fi
@@ -344,7 +370,7 @@ jobs:
             sleep 30
           done
 
-      # ===== STEP 4: TAMPILKAN HASIL AKHIR =====
+      # ===== STEP 4: HASIL AKHIR =====
       - name: Step 4 - Final Result
         if: always()
         run: |
@@ -354,9 +380,9 @@ jobs:
           cat /tmp/login_state.json 2>/dev/null
           echo ""
           echo "--- LOG LENGKAP ---"
-          cat /tmp/login_log.txt 2>/dev/null || echo "Log tidak ditemukan"
+          cat /tmp/login_log.txt 2>/dev/null
 
-      # ===== STEP 5: UPLOAD SCREENSHOT KE RELEASE =====
+      # ===== STEP 5: UPLOAD SCREENSHOT =====
       - name: Step 5 - Upload to Release
         if: always()
         env:
@@ -365,16 +391,12 @@ jobs:
         run: |
           if [ -f /tmp/final.png ]; then
             TAG="google-vids-$(date +%Y%m%d_%H%M%S)"
-            
-            # Buat release
             RELEASE_RESP=$(curl -s -X POST \
               -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
               https://api.github.com/repos/$GITHUB_REPOSITORY/releases \
               -d "{\"tag_name\":\"$TAG\",\"name\":\"Google Vids Login\",\"body\":\"Auto-generated\"}")
-            
             UPLOAD_URL=$(echo "$RELEASE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))" 2>/dev/null)
-            
             if [ -n "$UPLOAD_URL" ]; then
               curl -s -X POST \
                 -H "Authorization: token $GITHUB_TOKEN" \
