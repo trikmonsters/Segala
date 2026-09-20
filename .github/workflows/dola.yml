@@ -1,0 +1,64 @@
+name: Scrape and Release Screenshot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: Run Playwright script
+        run: |
+          cat > scrape.js << 'EOF'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage({
+              viewport: { width: 1280, height: 800 }
+            });
+
+            await page.goto('https://dola.kucingpaskib.workers.dev/', {
+              waitUntil: 'networkidle',
+              timeout: 60000
+            });
+
+            await page.waitForTimeout(3000);
+
+            await page.screenshot({
+              path: 'screenshot.png',
+              fullPage: true
+            });
+
+            await browser.close();
+            console.log('Screenshot saved.');
+          })();
+          EOF
+          node scrape.js
+
+      - name: Get timestamp
+        id: timestamp
+        run: echo "ts=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: screenshot-${{ steps.timestamp.outputs.ts }}
+          name: Screenshot ${{ steps.timestamp.outputs.ts }}
+          files: screenshot.png
+          token: ${{ secrets.GITHUB_TOKEN }}
