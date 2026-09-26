@@ -19,6 +19,7 @@ on:
         description: "Jumlah job paralel untuk membagi frame"
         required: false
         default: "5"
+  
 
 env:
   BLENDER_VERSION: "4.2.3"
@@ -30,8 +31,6 @@ env:
   SHARDS: ${{ github.event.inputs.shards || '5' }}
 
 jobs:
-  # Job kecil hanya untuk menghasilkan daftar shard index [0, 1, 2, ...]
-  # dipakai sebagai matrix di job render.
   plan:
     runs-on: ubuntu-latest
     outputs:
@@ -79,9 +78,6 @@ jobs:
       - name: Download HDRI environment
         run: curl -fL -o assets/studio.hdr "${HDRI_URL}"
 
-      # Hitung frame awal/akhir untuk shard ini. Animasi (posisi objek per t)
-      # tetap dihitung berdasarkan TOTAL_FRAMES supaya gerakan mulus dan
-      # tersambung antar shard, hanya rentang frame yang di-render dibagi.
       - name: Compute frame range for this shard
         id: range
         run: |
@@ -115,7 +111,6 @@ jobs:
           bpy.ops.wm.read_factory_settings(use_empty=True)
           scene = bpy.context.scene
 
-          # ---------- World: HDRI environment lighting ----------
           world = bpy.data.worlds.new("World")
           scene.world = world
           world.use_nodes = True
@@ -135,14 +130,13 @@ jobs:
           nt.links.new(env_tex.outputs['Color'], background.inputs['Color'])
           nt.links.new(background.outputs['Background'], world_out.inputs['Surface'])
 
-          # ---------- Render settings (dioptimalkan untuk kecepatan) ----------
           scene.render.engine = 'CYCLES'
           scene.cycles.device = 'CPU'
           scene.cycles.samples = SAMPLES
           scene.cycles.use_denoising = True
           scene.cycles.use_adaptive_sampling = True
-          scene.cycles.adaptive_threshold = 0.05  # berhenti lebih cepat kalau sudah cukup bersih
-          scene.render.use_persistent_data = True  # hindari rebuild BVH tiap frame
+          scene.cycles.adaptive_threshold = 0.05
+          scene.render.use_persistent_data = True
 
           scene.render.resolution_x = RES
           scene.render.resolution_y = RES
@@ -153,12 +147,9 @@ jobs:
           scene.view_settings.view_transform = 'AgX'
           scene.view_settings.look = 'AgX - Medium High Contrast'
 
-          # frame_start/frame_end HANYA menentukan rentang yang dirender
-          # shard ini, tapi animasi 't' tetap dihitung dari TOTAL_FRAMES.
           scene.frame_start = SHARD_START
           scene.frame_end = SHARD_END
 
-          # ---------- Hero object ----------
           bpy.ops.mesh.primitive_torus_add(
               major_radius=2.0, minor_radius=0.5,
               major_segments=96, minor_segments=32,
@@ -177,7 +168,6 @@ jobs:
           bsdf.inputs['Roughness'].default_value = 0.18
           hero.data.materials.append(mat)
 
-          # ---------- Orbiting glass spheres ----------
           glass_mat = bpy.data.materials.new(name="Glass")
           glass_mat.use_nodes = True
           gbsdf = glass_mat.node_tree.nodes.get('Principled BSDF')
@@ -199,7 +189,6 @@ jobs:
               sph.data.materials.append(glass_mat)
               orbiters.append((sph, angle, z))
 
-          # ---------- Accent emission ring ----------
           emit_mat = bpy.data.materials.new(name="AccentGlow")
           emit_mat.use_nodes = True
           enodes = emit_mat.node_tree.nodes
@@ -218,7 +207,6 @@ jobs:
           ring = bpy.context.active_object
           ring.data.materials.append(emit_mat)
 
-          # ---------- Camera ----------
           bpy.ops.object.camera_add(location=(0, -8.5, 2.6))
           cam = bpy.context.active_object
           cam.rotation_euler = (math.radians(74), 0, 0)
@@ -228,7 +216,6 @@ jobs:
           cam.data.lens = 70
           scene.camera = cam
 
-          # ---------- Lights ----------
           bpy.ops.object.light_add(type='AREA', location=(5, -3, 6))
           key = bpy.context.active_object
           key.data.energy = 500
@@ -240,10 +227,9 @@ jobs:
           rim.data.size = 3
           rim.data.color = (0.6, 0.8, 1.0)
 
-          # ---------- Animate & render only this shard's frame range ----------
           for frame in range(SHARD_START, SHARD_END + 1):
               scene.frame_set(frame)
-              t = (frame - 1) / (TOTAL_FRAMES - 1)  # posisi global 0..1
+              t = (frame - 1) / (TOTAL_FRAMES - 1)
 
               hero.rotation_euler = (
                   math.sin(t * math.tau) * 0.15,
@@ -294,12 +280,26 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # ============================================================
+      # PERBAIKAN: Ubah merge-multiple menjadi false
+      # agar file dari tiap shard diunduh ke folder terpisah dulu.
+      # ============================================================
       - name: Download all frame shards
         uses: actions/download-artifact@v4
         with:
           pattern: frames-shard-*
-          path: all_frames
-          merge-multiple: true
+          path: all_frames_downloads
+          merge-multiple: false
+
+      # ============================================================
+      # PERBAIKAN: Gabungkan manual pakai find + cp
+      # Ini mencegah file corrupt akibat merge otomatis GitHub.
+      # ============================================================
+      - name: Merge frames into one folder
+        run: |
+          mkdir -p all_frames
+          find all_frames_downloads -name 'frame_*.png' -exec cp {} all_frames/ \;
+          echo "Total frames merged: $(ls all_frames/frame_*.png 2>/dev/null | wc -l)"
 
       - name: Verify frames
         run: |
@@ -313,10 +313,6 @@ jobs:
       - name: Convert PNG frames to MP4
         run: |
           mkdir -p output
-          # FIX: pakai glob, bukan pattern numerik %04d. %04d mengharuskan
-          # file pertama bernama index 0000 (frame_0000.png) atau ffmpeg
-          # gagal "no file with path ... in range 0-4" walau semua frame
-          # sebenarnya ada dan berurutan. Glob tidak punya masalah itu.
           ffmpeg -y -framerate 30 \
             -pattern_type glob -i 'all_frames/frame_*.png' \
             -c:v libx264 -pix_fmt yuv420p \
@@ -328,11 +324,11 @@ jobs:
         with:
           name: video-mp4
           path: output/creative_animation.mp4
-          retention-days: 14
+          retention-days: 3
 
       - name: Upload merged frames
         uses: actions/upload-artifact@v4
         with:
           name: frames-png-merged
           path: all_frames/
-          retention-days: 14
+          retention-days: 3
