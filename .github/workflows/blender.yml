@@ -1,13 +1,27 @@
-name: Blender 3D Render to Video
+name: Blender 3D Pro Render (Image + Video)
 
 on:
   workflow_dispatch:
+    inputs:
+      frame_end:
+        description: "Frame terakhir animasi"
+        required: false
+        default: "150"
+      samples:
+        description: "Jumlah Cycles samples (kualitas vs waktu render)"
+        required: false
+        default: "60"
   
+
+env:
+  BLENDER_VERSION: "4.2.3"
+  BLENDER_SERIES: "4.2"
+  HDRI_URL: "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr"
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -16,174 +30,244 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      - name: Cache Blender install
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: /opt/blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+
+      - name: Download & install Blender
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o blender.tar.xz \
+            "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          mkdir -p /opt/blender
+          tar -xJf blender.tar.xz -C /opt/blender --strip-components=1
+
+      - name: Add Blender to PATH
+        run: echo "/opt/blender" >> "$GITHUB_PATH"
+
+      - name: Verify Blender version
+        run: blender --version
+
+      - name: Prepare folders
+        run: mkdir -p assets output/frames output/stills
+
+      # Environment HDRI bikin refleksi & lighting jauh lebih realistis
+      # dibanding cuma world background flat color.
+      - name: Download HDRI environment
+        run: curl -fL -o assets/studio.hdr "${HDRI_URL}"
+
       - name: Write Blender script
         run: |
           cat > generate_scene.py << 'PYEOF'
           import bpy
           import math
           import random
-          from mathutils import Vector
+          import os
 
-          # ---------- Reset ke scene kosong ----------
+          random.seed(7)
+
+          FRAME_END = int(os.environ.get("FRAME_END", "150"))
+          SAMPLES = int(os.environ.get("SAMPLES", "128"))
+
           bpy.ops.wm.read_factory_settings(use_empty=True)
           scene = bpy.context.scene
 
-          # ---------- World ----------
+          # ---------- World: HDRI environment lighting ----------
           world = bpy.data.worlds.new("World")
           scene.world = world
-          if hasattr(world, 'use_nodes'):
-              world.use_nodes = True
-          bg = world.node_tree.nodes.get('Background')
-          if bg is None:
-              bg = world.node_tree.nodes.new('ShaderNodeBackground')
-              output = world.node_tree.nodes.get('World Output')
-              world.node_tree.links.new(bg.outputs[0], output.inputs[0])
-          if 'Color' in bg.inputs:
-              bg.inputs['Color'].default_value = (0.02, 0.02, 0.05, 1)
-          if 'Strength' in bg.inputs:
-              bg.inputs['Strength'].default_value = 0.3
+          world.use_nodes = True
+          nt = world.node_tree
+          nt.nodes.clear()
 
-          # ---------- Render settings (auto-detect engine) ----------
-          available_engines = [e.identifier for e in bpy.types.RenderSettings.bl_rna.properties['engine'].enum_items]
-          print("Available engines:", available_engines)
-          if 'BLENDER_EEVEE_NEXT' in available_engines:
-              scene.render.engine = 'BLENDER_EEVEE_NEXT'
-          elif 'BLENDER_EEVEE' in available_engines:
-              scene.render.engine = 'BLENDER_EEVEE'
-          else:
-              scene.render.engine = 'CYCLES'
-              scene.cycles.samples = 16
-              scene.cycles.use_denoising = True
-              scene.cycles.device = 'CPU'
+          env_tex = nt.nodes.new('ShaderNodeTexEnvironment')
+          env_tex.image = bpy.data.images.load(os.path.abspath("assets/studio.hdr"))
+          mapping = nt.nodes.new('ShaderNodeMapping')
+          tex_coord = nt.nodes.new('ShaderNodeTexCoord')
+          background = nt.nodes.new('ShaderNodeBackground')
+          world_out = nt.nodes.new('ShaderNodeOutputWorld')
 
-          scene.render.resolution_x = 1080
-          scene.render.resolution_y = 1080
+          background.inputs['Strength'].default_value = 1.1
+          nt.links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
+          nt.links.new(mapping.outputs['Vector'], env_tex.inputs['Vector'])
+          nt.links.new(env_tex.outputs['Color'], background.inputs['Color'])
+          nt.links.new(background.outputs['Background'], world_out.inputs['Surface'])
+
+          # ---------- Render settings ----------
+          scene.render.engine = 'CYCLES'
+          scene.cycles.device = 'CPU'
+          scene.cycles.samples = SAMPLES
+          scene.cycles.use_denoising = True
+          scene.cycles.use_adaptive_sampling = True
+
+          scene.render.resolution_x = 1920
+          scene.render.resolution_y = 1920
           scene.render.fps = 30
           scene.frame_start = 1
-          scene.frame_end = 120
+          scene.frame_end = FRAME_END
 
           scene.render.image_settings.file_format = 'PNG'
-          scene.render.filepath = '/workspace/output/frame_'
+          scene.render.image_settings.color_depth = '16'
+          scene.render.filepath = 'output/frames/frame_'
 
-          # ---------- Main metal torus ----------
+          scene.view_settings.view_transform = 'AgX'  # color science lebih sinematik
+          scene.view_settings.look = 'AgX - Medium High Contrast'
+
+          # ---------- Hero object: brushed metal torus knot ----------
           bpy.ops.mesh.primitive_torus_add(
-              major_radius=2.0,
-              minor_radius=0.35,
-              major_segments=96,
-              minor_segments=32,
+              major_radius=2.0, minor_radius=0.5,
+              major_segments=128, minor_segments=48,
               location=(0, 0, 0)
           )
-          torus = bpy.context.active_object
+          hero = bpy.context.active_object
+          hero.name = "HeroObject"
 
-          mat = bpy.data.materials.new(name="Metal")
+          bevel = hero.modifiers.new(name="Bevel", type='BEVEL')
+          bevel.width = 0.01
+          bevel.segments = 3
+          subsurf = hero.modifiers.new(name="Subsurf", type='SUBSURF')
+          subsurf.levels = 2
+
+          mat = bpy.data.materials.new(name="BrushedMetal")
           mat.use_nodes = True
-          bsdf = mat.node_tree.nodes.get('Principled BSDF')
-          if bsdf is None:
-              bsdf = mat.node_tree.nodes.new('ShaderNodeBsdfPrincipled')
-              out = mat.node_tree.nodes.get('Material Output')
-              mat.node_tree.links.new(bsdf.outputs[0], out.inputs[0])
-          if 'Base Color' in bsdf.inputs:
-              bsdf.inputs['Base Color'].default_value = (0.05, 0.05, 0.08, 1)
-          if 'Metallic' in bsdf.inputs:
-              bsdf.inputs['Metallic'].default_value = 1.0
-          if 'Roughness' in bsdf.inputs:
-              bsdf.inputs['Roughness'].default_value = 0.25
-          torus.data.materials.append(mat)
+          nodes = mat.node_tree.nodes
+          bsdf = nodes.get('Principled BSDF')
+          bsdf.inputs['Base Color'].default_value = (0.55, 0.56, 0.6, 1)
+          bsdf.inputs['Metallic'].default_value = 1.0
+          bsdf.inputs['Roughness'].default_value = 0.18
+          bsdf.inputs['Anisotropic'].default_value = 0.6
+          hero.data.materials.append(mat)
 
-          for v in torus.data.vertices:
-              v.co.x += random.uniform(-0.05, 0.05)
-              v.co.y += random.uniform(-0.05, 0.05)
-              v.co.z += random.uniform(-0.05, 0.05)
+          # ---------- Orbiting glass spheres ----------
+          glass_mat = bpy.data.materials.new(name="Glass")
+          glass_mat.use_nodes = True
+          gbsdf = glass_mat.node_tree.nodes.get('Principled BSDF')
+          gbsdf.inputs['Transmission Weight'].default_value = 1.0
+          gbsdf.inputs['Roughness'].default_value = 0.02
+          gbsdf.inputs['IOR'].default_value = 1.45
 
-          # ---------- Glowing particle ring ----------
-          particles = []
-          for i in range(36):
-              angle = (i / 36) * math.tau
-              r = 2.8
-              x = r * math.cos(angle)
-              y = r * math.sin(angle)
-              z = random.uniform(-0.3, 0.3)
-              bpy.ops.mesh.primitive_uv_sphere_add(radius=0.08, location=(x, y, z))
-              p = bpy.context.active_object
+          orbiters = []
+          count = 24
+          for i in range(count):
+              angle = (i / count) * math.tau
+              r = 3.4
+              x, y = r * math.cos(angle), r * math.sin(angle)
+              z = random.uniform(-0.4, 0.4)
+              bpy.ops.mesh.primitive_ico_sphere_add(
+                  radius=0.14, subdivisions=3, location=(x, y, z)
+              )
+              sph = bpy.context.active_object
+              sph.data.materials.append(glass_mat)
+              orbiters.append((sph, angle, z))
 
-              pmat = bpy.data.materials.new(name=f"Glow{i}")
-              pmat.use_nodes = True
-              emit = pmat.node_tree.nodes.new('ShaderNodeEmission')
-              if 'Color' in emit.inputs:
-                  emit.inputs['Color'].default_value = (0.2, 0.6, 1.0, 1)
-              if 'Strength' in emit.inputs:
-                  emit.inputs['Strength'].default_value = 4.0
-              pmat.node_tree.links.new(emit.outputs[0], pmat.node_tree.nodes['Material Output'].inputs[0])
-              p.data.materials.append(pmat)
+          # ---------- Accent emission ring ----------
+          emit_mat = bpy.data.materials.new(name="AccentGlow")
+          emit_mat.use_nodes = True
+          enodes = emit_mat.node_tree.nodes
+          enodes.clear()
+          emit = enodes.new('ShaderNodeEmission')
+          emit.inputs['Color'].default_value = (0.25, 0.65, 1.0, 1)
+          emit.inputs['Strength'].default_value = 6.0
+          eout = enodes.new('ShaderNodeOutputMaterial')
+          emit_mat.node_tree.links.new(emit.outputs[0], eout.inputs['Surface'])
 
-              particles.append((p, angle, z))
+          bpy.ops.mesh.primitive_torus_add(
+              major_radius=3.4, minor_radius=0.015,
+              major_segments=128, minor_segments=8,
+              location=(0, 0, 0)
+          )
+          ring = bpy.context.active_object
+          ring.data.materials.append(emit_mat)
 
-          # ---------- Camera ----------
-          bpy.ops.object.camera_add(location=(0, -6.5, 2.2))
+          # ---------- Camera with depth of field ----------
+          bpy.ops.object.camera_add(location=(0, -8.5, 2.6))
           cam = bpy.context.active_object
-          cam.rotation_euler = (math.radians(72), 0, 0)
+          cam.rotation_euler = (math.radians(74), 0, 0)
+          cam.data.dof.use_dof = True
+          cam.data.dof.focus_distance = 8.5
+          cam.data.dof.aperture_fstop = 2.0
+          cam.data.lens = 70
           scene.camera = cam
 
-          # ---------- Lights ----------
-          bpy.ops.object.light_add(type='AREA', location=(4, -4, 5))
+          # ---------- Fill lights (complement the HDRI) ----------
+          bpy.ops.object.light_add(type='AREA', location=(5, -3, 6))
           key = bpy.context.active_object
-          key.data.energy = 800
-          key.data.size = 3
+          key.data.energy = 500
+          key.data.size = 4
 
-          bpy.ops.object.light_add(type='AREA', location=(-4, 3, 3))
-          fill = bpy.context.active_object
-          fill.data.energy = 400
-          fill.data.size = 4
+          bpy.ops.object.light_add(type='AREA', location=(-5, 4, 3))
+          rim = bpy.context.active_object
+          rim.data.energy = 300
+          rim.data.size = 3
+          rim.data.color = (0.6, 0.8, 1.0)
 
           # ---------- Animation ----------
           for frame in range(scene.frame_start, scene.frame_end + 1):
               scene.frame_set(frame)
               t = (frame - 1) / (scene.frame_end - 1)
 
-              torus.rotation_euler = (
+              hero.rotation_euler = (
                   math.sin(t * math.tau) * 0.15,
-                  t * math.tau * 0.5,
+                  t * math.tau * 0.4,
                   math.cos(t * math.tau) * 0.15
               )
 
-              for p, base_angle, base_z in particles:
-                  angle = base_angle + t * math.tau * 1.2
-                  r = 2.8 + math.sin(t * math.tau * 2 + base_angle) * 0.15
-                  p.location = (
+              for sph, base_angle, base_z in orbiters:
+                  angle = base_angle + t * math.tau * 0.9
+                  r = 3.4 + math.sin(t * math.tau * 2 + base_angle) * 0.12
+                  sph.location = (
                       r * math.cos(angle),
                       r * math.sin(angle),
-                      base_z + math.sin(t * math.tau * 3 + base_angle) * 0.5
+                      base_z + math.sin(t * math.tau * 3 + base_angle) * 0.35
                   )
+                  sph.rotation_euler = (0, 0, angle)
 
-              cam.location.y = -6.5 + math.sin(t * math.tau) * 0.5
-              cam.location.z = 2.2 + math.cos(t * math.tau) * 0.3
+              cam.location.x = math.sin(t * math.tau * 0.5) * 0.6
+              cam.location.z = 2.6 + math.cos(t * math.tau) * 0.25
 
-          # ---------- Render ----------
+          # ---------- Render animation ----------
           bpy.ops.render.render(animation=True)
+
+          # ---------- Render one high-res "hero" still frame ----------
+          scene.frame_set(int(scene.frame_end * 0.35))
+          scene.render.resolution_x = 3840
+          scene.render.resolution_y = 3840
+          scene.render.filepath = 'output/stills/hero_shot.png'
+          bpy.ops.render.render(write_still=True)
+
           print("Rendering complete.")
           PYEOF
 
       - name: Run Blender headless render
+        env:
+          FRAME_END: ${{ github.event.inputs.frame_end || '150' }}
+          SAMPLES: ${{ github.event.inputs.samples || '128' }}
         run: |
-          mkdir -p output/frames
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            blendergrid/blender \
-            --background \
-            --python /workspace/generate_scene.py
+          blender --background \
+            --python-exit-code 1 \
+            --python generate_scene.py
 
-      - name: Move PNG frames into subfolder
+      - name: Verify frames were generated
         run: |
-          mv output/frame_*.png output/frames/ || true
-          echo "Total frames:"
-          ls output/frames/ | wc -l
+          count=$(ls output/frames/frame_*.png 2>/dev/null | wc -l)
+          echo "Total frames: $count"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::Tidak ada frame PNG yang dihasilkan. Render gagal."
+            exit 1
+          fi
+          if [ ! -f output/stills/hero_shot.png ]; then
+            echo "::error::Hero still image tidak ditemukan. Render gagal."
+            exit 1
+          fi
 
       - name: Convert PNG frames to MP4
         run: |
           ffmpeg -y -framerate 30 \
             -i output/frames/frame_%04d.png \
             -c:v libx264 -pix_fmt yuv420p \
-            -crf 18 -preset slow \
+            -crf 16 -preset slow \
             output/creative_animation.mp4
 
       - name: Upload MP4 video
@@ -191,11 +275,18 @@ jobs:
         with:
           name: video-mp4
           path: output/creative_animation.mp4
-          retention-days: 7
+          retention-days: 14
+
+      - name: Upload hero still image
+        uses: actions/upload-artifact@v4
+        with:
+          name: hero-image
+          path: output/stills/hero_shot.png
+          retention-days: 14
 
       - name: Upload PNG frames
         uses: actions/upload-artifact@v4
         with:
           name: frames-png
           path: output/frames/
-          retention-days: 7
+          retention-days: 14
