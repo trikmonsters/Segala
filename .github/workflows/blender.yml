@@ -1,4 +1,4 @@
-name: Blender 3D Pro Render (Image + Video)
+name: Blender 3D Pro Render (Parallel, Image + Video)
 
 on:
   workflow_dispatch:
@@ -6,29 +6,55 @@ on:
       frame_end:
         description: "Frame terakhir animasi"
         required: false
-        default: "150"
+        default: "120"
       samples:
-        description: "Jumlah Cycles samples (kualitas vs waktu render)"
+        description: "Jumlah Cycles samples"
         required: false
-        default: "60"
-  
+        default: "32"
+      resolution:
+        description: "Resolusi render (persegi), misal 1280"
+        required: false
+        default: "1280"
+      shards:
+        description: "Jumlah job paralel untuk membagi frame"
+        required: false
+        default: "5"
+
 
 env:
   BLENDER_VERSION: "4.2.3"
   BLENDER_SERIES: "4.2"
   HDRI_URL: "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr"
+  FRAME_END: ${{ github.event.inputs.frame_end || '120' }}
+  SAMPLES: ${{ github.event.inputs.samples || '32' }}
+  RESOLUTION: ${{ github.event.inputs.resolution || '1280' }}
+  SHARDS: ${{ github.event.inputs.shards || '5' }}
 
 jobs:
-  render:
+  # Job kecil hanya untuk menghasilkan daftar shard index [0, 1, 2, ...]
+  # dipakai sebagai matrix di job render.
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    outputs:
+      shard_list: ${{ steps.gen.outputs.list }}
+    steps:
+      - id: gen
+        run: |
+          n=${SHARDS}
+          list=$(python3 -c "import json;print(json.dumps(list(range($n))))")
+          echo "list=$list" >> "$GITHUB_OUTPUT"
 
+  render:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shard_list) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Cache Blender install
         id: cache-blender
@@ -48,16 +74,28 @@ jobs:
       - name: Add Blender to PATH
         run: echo "/opt/blender" >> "$GITHUB_PATH"
 
-      - name: Verify Blender version
-        run: blender --version
-
       - name: Prepare folders
         run: mkdir -p assets output/frames output/stills
 
-      # Environment HDRI bikin refleksi & lighting jauh lebih realistis
-      # dibanding cuma world background flat color.
       - name: Download HDRI environment
         run: curl -fL -o assets/studio.hdr "${HDRI_URL}"
+
+      # Hitung frame awal/akhir untuk shard ini. Animasi (posisi objek per t)
+      # tetap dihitung berdasarkan TOTAL_FRAMES supaya gerakan mulus dan
+      # tersambung antar shard, hanya rentang frame yang di-render dibagi.
+      - name: Compute frame range for this shard
+        id: range
+        run: |
+          python3 -c "
+          total = int('${FRAME_END}')
+          shards = int('${SHARDS}')
+          shard = int('${{ matrix.shard }}')
+          per = -(-total // shards)  # ceil division
+          start = shard * per + 1
+          end = min(total, start + per - 1)
+          print(f'start={start}')
+          print(f'end={end}')
+          " >> "$GITHUB_OUTPUT"
 
       - name: Write Blender script
         run: |
@@ -69,8 +107,11 @@ jobs:
 
           random.seed(7)
 
-          FRAME_END = int(os.environ.get("FRAME_END", "150"))
-          SAMPLES = int(os.environ.get("SAMPLES", "128"))
+          TOTAL_FRAMES = int(os.environ["FRAME_END"])
+          SAMPLES = int(os.environ["SAMPLES"])
+          RES = int(os.environ["RESOLUTION"])
+          SHARD_START = int(os.environ["SHARD_START"])
+          SHARD_END = int(os.environ["SHARD_END"])
 
           bpy.ops.wm.read_factory_settings(use_empty=True)
           scene = bpy.context.scene
@@ -95,49 +136,46 @@ jobs:
           nt.links.new(env_tex.outputs['Color'], background.inputs['Color'])
           nt.links.new(background.outputs['Background'], world_out.inputs['Surface'])
 
-          # ---------- Render settings ----------
+          # ---------- Render settings (dioptimalkan untuk kecepatan) ----------
           scene.render.engine = 'CYCLES'
           scene.cycles.device = 'CPU'
           scene.cycles.samples = SAMPLES
           scene.cycles.use_denoising = True
           scene.cycles.use_adaptive_sampling = True
+          scene.cycles.adaptive_threshold = 0.05  # berhenti lebih cepat kalau sudah cukup bersih
+          scene.render.use_persistent_data = True  # hindari rebuild BVH tiap frame
 
-          scene.render.resolution_x = 1920
-          scene.render.resolution_y = 1920
+          scene.render.resolution_x = RES
+          scene.render.resolution_y = RES
           scene.render.fps = 30
-          scene.frame_start = 1
-          scene.frame_end = FRAME_END
 
           scene.render.image_settings.file_format = 'PNG'
-          scene.render.image_settings.color_depth = '16'
           scene.render.filepath = 'output/frames/frame_'
-
-          scene.view_settings.view_transform = 'AgX'  # color science lebih sinematik
+          scene.view_settings.view_transform = 'AgX'
           scene.view_settings.look = 'AgX - Medium High Contrast'
 
-          # ---------- Hero object: brushed metal torus knot ----------
+          # frame_start/frame_end HANYA menentukan rentang yang dirender
+          # shard ini, tapi animasi 't' tetap dihitung dari TOTAL_FRAMES.
+          scene.frame_start = SHARD_START
+          scene.frame_end = SHARD_END
+
+          # ---------- Hero object ----------
           bpy.ops.mesh.primitive_torus_add(
               major_radius=2.0, minor_radius=0.5,
-              major_segments=128, minor_segments=48,
+              major_segments=96, minor_segments=32,
               location=(0, 0, 0)
           )
           hero = bpy.context.active_object
-          hero.name = "HeroObject"
-
           bevel = hero.modifiers.new(name="Bevel", type='BEVEL')
           bevel.width = 0.01
-          bevel.segments = 3
-          subsurf = hero.modifiers.new(name="Subsurf", type='SUBSURF')
-          subsurf.levels = 2
+          bevel.segments = 2
 
           mat = bpy.data.materials.new(name="BrushedMetal")
           mat.use_nodes = True
-          nodes = mat.node_tree.nodes
-          bsdf = nodes.get('Principled BSDF')
+          bsdf = mat.node_tree.nodes.get('Principled BSDF')
           bsdf.inputs['Base Color'].default_value = (0.55, 0.56, 0.6, 1)
           bsdf.inputs['Metallic'].default_value = 1.0
           bsdf.inputs['Roughness'].default_value = 0.18
-          bsdf.inputs['Anisotropic'].default_value = 0.6
           hero.data.materials.append(mat)
 
           # ---------- Orbiting glass spheres ----------
@@ -149,14 +187,14 @@ jobs:
           gbsdf.inputs['IOR'].default_value = 1.45
 
           orbiters = []
-          count = 24
+          count = 20
           for i in range(count):
               angle = (i / count) * math.tau
               r = 3.4
               x, y = r * math.cos(angle), r * math.sin(angle)
               z = random.uniform(-0.4, 0.4)
               bpy.ops.mesh.primitive_ico_sphere_add(
-                  radius=0.14, subdivisions=3, location=(x, y, z)
+                  radius=0.14, subdivisions=2, location=(x, y, z)
               )
               sph = bpy.context.active_object
               sph.data.materials.append(glass_mat)
@@ -175,13 +213,13 @@ jobs:
 
           bpy.ops.mesh.primitive_torus_add(
               major_radius=3.4, minor_radius=0.015,
-              major_segments=128, minor_segments=8,
+              major_segments=96, minor_segments=6,
               location=(0, 0, 0)
           )
           ring = bpy.context.active_object
           ring.data.materials.append(emit_mat)
 
-          # ---------- Camera with depth of field ----------
+          # ---------- Camera ----------
           bpy.ops.object.camera_add(location=(0, -8.5, 2.6))
           cam = bpy.context.active_object
           cam.rotation_euler = (math.radians(74), 0, 0)
@@ -191,7 +229,7 @@ jobs:
           cam.data.lens = 70
           scene.camera = cam
 
-          # ---------- Fill lights (complement the HDRI) ----------
+          # ---------- Lights ----------
           bpy.ops.object.light_add(type='AREA', location=(5, -3, 6))
           key = bpy.context.active_object
           key.data.energy = 500
@@ -203,10 +241,10 @@ jobs:
           rim.data.size = 3
           rim.data.color = (0.6, 0.8, 1.0)
 
-          # ---------- Animation ----------
-          for frame in range(scene.frame_start, scene.frame_end + 1):
+          # ---------- Animate & render only this shard's frame range ----------
+          for frame in range(SHARD_START, SHARD_END + 1):
               scene.frame_set(frame)
-              t = (frame - 1) / (scene.frame_end - 1)
+              t = (frame - 1) / (TOTAL_FRAMES - 1)  # posisi global 0..1
 
               hero.rotation_euler = (
                   math.sin(t * math.tau) * 0.15,
@@ -227,47 +265,59 @@ jobs:
               cam.location.x = math.sin(t * math.tau * 0.5) * 0.6
               cam.location.z = 2.6 + math.cos(t * math.tau) * 0.25
 
-          # ---------- Render animation ----------
-          bpy.ops.render.render(animation=True)
+              bpy.context.scene.frame_current = frame
+              bpy.ops.render.render(write_still=True)
 
-          # ---------- Render one high-res "hero" still frame ----------
-          scene.frame_set(int(scene.frame_end * 0.35))
-          scene.render.resolution_x = 3840
-          scene.render.resolution_y = 3840
-          scene.render.filepath = 'output/stills/hero_shot.png'
-          bpy.ops.render.render(write_still=True)
-
-          print("Rendering complete.")
+          print(f"Shard done: frames {SHARD_START}-{SHARD_END}")
           PYEOF
 
-      - name: Run Blender headless render
+      - name: Run Blender headless render (this shard only)
         env:
-          FRAME_END: ${{ github.event.inputs.frame_end || '150' }}
-          SAMPLES: ${{ github.event.inputs.samples || '128' }}
+          FRAME_END: ${{ env.FRAME_END }}
+          SAMPLES: ${{ env.SAMPLES }}
+          RESOLUTION: ${{ env.RESOLUTION }}
+          SHARD_START: ${{ steps.range.outputs.start }}
+          SHARD_END: ${{ steps.range.outputs.end }}
         run: |
-          blender --background \
-            --python-exit-code 1 \
-            --python generate_scene.py
+          blender --background --python-exit-code 1 --python generate_scene.py
 
-      - name: Verify frames were generated
+      - name: Upload shard frames
+        uses: actions/upload-artifact@v4
+        with:
+          name: frames-shard-${{ matrix.shard }}
+          path: output/frames/
+          retention-days: 3
+
+  combine:
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Download all frame shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: frames-shard-*
+          path: all_frames
+          merge-multiple: true
+
+      - name: Verify frames
         run: |
-          count=$(ls output/frames/frame_*.png 2>/dev/null | wc -l)
-          echo "Total frames: $count"
+          count=$(ls all_frames/frame_*.png 2>/dev/null | wc -l)
+          echo "Total frames merged: $count"
           if [ "$count" -lt 1 ]; then
-            echo "::error::Tidak ada frame PNG yang dihasilkan. Render gagal."
-            exit 1
-          fi
-          if [ ! -f output/stills/hero_shot.png ]; then
-            echo "::error::Hero still image tidak ditemukan. Render gagal."
+            echo "::error::Tidak ada frame ditemukan dari shard manapun."
             exit 1
           fi
 
       - name: Convert PNG frames to MP4
         run: |
+          mkdir -p output
           ffmpeg -y -framerate 30 \
-            -i output/frames/frame_%04d.png \
+            -i all_frames/frame_%04d.png \
             -c:v libx264 -pix_fmt yuv420p \
-            -crf 16 -preset slow \
+            -crf 18 -preset slow \
             output/creative_animation.mp4
 
       - name: Upload MP4 video
@@ -277,16 +327,9 @@ jobs:
           path: output/creative_animation.mp4
           retention-days: 14
 
-      - name: Upload hero still image
+      - name: Upload merged frames
         uses: actions/upload-artifact@v4
         with:
-          name: hero-image
-          path: output/stills/hero_shot.png
-          retention-days: 14
-
-      - name: Upload PNG frames
-        uses: actions/upload-artifact@v4
-        with:
-          name: frames-png
-          path: output/frames/
+          name: frames-png-merged
+          path: all_frames/
           retention-days: 14
