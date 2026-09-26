@@ -20,7 +20,6 @@ on:
         required: false
         default: "5"
 
-
 env:
   BLENDER_VERSION: "4.2.3"
   BLENDER_SERIES: "4.2"
@@ -314,8 +313,12 @@ jobs:
       - name: Convert PNG frames to MP4
         run: |
           mkdir -p output
+          # FIX: pakai glob, bukan pattern numerik %04d. %04d mengharuskan
+          # file pertama bernama index 0000 (frame_0000.png) atau ffmpeg
+          # gagal "no file with path ... in range 0-4" walau semua frame
+          # sebenarnya ada dan berurutan. Glob tidak punya masalah itu.
           ffmpeg -y -framerate 30 \
-            -i all_frames/frame_%04d.png \
+            -pattern_type glob -i 'all_frames/frame_*.png' \
             -c:v libx264 -pix_fmt yuv420p \
             -crf 18 -preset slow \
             output/creative_animation.mp4
