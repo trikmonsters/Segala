@@ -1,39 +1,40 @@
-name: Blender 3D Pro Render (Parallel, Image + Video)
+name: Blender Cartoon Short (9:16, Image + Video)
 
 on:
   workflow_dispatch:
     inputs:
       frame_end:
-        description: "Frame terakhir animasi"
+        description: "Frame terakhir animasi (30 fps)"
         required: false
-        default: "120"
+        default: "150"
       samples:
         description: "Jumlah Cycles samples"
         required: false
-        default: "32"
-      resolution:
-        description: "Resolusi render (persegi), misal 1280"
+        default: "24"
+      width:
+        description: "Lebar render (px)"
+        required: false
+        default: "720"
+      height:
+        description: "Tinggi render (px) — 9:16 = height ~1.78x width"
         required: false
         default: "1280"
       shards:
         description: "Jumlah job paralel untuk membagi frame"
         required: false
         default: "5"
-  push:
-    branches: [ main ]
+
 
 env:
   BLENDER_VERSION: "4.2.3"
   BLENDER_SERIES: "4.2"
-  HDRI_URL: "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr"
-  FRAME_END: ${{ github.event.inputs.frame_end || '120' }}
-  SAMPLES: ${{ github.event.inputs.samples || '32' }}
-  RESOLUTION: ${{ github.event.inputs.resolution || '1280' }}
+  FRAME_END: ${{ github.event.inputs.frame_end || '150' }}
+  SAMPLES: ${{ github.event.inputs.samples || '24' }}
+  WIDTH: ${{ github.event.inputs.width || '720' }}
+  HEIGHT: ${{ github.event.inputs.height || '1280' }}
   SHARDS: ${{ github.event.inputs.shards || '5' }}
 
 jobs:
-  # Job kecil hanya untuk menghasilkan daftar shard index [0, 1, 2, ...]
-  # dipakai sebagai matrix di job render.
   plan:
     runs-on: ubuntu-latest
     outputs:
@@ -48,7 +49,7 @@ jobs:
   render:
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -76,14 +77,8 @@ jobs:
         run: echo "/opt/blender" >> "$GITHUB_PATH"
 
       - name: Prepare folders
-        run: mkdir -p assets output/frames output/stills
+        run: mkdir -p output/frames output/stills
 
-      - name: Download HDRI environment
-        run: curl -fL -o assets/studio.hdr "${HDRI_URL}"
-
-      # Hitung frame awal/akhir untuk shard ini. Animasi (posisi objek per t)
-      # tetap dihitung berdasarkan TOTAL_FRAMES supaya gerakan mulus dan
-      # tersambung antar shard, hanya rentang frame yang di-render dibagi.
       - name: Compute frame range for this shard
         id: range
         run: |
@@ -91,7 +86,7 @@ jobs:
           total = int('${FRAME_END}')
           shards = int('${SHARDS}')
           shard = int('${{ matrix.shard }}')
-          per = -(-total // shards)  # ceil division
+          per = -(-total // shards)
           start = shard * per + 1
           end = min(total, start + per - 1)
           print(f'start={start}')
@@ -103,173 +98,209 @@ jobs:
           cat > generate_scene.py << 'PYEOF'
           import bpy
           import math
-          import random
           import os
-
-          random.seed(7)
 
           TOTAL_FRAMES = int(os.environ["FRAME_END"])
           SAMPLES = int(os.environ["SAMPLES"])
-          RES = int(os.environ["RESOLUTION"])
+          WIDTH = int(os.environ["WIDTH"])
+          HEIGHT = int(os.environ["HEIGHT"])
           SHARD_START = int(os.environ["SHARD_START"])
           SHARD_END = int(os.environ["SHARD_END"])
 
           bpy.ops.wm.read_factory_settings(use_empty=True)
           scene = bpy.context.scene
 
-          # ---------- World: HDRI environment lighting ----------
+          # ---------- Helper: flat cel-shaded ("toon") material ----------
+          def make_toon_material(name, color, size=0.9, smooth=0.15):
+              mat = bpy.data.materials.new(name=name)
+              mat.use_nodes = True
+              nodes = mat.node_tree.nodes
+              nodes.clear()
+              toon = nodes.new('ShaderNodeBsdfToon')
+              toon.component = 'DIFFUSE'
+              toon.inputs['Color'].default_value = (*color, 1)
+              toon.inputs['Size'].default_value = size
+              toon.inputs['Smooth'].default_value = smooth
+              out = nodes.new('ShaderNodeOutputMaterial')
+              mat.node_tree.links.new(toon.outputs[0], out.inputs['Surface'])
+              return mat
+
+          # ---------- World: soft pastel gradient sky ----------
           world = bpy.data.worlds.new("World")
           scene.world = world
           world.use_nodes = True
           nt = world.node_tree
           nt.nodes.clear()
 
-          env_tex = nt.nodes.new('ShaderNodeTexEnvironment')
-          env_tex.image = bpy.data.images.load(os.path.abspath("assets/studio.hdr"))
-          mapping = nt.nodes.new('ShaderNodeMapping')
           tex_coord = nt.nodes.new('ShaderNodeTexCoord')
+          gradient = nt.nodes.new('ShaderNodeTexGradient')
+          gradient.gradient_type = 'LINEAR'
+          ramp = nt.nodes.new('ShaderNodeValToRGB')
+          ramp.color_ramp.elements[0].color = (1.0, 0.75, 0.55, 1)   # warm pink-orange near horizon
+          ramp.color_ramp.elements[1].color = (0.45, 0.35, 0.85, 1)  # dreamy purple-blue at top
           background = nt.nodes.new('ShaderNodeBackground')
+          background.inputs['Strength'].default_value = 1.4
           world_out = nt.nodes.new('ShaderNodeOutputWorld')
 
-          background.inputs['Strength'].default_value = 1.1
-          nt.links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
-          nt.links.new(mapping.outputs['Vector'], env_tex.inputs['Vector'])
-          nt.links.new(env_tex.outputs['Color'], background.inputs['Color'])
+          nt.links.new(tex_coord.outputs['Generated'], gradient.inputs['Vector'])
+          nt.links.new(gradient.outputs['Color'], ramp.inputs['Fac'])
+          nt.links.new(ramp.outputs['Color'], background.inputs['Color'])
           nt.links.new(background.outputs['Background'], world_out.inputs['Surface'])
 
-          # ---------- Render settings (dioptimalkan untuk kecepatan) ----------
+          # ---------- Render settings: toon look ----------
           scene.render.engine = 'CYCLES'
           scene.cycles.device = 'CPU'
           scene.cycles.samples = SAMPLES
           scene.cycles.use_denoising = True
           scene.cycles.use_adaptive_sampling = True
-          scene.cycles.adaptive_threshold = 0.05  # berhenti lebih cepat kalau sudah cukup bersih
-          scene.render.use_persistent_data = True  # hindari rebuild BVH tiap frame
+          scene.cycles.adaptive_threshold = 0.05
+          scene.render.use_persistent_data = True
 
-          scene.render.resolution_x = RES
-          scene.render.resolution_y = RES
+          # Freestyle = garis outline hitam khas kartun/anime
+          scene.render.use_freestyle = True
+          view_layer = bpy.context.view_layer
+          lineset = view_layer.freestyle_settings.linesets.new("Outline")
+          lineset.select_silhouette = True
+          lineset.select_border = True
+          lineset.select_crease = True
+          lineset.linestyle.color = (0.05, 0.03, 0.08)
+          lineset.linestyle.thickness = 3.2
+
+          scene.render.resolution_x = WIDTH
+          scene.render.resolution_y = HEIGHT
           scene.render.fps = 30
-
-          scene.render.image_settings.file_format = 'PNG'
-          scene.render.filepath = 'output/frames/frame_'
-          scene.view_settings.view_transform = 'AgX'
-          scene.view_settings.look = 'AgX - Medium High Contrast'
-
-          # frame_start/frame_end HANYA menentukan rentang yang dirender
-          # shard ini, tapi animasi 't' tetap dihitung dari TOTAL_FRAMES.
           scene.frame_start = SHARD_START
           scene.frame_end = SHARD_END
 
-          # ---------- Hero object ----------
-          bpy.ops.mesh.primitive_torus_add(
-              major_radius=2.0, minor_radius=0.5,
-              major_segments=96, minor_segments=32,
-              location=(0, 0, 0)
-          )
-          hero = bpy.context.active_object
-          bevel = hero.modifiers.new(name="Bevel", type='BEVEL')
-          bevel.width = 0.01
-          bevel.segments = 2
+          scene.render.image_settings.file_format = 'PNG'
+          # Warna flat & jenuh khas kartun -> pakai Standard, bukan Filmic/AgX
+          # (Filmic/AgX meredupkan warna cerah, kurang cocok untuk cel-shading)
+          scene.view_settings.view_transform = 'Standard'
 
-          mat = bpy.data.materials.new(name="BrushedMetal")
-          mat.use_nodes = True
-          bsdf = mat.node_tree.nodes.get('Principled BSDF')
-          bsdf.inputs['Base Color'].default_value = (0.55, 0.56, 0.6, 1)
-          bsdf.inputs['Metallic'].default_value = 1.0
-          bsdf.inputs['Roughness'].default_value = 0.18
-          hero.data.materials.append(mat)
+          # ---------- Original character: "Bloop" ----------
+          bpy.ops.mesh.primitive_ico_sphere_add(radius=1.0, subdivisions=3, location=(0, 0, 0))
+          body = bpy.context.active_object
+          body.name = "Bloop_Body"
+          subsurf = body.modifiers.new(name="Subsurf", type='SUBSURF')
+          subsurf.levels = 2
+          body.data.materials.append(make_toon_material("BloopSkin", (1.0, 0.42, 0.24), size=0.85, smooth=0.2))
 
-          # ---------- Orbiting glass spheres ----------
-          glass_mat = bpy.data.materials.new(name="Glass")
-          glass_mat.use_nodes = True
-          gbsdf = glass_mat.node_tree.nodes.get('Principled BSDF')
-          gbsdf.inputs['Transmission Weight'].default_value = 1.0
-          gbsdf.inputs['Roughness'].default_value = 0.02
-          gbsdf.inputs['IOR'].default_value = 1.45
+          # Eyes (parented to body so they follow its squash/stretch/rotation automatically)
+          eye_positions = [(-0.42, -0.88, 0.25), (0.42, -0.88, 0.25)]
+          for i, pos in enumerate(eye_positions):
+              bpy.ops.mesh.primitive_uv_sphere_add(radius=0.32, location=pos)
+              eye_white = bpy.context.active_object
+              eye_white.name = f"Eye_White_{i}"
+              eye_white.data.materials.append(make_toon_material(f"EyeWhite{i}", (1, 1, 1), size=1.0, smooth=0.05))
+              eye_white.parent = body
+              eye_white.matrix_parent_inverse = body.matrix_world.inverted()
 
-          orbiters = []
-          count = 20
+              pupil_pos = (pos[0], pos[1] - 0.22, pos[2] + 0.03)
+              bpy.ops.mesh.primitive_uv_sphere_add(radius=0.16, location=pupil_pos)
+              pupil = bpy.context.active_object
+              pupil.name = f"Eye_Pupil_{i}"
+              pupil.data.materials.append(make_toon_material(f"EyePupil{i}", (0.05, 0.03, 0.08), size=1.0, smooth=0.0))
+              pupil.parent = body
+              pupil.matrix_parent_inverse = body.matrix_world.inverted()
+
+          # Little antenna with a ball tip, full of personality
+          bpy.ops.mesh.primitive_cylinder_add(radius=0.05, depth=0.6, location=(0, 0.1, 1.15))
+          antenna = bpy.context.active_object
+          antenna.name = "Antenna"
+          antenna.data.materials.append(make_toon_material("AntennaMat", (1.0, 0.42, 0.24), size=0.85, smooth=0.2))
+          antenna.parent = body
+          antenna.matrix_parent_inverse = body.matrix_world.inverted()
+
+          bpy.ops.mesh.primitive_uv_sphere_add(radius=0.14, location=(0, 0.1, 1.5))
+          antenna_tip = bpy.context.active_object
+          antenna_tip.name = "AntennaTip"
+          antenna_tip.data.materials.append(make_toon_material("AntennaTipMat", (1.0, 0.85, 0.3), size=1.0, smooth=0.1))
+          antenna_tip.parent = body
+          antenna_tip.matrix_parent_inverse = body.matrix_world.inverted()
+
+          # ---------- Ground: big flattened sphere reads as a curved horizon ----------
+          bpy.ops.mesh.primitive_uv_sphere_add(radius=14, location=(0, 0, -14))
+          ground = bpy.context.active_object
+          ground.name = "Ground"
+          ground.scale = (1, 1, 0.35)
+          ground.data.materials.append(make_toon_material("GroundMat", (0.35, 0.78, 0.62), size=0.9, smooth=0.15))
+
+          # ---------- Floating confetti shapes ----------
+          confetti_colors = [
+              (1.0, 0.85, 0.3), (0.4, 0.75, 1.0), (1.0, 0.5, 0.75),
+              (0.65, 0.9, 0.4), (1.0, 0.65, 0.3), (0.75, 0.55, 1.0),
+          ]
+          confetti = []
+          count = 14
           for i in range(count):
               angle = (i / count) * math.tau
-              r = 3.4
-              x, y = r * math.cos(angle), r * math.sin(angle)
-              z = random.uniform(-0.4, 0.4)
-              bpy.ops.mesh.primitive_ico_sphere_add(
-                  radius=0.14, subdivisions=2, location=(x, y, z)
-              )
-              sph = bpy.context.active_object
-              sph.data.materials.append(glass_mat)
-              orbiters.append((sph, angle, z))
+              radius = 2.6 + (i % 3) * 0.5
+              x = math.cos(angle) * radius
+              z = 0.5 + (i % 5) * 0.6
+              bpy.ops.mesh.primitive_ico_sphere_add(radius=0.13, subdivisions=1, location=(x, -1.5, z))
+              piece = bpy.context.active_object
+              piece.name = f"Confetti_{i}"
+              color = confetti_colors[i % len(confetti_colors)]
+              piece.data.materials.append(make_toon_material(f"ConfettiMat{i}", color, size=1.0, smooth=0.1))
+              confetti.append((piece, x, angle, i))
 
-          # ---------- Accent emission ring ----------
-          emit_mat = bpy.data.materials.new(name="AccentGlow")
-          emit_mat.use_nodes = True
-          enodes = emit_mat.node_tree.nodes
-          enodes.clear()
-          emit = enodes.new('ShaderNodeEmission')
-          emit.inputs['Color'].default_value = (0.25, 0.65, 1.0, 1)
-          emit.inputs['Strength'].default_value = 6.0
-          eout = enodes.new('ShaderNodeOutputMaterial')
-          emit_mat.node_tree.links.new(emit.outputs[0], eout.inputs['Surface'])
-
-          bpy.ops.mesh.primitive_torus_add(
-              major_radius=3.4, minor_radius=0.015,
-              major_segments=96, minor_segments=6,
-              location=(0, 0, 0)
-          )
-          ring = bpy.context.active_object
-          ring.data.materials.append(emit_mat)
-
-          # ---------- Camera ----------
-          bpy.ops.object.camera_add(location=(0, -8.5, 2.6))
+          # ---------- Camera: vertical framing, eye-level, slow push-in ----------
+          bpy.ops.object.camera_add(location=(0, -7.5, 0.6))
           cam = bpy.context.active_object
-          cam.rotation_euler = (math.radians(74), 0, 0)
-          cam.data.dof.use_dof = True
-          cam.data.dof.focus_distance = 8.5
-          cam.data.dof.aperture_fstop = 2.0
-          cam.data.lens = 70
+          cam.rotation_euler = (math.radians(90), 0, 0)
+          cam.data.lens = 42
           scene.camera = cam
 
           # ---------- Lights ----------
-          bpy.ops.object.light_add(type='AREA', location=(5, -3, 6))
-          key = bpy.context.active_object
-          key.data.energy = 500
-          key.data.size = 4
+          bpy.ops.object.light_add(type='SUN', location=(4, -4, 8))
+          sun = bpy.context.active_object
+          sun.data.energy = 3.0
+          sun.rotation_euler = (math.radians(55), 0, math.radians(35))
 
-          bpy.ops.object.light_add(type='AREA', location=(-5, 4, 3))
+          bpy.ops.object.light_add(type='AREA', location=(-4, -3, 3))
           rim = bpy.context.active_object
-          rim.data.energy = 300
-          rim.data.size = 3
-          rim.data.color = (0.6, 0.8, 1.0)
+          rim.data.energy = 250
+          rim.data.size = 4
+          rim.data.color = (0.6, 0.75, 1.0)
 
           # ---------- Animate & render only this shard's frame range ----------
+          bounces = 4  # jumlah lompatan sepanjang video
           for frame in range(SHARD_START, SHARD_END + 1):
               scene.frame_set(frame)
               t = (frame - 1) / (TOTAL_FRAMES - 1)  # posisi global 0..1
 
-              hero.rotation_euler = (
-                  math.sin(t * math.tau) * 0.15,
-                  t * math.tau * 0.4,
-                  math.cos(t * math.tau) * 0.15
+              # --- Squash & stretch bounce (klasik animasi kartun) ---
+              cycle = (t * bounces) % 1.0
+              height = 4 * cycle * (1 - cycle) * 1.3  # lompatan parabola
+              ground_contact = max(0.0, 1.0 - height / 0.12)  # ~1 pas nyentuh tanah
+
+              stretch = 1.0 + 0.22 * math.sin(cycle * math.pi)
+              squash = 1.0 - 0.18 * math.sin(cycle * math.pi)
+              extra_squash = 1.0 + 0.35 * ground_contact
+              extra_stretch = 1.0 - 0.15 * ground_contact
+
+              body.location = (math.sin(t * math.tau * 0.5) * 0.6, 0, height)
+              body.scale = (
+                  squash * extra_squash,
+                  squash * extra_squash,
+                  stretch * extra_stretch,
               )
+              body.rotation_euler = (0, 0, math.sin(t * math.tau * 2) * 0.2)
 
-              for sph, base_angle, base_z in orbiters:
-                  angle = base_angle + t * math.tau * 0.9
-                  r = 3.4 + math.sin(t * math.tau * 2 + base_angle) * 0.12
-                  sph.location = (
-                      r * math.cos(angle),
-                      r * math.sin(angle),
-                      base_z + math.sin(t * math.tau * 3 + base_angle) * 0.35
-                  )
-                  sph.rotation_euler = (0, 0, angle)
+              # --- Confetti mengambang naik & berputar pelan (loop mulus) ---
+              for piece, base_x, base_angle, idx in confetti:
+                  loop_t = (t + idx * 0.07) % 1.0
+                  z = -0.5 + loop_t * 5.0
+                  wobble_x = base_x + math.sin(t * math.tau * 2 + base_angle) * 0.3
+                  piece.location = (wobble_x, -1.5, z)
+                  piece.rotation_euler = (0, loop_t * math.tau, loop_t * math.tau * 0.5)
 
-              cam.location.x = math.sin(t * math.tau * 0.5) * 0.6
-              cam.location.z = 2.6 + math.cos(t * math.tau) * 0.25
+              # --- Camera: dorongan pelan + sedikit ikut goyang bounce ---
+              cam.location.y = -7.5 + t * 1.2
+              cam.location.z = 0.6 + math.sin(cycle * math.pi) * 0.08
 
-              # FIX: write_still=True TIDAK otomatis menambah nomor frame
-              # ke nama file (beda dengan animation=True). Tanpa baris ini,
-              # setiap iterasi menimpa file yang sama -> cuma 1 gambar
-              # tersisa per shard -> video jadi 0 detik.
+              # FIX: filepath eksplisit per frame -> write_still tidak
+              # otomatis menambah nomor frame ke nama file.
               scene.render.filepath = f'output/frames/frame_{frame:06d}.png'
               bpy.ops.render.render(write_still=True)
 
@@ -280,7 +311,8 @@ jobs:
         env:
           FRAME_END: ${{ env.FRAME_END }}
           SAMPLES: ${{ env.SAMPLES }}
-          RESOLUTION: ${{ env.RESOLUTION }}
+          WIDTH: ${{ env.WIDTH }}
+          HEIGHT: ${{ env.HEIGHT }}
           SHARD_START: ${{ steps.range.outputs.start }}
           SHARD_END: ${{ steps.range.outputs.end }}
         run: |
@@ -307,10 +339,6 @@ jobs:
           path: all_frames_downloads
           merge-multiple: false
 
-      # Gabungkan semua shard, urutkan berdasarkan NOMOR FRAME numerik
-      # (bukan urutan alfabetis nama file), lalu renumber ulang jadi
-      # deret 000001, 000002, ... yang dijamin berurutan tanpa celah.
-      # Ini juga mendeteksi kalau ada shard yang gagal / frame hilang.
       - name: Merge, sort numerically, and renumber frames
         run: |
           mkdir -p all_frames
@@ -325,7 +353,7 @@ jobs:
 
           numbered = [(frame_num(f), f) for f in files]
           numbered = [nf for nf in numbered if nf[0] is not None]
-          numbered.sort(key=lambda nf: nf[0])  # urut numerik asli, bukan alfabetis
+          numbered.sort(key=lambda nf: nf[0])
 
           print(f"Ditemukan {len(numbered)} file frame dari semua shard.")
 
@@ -356,23 +384,21 @@ jobs:
             exit 1
           fi
 
-      - name: Convert PNG frames to MP4
+      - name: Convert PNG frames to MP4 (9:16)
         run: |
           mkdir -p output
-          # Sekarang penomoran dijamin berurutan 000001..N tanpa celah,
-          # jadi pattern numerik %06d + start_number aman dipakai.
           ffmpeg -y -framerate 30 \
             -start_number 1 \
             -i 'all_frames/frame_%06d.png' \
             -c:v libx264 -pix_fmt yuv420p \
             -crf 18 -preset slow \
-            output/creative_animation.mp4
+            output/cartoon_short_9x16.mp4
 
       - name: Upload MP4 video
         uses: actions/upload-artifact@v4
         with:
           name: video-mp4
-          path: output/creative_animation.mp4
+          path: output/cartoon_short_9x16.mp4
           retention-days: 14
 
       - name: Upload merged frames
