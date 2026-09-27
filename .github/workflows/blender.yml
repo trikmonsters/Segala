@@ -23,6 +23,7 @@ on:
         required: false
         default: "5"
 
+
 env:
   BLENDER_VERSION: "4.2.3"
   BLENDER_SERIES: "4.2"
@@ -34,12 +35,16 @@ env:
   RESOLUTION: ${{ github.event.inputs.resolution || '1280' }}
   SHARDS: ${{ github.event.inputs.shards || '5' }}
 
+
 jobs:
 
   # ============================================================
   # PLAN
   # Membuat daftar shard:
-  # 0,1,2,3,4 jika SHARDS = 5
+  #
+  # 0, 1, 2, 3, 4
+  #
+  # jika SHARDS = 5
   # ============================================================
 
   plan:
@@ -49,11 +54,15 @@ jobs:
       shard_list: ${{ steps.gen.outputs.list }}
 
     steps:
-      - id: gen
-        run: |
-          n="${SHARDS}"
 
-          list=$(python3 -c "import json; print(json.dumps(list(range(int('$n')))))")
+      - name: Generate shard list
+        id: gen
+        env:
+          TOTAL_SHARDS: ${{ env.SHARDS }}
+        run: |
+          n="${TOTAL_SHARDS}"
+
+          list=$(python3 -c "import json; print(json.dumps(list(range(int('$n'))))")
 
           echo "Shard list: $list"
 
@@ -97,12 +106,11 @@ jobs:
 
         with:
           path: /opt/blender
-
           key: blender-${{ env.BLENDER_VERSION }}-linux-x64
 
 
       # ========================================================
-      # INSTALL BLENDER
+      # DOWNLOAD & INSTALL BLENDER
       # ========================================================
 
       - name: Download & install Blender
@@ -110,7 +118,8 @@ jobs:
 
         run: |
 
-          curl -fL -o blender.tar.xz \
+          curl -fL \
+            -o blender.tar.xz \
             "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
 
           mkdir -p /opt/blender
@@ -125,7 +134,8 @@ jobs:
       # ========================================================
 
       - name: Add Blender to PATH
-        run: echo "/opt/blender" >> "$GITHUB_PATH"
+        run: |
+          echo "/opt/blender" >> "$GITHUB_PATH"
 
 
       # ========================================================
@@ -157,8 +167,8 @@ jobs:
       #
       # Contoh:
       #
-      # FRAME_END = 120
-      # SHARDS    = 5
+      # 120 frames
+      # 5 shards
       #
       # shard 0 = 1-24
       # shard 1 = 25-48
@@ -171,13 +181,29 @@ jobs:
       - name: Compute frame range for this shard
         id: range
 
+        env:
+          TOTAL_FRAMES: ${{ env.FRAME_END }}
+          TOTAL_SHARDS: ${{ env.SHARDS }}
+          CURRENT_SHARD: ${{ matrix.shard }}
+
         run: |
 
           python3 << 'PY' >> "$GITHUB_OUTPUT"
 
-          total = int("${FRAME_END}")
-          shards = int("${SHARDS}")
-          shard = int("${{ matrix.shard }}")
+          import os
+
+          total = int(os.environ["TOTAL_FRAMES"])
+          shards = int(os.environ["TOTAL_SHARDS"])
+          shard = int(os.environ["CURRENT_SHARD"])
+
+          if total < 1:
+              raise ValueError("FRAME_END harus >= 1")
+
+          if shards < 1:
+              raise ValueError("SHARDS harus >= 1")
+
+          if shard < 0 or shard >= shards:
+              raise ValueError("Shard index tidak valid")
 
           # Ceiling division
           per = (total + shards - 1) // shards
@@ -185,17 +211,22 @@ jobs:
           start = shard * per + 1
           end = min(total, start + per - 1)
 
+          # Jika shard berada di luar range
+          if start > total:
+              start = total + 1
+              end = total
+
           print(f"start={start}")
           print(f"end={end}")
 
           print("")
-          print("====================================")
+          print("======================================")
           print(f"TOTAL FRAMES : {total}")
           print(f"TOTAL SHARDS : {shards}")
           print(f"CURRENT SHARD: {shard}")
           print(f"FRAME START  : {start}")
           print(f"FRAME END    : {end}")
-          print("====================================")
+          print("======================================")
 
           PY
 
@@ -253,20 +284,30 @@ jobs:
           nt.nodes.clear()
 
 
-          env_tex = nt.nodes.new("ShaderNodeTexEnvironment")
+          env_tex = nt.nodes.new(
+              "ShaderNodeTexEnvironment"
+          )
 
           env_tex.image = bpy.data.images.load(
               os.path.abspath("assets/studio.hdr")
           )
 
 
-          mapping = nt.nodes.new("ShaderNodeMapping")
+          mapping = nt.nodes.new(
+              "ShaderNodeMapping"
+          )
 
-          tex_coord = nt.nodes.new("ShaderNodeTexCoord")
+          tex_coord = nt.nodes.new(
+              "ShaderNodeTexCoord"
+          )
 
-          background = nt.nodes.new("ShaderNodeBackground")
+          background = nt.nodes.new(
+              "ShaderNodeBackground"
+          )
 
-          world_out = nt.nodes.new("ShaderNodeOutputWorld")
+          world_out = nt.nodes.new(
+              "ShaderNodeOutputWorld"
+          )
 
 
           background.inputs["Strength"].default_value = 1.1
@@ -326,20 +367,7 @@ jobs:
 
 
           # ============================================================
-          # IMAGE OUTPUT
-          #
-          # IMPORTANT:
-          #
-          # Jangan menggunakan frame_ tanpa nomor global.
-          #
-          # Setiap frame akan:
-          #
-          # frame_000001.png
-          # frame_000002.png
-          # frame_000003.png
-          #
-          # dst.
-          #
+          # PNG SETTINGS
           # ============================================================
 
           scene.render.image_settings.file_format = "PNG"
@@ -355,7 +383,7 @@ jobs:
 
 
           # ============================================================
-          # HERO OBJECT
+          # HERO TORUS
           # ============================================================
 
           bpy.ops.mesh.primitive_torus_add(
@@ -389,7 +417,9 @@ jobs:
 
           mat.use_nodes = True
 
-          bsdf = mat.node_tree.nodes.get("Principled BSDF")
+          bsdf = mat.node_tree.nodes.get(
+              "Principled BSDF"
+          )
 
 
           bsdf.inputs["Base Color"].default_value = (
@@ -460,7 +490,9 @@ jobs:
 
               sph = bpy.context.active_object
 
-              sph.data.materials.append(glass_mat)
+              sph.data.materials.append(
+                  glass_mat
+              )
 
 
               orbiters.append(
@@ -600,7 +632,20 @@ jobs:
 
 
           # ============================================================
-          # RENDER FRAMES
+          # HANDLE EMPTY SHARD
+          # ============================================================
+
+          if SHARD_START > SHARD_END:
+
+              print(
+                  "Shard ini tidak memiliki frame."
+              )
+
+              raise SystemExit(0)
+
+
+          # ============================================================
+          # RENDER
           # ============================================================
 
           print("")
@@ -721,13 +766,15 @@ jobs:
 
 
               # --------------------------------------------------------
-              # IMPORTANT:
+              # GLOBAL FRAME FILE NAME
               #
-              # Explicit global filename.
+              # Contoh:
               #
-              # Every shard writes directly using the actual
-              # global frame number.
+              # frame 1   -> frame_000001.png
+              # frame 25  -> frame_000025.png
+              # frame 120 -> frame_000120.png
               #
+              # Setiap shard menggunakan nomor global.
               # --------------------------------------------------------
 
               filename = os.path.join(
@@ -741,7 +788,7 @@ jobs:
 
 
               # --------------------------------------------------------
-              # Render frame
+              # RENDER
               # --------------------------------------------------------
 
               bpy.ops.render.render(
@@ -750,10 +797,10 @@ jobs:
 
 
               # --------------------------------------------------------
-              # Verify output
+              # VERIFY FRAME
               # --------------------------------------------------------
 
-              if not os.path.exists(filename):
+              if not os.path.isfile(filename):
 
                   raise RuntimeError(
                       f"Frame gagal dibuat: {filename}"
@@ -761,13 +808,14 @@ jobs:
 
 
               print(
-                  f"Rendered frame {frame}/{TOTAL_FRAMES} "
+                  f"Rendered frame "
+                  f"{frame}/{TOTAL_FRAMES} "
                   f"-> {filename}"
               )
 
 
           # ============================================================
-          # FINISHED
+          # DONE
           # ============================================================
 
           print("")
@@ -785,7 +833,7 @@ jobs:
       # RUN BLENDER
       # ========================================================
 
-      - name: Run Blender headless render (this shard only)
+      - name: Run Blender headless render
 
         env:
           FRAME_END: ${{ env.FRAME_END }}
@@ -804,24 +852,25 @@ jobs:
 
 
       # ========================================================
-      # VERIFY SHARD FRAMES
+      # VERIFY SHARD
       # ========================================================
 
       - name: Verify shard frames
 
-        run: |
+        env:
+          EXPECTED_START: ${{ steps.range.outputs.start }}
+          EXPECTED_END: ${{ steps.range.outputs.end }}
 
-          echo "======================================"
-          echo "VERIFY SHARD"
-          echo "======================================"
+        run: |
 
           expected=$(
             python3 -c "
-          start=${{ steps.range.outputs.start }}
-          end=${{ steps.range.outputs.end }}
-          print(end-start+1)
+          start=int('${EXPECTED_START}')
+          end=int('${EXPECTED_END}')
+          print(max(0, end-start+1))
           "
           )
+
 
           actual=$(
             find output/frames \
@@ -831,8 +880,14 @@ jobs:
               | wc -l
           )
 
-          echo "Expected frames: $expected"
-          echo "Actual frames:   $actual"
+
+          echo "======================================"
+          echo "SHARD FRAME CHECK"
+          echo "======================================"
+
+          echo "Expected: $expected"
+          echo "Actual:   $actual"
+
 
           if [ "$actual" -ne "$expected" ]; then
 
@@ -860,7 +915,7 @@ jobs:
 
 
   # ============================================================
-  # COMBINE ALL SHARDS
+  # COMBINE
   # ============================================================
 
   combine:
@@ -886,7 +941,9 @@ jobs:
       # ========================================================
       # DOWNLOAD ALL SHARDS
       #
-      # Setiap shard tetap berada di folder masing-masing.
+      # Jangan merge-multiple.
+      #
+      # Setiap shard akan berada di folder sendiri.
       # ========================================================
 
       - name: Download all frame shards
@@ -902,7 +959,7 @@ jobs:
 
 
       # ========================================================
-      # SHOW DOWNLOADED STRUCTURE
+      # INSPECT DOWNLOAD
       # ========================================================
 
       - name: Inspect downloaded frames
@@ -910,8 +967,9 @@ jobs:
         run: |
 
           echo "======================================"
-          echo "DOWNLOADED FRAME STRUCTURE"
+          echo "DOWNLOADED SHARDS"
           echo "======================================"
+
 
           find all_frames_downloads \
             -type f \
@@ -919,8 +977,11 @@ jobs:
             | sort \
             | head -30
 
+
           echo ""
-          echo "Total PNG files:"
+
+          echo "Total downloaded PNG:"
+
 
           find all_frames_downloads \
             -type f \
@@ -929,19 +990,7 @@ jobs:
 
 
       # ========================================================
-      # MERGE FRAME FILES
-      #
-      # Karena setiap frame sudah menggunakan global frame number:
-      #
-      # shard 0:
-      # frame_000001.png
-      # ...
-      #
-      # shard 1:
-      # frame_000025.png
-      # ...
-      #
-      # Tidak ada collision.
+      # MERGE ALL FRAME FILES
       # ========================================================
 
       - name: Merge all frames
@@ -955,7 +1004,7 @@ jobs:
 
 
           echo "======================================"
-          echo "COPYING FRAMES"
+          echo "MERGING FRAMES"
           echo "======================================"
 
 
@@ -974,15 +1023,18 @@ jobs:
           done
 
 
+          total=$(
+            find all_frames \
+              -maxdepth 1 \
+              -type f \
+              -name 'frame_*.png' \
+              | wc -l
+          )
+
+
           echo ""
 
-          echo "Total merged frames:"
-
-          find all_frames \
-            -maxdepth 1 \
-            -type f \
-            -name 'frame_*.png' \
-            | wc -l
+          echo "Total merged frames: $total"
 
 
       # ========================================================
@@ -991,12 +1043,12 @@ jobs:
 
       - name: Verify total frame count
 
+        env:
+          EXPECTED_FRAMES: ${{ env.FRAME_END }}
+
         run: |
 
-          set -e
-
-
-          expected="${FRAME_END}"
+          expected="${EXPECTED_FRAMES}"
 
 
           actual=$(
@@ -1009,7 +1061,7 @@ jobs:
 
 
           echo "======================================"
-          echo "FRAME COUNT CHECK"
+          echo "TOTAL FRAME COUNT"
           echo "======================================"
 
           echo "Expected: $expected"
@@ -1018,35 +1070,31 @@ jobs:
 
           if [ "$actual" -ne "$expected" ]; then
 
-              echo "::error::Jumlah frame tidak lengkap."
+            echo "::error::Frame tidak lengkap."
 
-              exit 1
+            exit 1
 
           fi
 
 
       # ========================================================
-      # CHECK MISSING FRAMES
+      # CHECK FRAME SEQUENCE
       #
-      # Misalnya:
+      # Mendeteksi:
       #
-      # frame 1
-      # frame 2
-      # frame 4
-      #
-      # maka frame 3 akan terdeteksi.
+      # frame hilang
+      # frame duplikat
+      # frame di luar range
       # ========================================================
 
       - name: Check for missing frames
 
+        env:
+          EXPECTED_FRAMES: ${{ env.FRAME_END }}
+
         run: |
 
           set -e
-
-
-          echo "======================================"
-          echo "CHECKING FRAME SEQUENCE"
-          echo "======================================"
 
 
           python3 << 'PY'
@@ -1058,18 +1106,22 @@ jobs:
 
           folder = "all_frames"
 
-          frame_end = int(os.environ["FRAME_END"])
+          frame_end = int(
+              os.environ["EXPECTED_FRAMES"]
+          )
 
 
           frames = []
 
 
+          pattern = re.compile(
+              r"^frame_(\d{6})\.png$"
+          )
+
+
           for filename in os.listdir(folder):
 
-              match = re.fullmatch(
-                  r"frame_(\d{6})\.png",
-                  filename
-              )
+              match = pattern.match(filename)
 
               if match:
 
@@ -1081,7 +1133,7 @@ jobs:
           frames.sort()
 
 
-          expected = list(
+          expected = set(
               range(
                   1,
                   frame_end + 1
@@ -1089,20 +1141,28 @@ jobs:
           )
 
 
+          actual = set(frames)
+
+
           missing = sorted(
-              set(expected) - set(frames)
+              expected - actual
+          )
+
+
+          extra = sorted(
+              actual - expected
           )
 
 
           duplicate = (
               len(frames)
               !=
-              len(set(frames))
+              len(actual)
           )
 
 
           print(
-              f"Detected {len(frames)} frame files."
+              f"Detected frames: {len(frames)}"
           )
 
 
@@ -1118,28 +1178,49 @@ jobs:
               sys.exit(1)
 
 
-          if duplicate:
+          if extra:
+
+              print("")
+              print("EXTRA FRAMES:")
 
               print(
-                  "Duplicate frame numbers detected."
+                  extra[:100]
+              )
+
+              sys.exit(1)
+
+
+          if duplicate:
+
+              print("")
+              print(
+                  "DUPLICATE FRAME NUMBERS DETECTED"
               )
 
               sys.exit(1)
 
 
           print("")
-          print("Frame sequence is COMPLETE.")
           print(
-              f"1 -> {frame_end}"
+              "Frame sequence is COMPLETE."
+          )
+
+          print(
+              f"frame_000001.png -> "
+              f"frame_{frame_end:06d}.png"
           )
 
           PY
 
 
       # ========================================================
-      # NORMALIZE / SORT FRAME NAMES
+      # NORMALIZE SEQUENCE
       #
-      # Ini memastikan sequence final benar-benar:
+      # Membuat folder final:
+      #
+      # normalized_frames/
+      #
+      # dengan:
       #
       # frame_000001.png
       # frame_000002.png
@@ -1148,6 +1229,9 @@ jobs:
       # ========================================================
 
       - name: Normalize frame sequence
+
+        env:
+          EXPECTED_FRAMES: ${{ env.FRAME_END }}
 
         run: |
 
@@ -1161,6 +1245,7 @@ jobs:
 
           import os
           import shutil
+          import re
 
 
           source = "all_frames"
@@ -1168,23 +1253,24 @@ jobs:
           destination = "normalized_frames"
 
 
+          pattern = re.compile(
+              r"^frame_(\d{6})\.png$"
+          )
+
+
           frames = []
 
 
           for filename in os.listdir(source):
 
-              if not filename.endswith(".png"):
-                  continue
+              match = pattern.match(filename)
 
-
-              if not filename.startswith("frame_"):
+              if not match:
                   continue
 
 
               number = int(
-                  filename[
-                      6:-4
-                  ]
+                  match.group(1)
               )
 
 
@@ -1234,21 +1320,52 @@ jobs:
 
 
       # ========================================================
-      # FINAL FRAME CHECK
+      # VERIFY NORMALIZED FRAMES
       # ========================================================
 
       - name: Verify normalized sequence
 
+        env:
+          EXPECTED_FRAMES: ${{ env.FRAME_END }}
+
         run: |
 
+          set -e
+
+
+          count=$(
+            find normalized_frames \
+              -maxdepth 1 \
+              -type f \
+              -name 'frame_*.png' \
+              | wc -l
+          )
+
+
+          expected="${EXPECTED_FRAMES}"
+
+
           echo "======================================"
-          echo "FINAL FRAME SEQUENCE"
+          echo "NORMALIZED FRAME CHECK"
           echo "======================================"
+
+          echo "Expected: $expected"
+          echo "Actual:   $count"
+
+
+          if [ "$count" -ne "$expected" ]; then
+
+            echo "::error::Normalized frame count salah."
+
+            exit 1
+
+          fi
 
 
           first=$(
             find normalized_frames \
               -maxdepth 1 \
+              -type f \
               -name 'frame_*.png' \
               | sort \
               | head -1
@@ -1258,48 +1375,25 @@ jobs:
           last=$(
             find normalized_frames \
               -maxdepth 1 \
+              -type f \
               -name 'frame_*.png' \
               | sort \
               | tail -1
           )
 
 
-          count=$(
-            find normalized_frames \
-              -maxdepth 1 \
-              -name 'frame_*.png' \
-              | wc -l
-          )
-
-
-          echo "First: $first"
-          echo "Last:  $last"
-          echo "Count: $count"
-
-
-          if [ "$count" -ne "${FRAME_END}" ]; then
-
-              echo "::error::Final frame count tidak sesuai."
-
-              exit 1
-
-          fi
+          echo "First frame: $first"
+          echo "Last frame:  $last"
 
 
       # ========================================================
-      # CREATE VIDEO
+      # CREATE MP4
       #
-      # IMPORTANT:
-      #
-      # Jangan menggunakan:
-      #
-      # -pattern_type glob
-      #
-      # Kita menggunakan numeric sequence:
+      # Numeric sequence:
       #
       # frame_%06d.png
       #
-      # sehingga FFmpeg mengambil:
+      # FFmpeg membaca:
       #
       # 000001
       # 000002
@@ -1337,10 +1431,13 @@ jobs:
 
 
       # ========================================================
-      # VERIFY VIDEO
+      # VERIFY MP4
       # ========================================================
 
       - name: Verify MP4
+
+        env:
+          EXPECTED_FRAMES: ${{ env.FRAME_END }}
 
         run: |
 
@@ -1349,14 +1446,13 @@ jobs:
 
           if [ ! -f "output/creative_animation.mp4" ]; then
 
-              echo "::error::MP4 tidak berhasil dibuat."
+            echo "::error::MP4 tidak berhasil dibuat."
 
-              exit 1
+            exit 1
 
           fi
 
 
-          echo ""
           echo "======================================"
           echo "VIDEO INFORMATION"
           echo "======================================"
@@ -1373,6 +1469,41 @@ jobs:
 
 
           echo ""
+
+          duration=$(
+            ffprobe \
+              -v error \
+              -show_entries format=duration \
+              -of default=noprint_wrappers=1:nokey=1 \
+              "output/creative_animation.mp4"
+          )
+
+
+          echo "Video duration: ${duration}s"
+
+
+          python3 << 'PY'
+
+          import os
+
+          expected_frames = int(
+              os.environ["EXPECTED_FRAMES"]
+          )
+
+          expected_duration = (
+              expected_frames / 30
+          )
+
+          print(
+              f"Expected duration: "
+              f"{expected_duration:.3f}s"
+          )
+
+          PY
+
+
+          echo ""
+
           echo "MP4 successfully created."
 
 
@@ -1393,7 +1524,7 @@ jobs:
 
 
       # ========================================================
-      # UPLOAD MERGED FRAMES
+      # UPLOAD FINAL FRAMES
       # ========================================================
 
       - name: Upload merged frames
