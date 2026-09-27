@@ -1,4 +1,4 @@
-name: Manim Squirrel Icon Render
+name: Manim Squirrel Union Render
 
 on:
   workflow_dispatch:
@@ -24,13 +24,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3-dev libcairo2-dev libpango1.0-dev ffmpeg freeglut3-dev xvfb
 
-      - name: Install Manim
-        run: pip install manim
+      - name: Install Python packages
+        run: pip install manim shapely
 
       - name: Write scene code
         run: |
           cat > scene.py << 'PYEOF'
           from manim import *
+          from shapely.geometry import Polygon as SPolygon
+          from shapely.ops import unary_union
+          import numpy as np
 
           config.pixel_height = 1080
           config.pixel_width = 1080
@@ -38,100 +41,166 @@ jobs:
           config.frame_width = 8.0
 
 
-          class IconSquirrel(Scene):
+          # ============================================================
+          # Helper: konversi shapely geometry -> Manim VMobject
+          # ============================================================
+          def shapely_to_vmobject(geom, stroke_color="#1a1a1a",
+                                  stroke_width=2.5,
+                                  fill_color="#1a1a1a",
+                                  fill_opacity=1.0):
+              """
+              Konversi shapely Polygon / MultiPolygon ke VMobject Manim.
+              Mendukung polygon dengan holes (interior rings).
+              """
+              mob = VMobject()
+              mob.set_stroke(color=stroke_color, width=stroke_width)
+              mob.set_fill(color=fill_color, opacity=fill_opacity)
+
+              polygons = []
+              if geom.geom_type == "Polygon":
+                  polygons = [geom]
+              elif geom.geom_type == "MultiPolygon":
+                  polygons = list(geom.geoms)
+              else:
+                  raise ValueError(f"Unsupported geometry: {geom.geom_type}")
+
+              all_points = []
+              for poly in polygons:
+                  # Exterior ring
+                  exterior = list(poly.exterior.coords)
+                  # Konversi ke array numpy [x, y, 0]
+                  arr = np.array([[p[0], p[1], 0.0] for p in exterior])
+                  all_points.append(arr)
+
+                  # Interior rings (holes) - opsional, tapi kita skip dulu
+                  # untuk kesederhanaan
+
+              # Gabung semua titik jadi satu path
+              if all_points:
+                  combined = np.vstack(all_points)
+                  mob.set_points_as_corners(combined)
+
+              return mob
+
+
+          # ============================================================
+          # Helper: buat shapely Polygon dari titik-titik Manim
+          # ============================================================
+          def make_poly(points):
+              """points: list of (x, y) tuples"""
+              return SPolygon(points)
+
+
+          class SquirrelUnion(Scene):
               def construct(self):
-                  self.camera.background_color = "#ffffff"
-                  stroke_color = "#1a1a1a"
-                  stroke_width = 2
-                  fill_color = "#1a1a1a"
-                  fill_opacity = 0.05
+                  self.camera.background_color = "#F5F5F7"
 
-                  base_pos = RIGHT * 0.8
+                  STROKE = "#1a1a1a"
+                  FILL = "#1a1a1a"
+                  ACCENT = "#FFFFFF"
 
-                  # --- Ekor ---
-                  tail_outer = Ellipse(width=3.8, height=6.0).move_to(LEFT * 1.5 + UP * 1.2).rotate(15 * DEGREES)
-                  tail_inner = Ellipse(width=2.2, height=4.5).move_to(LEFT * 1.2 + UP * 0.8).rotate(15 * DEGREES)
-                  tail_group = VGroup(tail_outer, tail_inner)
+                  # ------------------------------------------------------------
+                  # 1. Definisikan bagian-bagian tupai sebagai shapely Polygon
+                  #    Semua koordinat dalam sistem Manim (origin di tengah).
+                  #    Shapely butuh polygon yang valid (tidak self-intersect),
+                  #    jadi kita buat tiap bagian sebagai polygon terpisah,
+                  #    lalu union semua.
+                  # ------------------------------------------------------------
 
-                  # --- Tubuh ---
-                  body = RoundedRectangle(width=2.6, height=3.4, corner_radius=1.2).move_to(base_pos + DOWN * 0.5)
+                  # --- Ekor besar (polygon melengkung) ---
+                  tail = make_poly([
+                      (-2.8, 2.8), (-3.6, 2.0), (-3.9, 0.8), (-3.7, -0.6),
+                      (-3.0, -1.8), (-2.0, -2.4), (-1.2, -2.2), (-1.0, -1.2),
+                      (-1.4, 0.2), (-1.8, 1.4), (-2.3, 2.3),
+                  ])
+
+                  # --- Badan ---
+                  body = make_poly([
+                      (-1.2, 1.6), (0.6, 1.8), (1.4, 1.2), (1.6, 0.0),
+                      (1.4, -1.4), (0.8, -2.2), (-0.4, -2.4), (-1.4, -1.8),
+                      (-1.6, -0.4), (-1.4, 1.0),
+                  ])
 
                   # --- Kepala ---
-                  head = Ellipse(width=3.2, height=2.6).move_to(base_pos + UP * 1.4)
+                  head = make_poly([
+                      (-1.2, 2.4), (-0.2, 2.9), (0.9, 2.8), (1.6, 2.2),
+                      (1.8, 1.6), (1.4, 1.2), (-0.4, 1.2), (-1.2, 1.6),
+                  ])
 
-                  ear_l = RoundedRectangle(width=0.6, height=1.1, corner_radius=0.3).move_to(base_pos + UP * 2.6 + LEFT * 0.9).rotate(25 * DEGREES)
-                  ear_r = RoundedRectangle(width=0.6, height=1.1, corner_radius=0.3).move_to(base_pos + UP * 2.6 + RIGHT * 0.9).rotate(-25 * DEGREES)
+                  # --- Telinga kiri ---
+                  ear_l = make_poly([
+                      (-1.3, 2.5), (-1.7, 3.2), (-1.4, 3.6), (-1.0, 3.3),
+                      (-0.9, 2.7),
+                  ])
 
-                  eye_l = Circle(radius=0.35).move_to(base_pos + UP * 1.6 + LEFT * 0.6)
-                  eye_r = Circle(radius=0.35).move_to(base_pos + UP * 1.6 + RIGHT * 0.6)
-                  pupil_l = Circle(radius=0.1).move_to(base_pos + UP * 1.65 + LEFT * 0.55)
-                  pupil_r = Circle(radius=0.1).move_to(base_pos + UP * 1.65 + RIGHT * 0.55)
+                  # --- Telinga kanan ---
+                  ear_r = make_poly([
+                      (0.4, 2.9), (0.6, 3.6), (1.0, 3.8), (1.3, 3.4),
+                      (1.1, 2.8),
+                  ])
 
-                  nose = Ellipse(width=0.6, height=0.35).move_to(base_pos + UP * 0.9)
-                  mouth_l = ArcBetweenPoints(nose.get_bottom(), nose.get_bottom() + DOWN * 0.4 + LEFT * 0.6, angle=PI / 2.5)
-                  mouth_r = ArcBetweenPoints(nose.get_bottom(), nose.get_bottom() + DOWN * 0.4 + RIGHT * 0.6, angle=-PI / 2.5)
+                  # --- Kaki kiri ---
+                  leg_l = make_poly([
+                      (-1.2, -1.4), (-1.8, -1.6), (-2.0, -2.4), (-1.6, -2.8),
+                      (-0.8, -2.8), (-0.6, -2.0),
+                  ])
 
-                  head_group = VGroup(ear_l, ear_r, head, eye_l, eye_r, pupil_l, pupil_r, nose, mouth_l, mouth_r)
+                  # --- Kaki kanan ---
+                  leg_r = make_poly([
+                      (0.4, -1.6), (1.0, -1.8), (1.4, -2.4), (1.0, -2.8),
+                      (0.2, -2.8), (0.0, -2.0),
+                  ])
 
-                  # --- Lengan & Kacang ---
-                  acorn_nut = Ellipse(width=0.7, height=0.9).move_to(base_pos + DOWN * 0.4)
-                  acorn_cap = ArcBetweenPoints(acorn_nut.get_left() + UP * 0.2, acorn_nut.get_right() + UP * 0.2, angle=PI).move_to(base_pos + DOWN * 0.1)
+                  # --- Lengan kiri (memegang kacang) ---
+                  arm_l = make_poly([
+                      (-1.2, 0.6), (-1.6, 0.2), (-1.4, -0.4), (-0.8, -0.4),
+                      (-0.4, 0.2), (-0.6, 0.6),
+                  ])
 
-                  arm_l = RoundedRectangle(width=1.4, height=0.5, corner_radius=0.25).move_to(base_pos + DOWN * 0.2 + LEFT * 0.9).rotate(30 * DEGREES)
-                  arm_r = RoundedRectangle(width=1.4, height=0.5, corner_radius=0.25).move_to(base_pos + DOWN * 0.2 + RIGHT * 0.9).rotate(-30 * DEGREES)
+                  # --- Lengan kanan ---
+                  arm_r = make_poly([
+                      (0.4, 0.6), (0.8, 0.4), (1.0, -0.2), (0.6, -0.6),
+                      (0.0, -0.4), (-0.2, 0.2),
+                  ])
 
-                  center_group = VGroup(arm_l, arm_r, acorn_nut, acorn_cap)
+                  # --- Kacang (di tengah, di depan badan) ---
+                  acorn = make_poly([
+                      (-0.4, -0.6), (-0.6, -1.0), (-0.4, -1.4), (0.0, -1.5),
+                      (0.4, -1.3), (0.5, -0.9), (0.3, -0.6),
+                  ])
 
-                  # --- Kaki ---
-                  leg_l = Ellipse(width=1.1, height=1.6).move_to(base_pos + DOWN * 1.8 + LEFT * 1.0).rotate(25 * DEGREES)
-                  leg_r = Ellipse(width=1.1, height=1.6).move_to(base_pos + DOWN * 1.8 + RIGHT * 1.0).rotate(-25 * DEGREES)
-                  foot_l = RoundedRectangle(width=1.1, height=0.4, corner_radius=0.2).move_to(base_pos + DOWN * 2.5 + LEFT * 0.9)
-                  foot_r = RoundedRectangle(width=1.1, height=0.4, corner_radius=0.2).move_to(base_pos + DOWN * 2.5 + RIGHT * 0.9)
+                  # ------------------------------------------------------------
+                  # 2. Union semua polygon jadi satu geometry
+                  # ------------------------------------------------------------
+                  parts = [tail, body, head, ear_l, ear_r,
+                           leg_l, leg_r, arm_l, arm_r, acorn]
+                  merged = unary_union(parts)
 
-                  leg_group = VGroup(leg_l, leg_r, foot_l, foot_r)
+                  print(f"Merged geometry type: {merged.geom_type}")
+                  print(f"Number of polygons: {len(merged.geoms) if merged.geom_type == 'MultiPolygon' else 1}")
 
-                  # --- Dahan ---
-                  branch_main = Line(LEFT * 4.5, RIGHT * 4.5).move_to(DOWN * 2.7)
-                  branch_detail = Line(LEFT * 3.0, RIGHT * 1.0).move_to(DOWN * 2.9)
-                  branch_group = VGroup(branch_main, branch_detail)
-
-                  # --- Grouping & Styling ---
-                  squirrel = VGroup(tail_group, body, head_group, leg_group, center_group)
-                  full_icon = VGroup(squirrel, branch_group)
-
-                  full_icon.set_color(stroke_color)
-                  full_icon.set_stroke(width=stroke_width)
-
-                  full_icon.move_to(ORIGIN)
-                  full_icon.scale(0.85)
-
-                  # --- Fill Layer ---
-                  shapes_to_fill = VGroup(
-                      tail_outer, tail_inner, body, head, ear_l, ear_r,
-                      eye_l, eye_r, nose, acorn_nut, arm_l, arm_r, leg_l, leg_r, foot_l, foot_r
-                  ).copy()
-
-                  shapes_to_fill.set_stroke(width=0)
-                  shapes_to_fill.set_fill(color=fill_color, opacity=fill_opacity)
-
-                  # --- Animasi ---
-                  self.play(
-                      LaggedStart(
-                          Create(branch_group),
-                          Create(tail_group),
-                          Create(body),
-                          Create(leg_group),
-                          Create(head_group),
-                          Create(center_group),
-                          lag_ratio=0.15
-                      ),
-                      run_time=3.5,
-                      rate_func=smooth
+                  # ------------------------------------------------------------
+                  # 3. Konversi ke VMobject Manim
+                  # ------------------------------------------------------------
+                  squirrel = shapely_to_vmobject(
+                      merged,
+                      stroke_color=STROKE,
+                      stroke_width=2.5,
+                      fill_color=FILL,
+                      fill_opacity=1.0,
                   )
 
-                  self.wait(0.2)
+                  squirrel.move_to(ORIGIN)
+                  squirrel.scale(0.9)
 
-                  self.play(FadeIn(shapes_to_fill), run_time=2.0)
+                  # ------------------------------------------------------------
+                  # 4. Animasi
+                  # ------------------------------------------------------------
+                  self.play(
+                      DrawBorderThenFill(squirrel),
+                      run_time=4.0,
+                      rate_func=smooth,
+                  )
 
                   self.wait(2)
           PYEOF
@@ -143,7 +212,7 @@ jobs:
 
       - name: Render with Manim
         run: |
-          xvfb-run -a manim -qh --disable_caching scene.py IconSquirrel
+          xvfb-run -a manim -qh --disable_caching scene.py SquirrelUnion
 
       - name: Find and rename output
         run: |
@@ -153,18 +222,18 @@ jobs:
             echo "ERROR: Tidak ada MP4 yang dihasilkan"
             exit 1
           fi
-          mv "$FOUND" output/squirrel.mp4
+          mv "$FOUND" output/squirrel-union.mp4
           ls -lh output/
 
       - name: Create Release and Upload MP4
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: squirrel-${{ github.run_number }}
-          name: "Squirrel Icon ${{ github.run_number }}"
+          tag_name: squirrel-union-${{ github.run_number }}
+          name: "Squirrel Union ${{ github.run_number }}"
           body: |
-            Render Manim IconSquirrel
+            Render Manim Squirrel dengan pendekatan union path
             Run: #${{ github.run_number }}
-          files: output/squirrel.mp4
+          files: output/squirrel-union.mp4
           draft: false
           prerelease: false
         env:
