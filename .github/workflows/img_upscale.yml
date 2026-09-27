@@ -1,0 +1,41 @@
+name: RealESRGAN x4plus
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: '图片 URL'
+        required: true
+        default: 'https://example.com/input.jpg'
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 下载 Real-ESRGAN NCNN 可执行文件
+        run: |
+          curl -fL -o realesrgan.zip \
+            https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip
+          unzip realesrgan.zip
+          chmod +x realesrgan-ncnn-vulkan
+
+      - name: 下载输入图片
+        run: |
+          curl -fL -o input.jpg "${{ github.event.inputs.image_url }}"
+
+      - name: 执行 RealESRGAN x4plus 放大
+        run: |
+          ./realesrgan-ncnn-vulkan \
+            -i input.jpg \
+            -o output.png \
+            -n realesrgan-x4plus \
+            -s 4 \
+            -t 256
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: upscaled-image
+          path: output.png
