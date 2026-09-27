@@ -1,12 +1,15 @@
-name: RealESRGAN x4plus
+name: Upscale Image (Real-ESRGAN x4plus)
 
 on:
   workflow_dispatch:
     inputs:
       image_url:
-        description: '图片 URL'
+        description: 'URL gambar input'
         required: true
         default: 'https://example.com/input.jpg'
+
+permissions:
+  contents: write
 
 jobs:
   upscale:
@@ -14,28 +17,39 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: 下载 Real-ESRGAN NCNN 可执行文件
+      - name: Install dependencies (Vulkan + curl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip libvulkan1 mesa-vulkan-drivers
+
+      - name: Download Real-ESRGAN NCNN binary
         run: |
           curl -fL -o realesrgan.zip \
             https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip
           unzip realesrgan.zip
           chmod +x realesrgan-ncnn-vulkan
 
-      - name: 下载输入图片
+      - name: Download input image from URL
         run: |
           curl -fL -o input.jpg "${{ github.event.inputs.image_url }}"
+          ls -lh input.jpg
 
-      - name: 执行 RealESRGAN x4plus 放大
+      - name: Run RealESRGAN x4plus
         run: |
           ./realesrgan-ncnn-vulkan \
             -i input.jpg \
             -o output.png \
             -n realesrgan-x4plus \
             -s 4 \
-            -t 256
+            -t 256 \
+            -v
+          ls -lh output.png
 
-      - name: 上传结果
-        uses: actions/upload-artifact@v4
+      - name: Upload to GitHub Release (no zip)
+        uses: softprops/action-gh-release@v2
         with:
-          name: upscaled-image
-          path: output.png
+          tag_name: upscale-${{ github.run_number }}
+          name: "Upscaled Image #${{ github.run_number }}"
+          files: output.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
