@@ -4,1193 +4,380 @@ on:
   workflow_dispatch:
     inputs:
       frame_end:
-        description: "Jumlah frame"
-        required: true
+        description: "Frame terakhir animasi"
+        required: false
         default: "120"
-
       samples:
-        description: "Cycles samples"
-        required: true
+        description: "Jumlah Cycles samples"
+        required: false
         default: "32"
-
       resolution:
-        description: "Resolution square"
-        required: true
+        description: "Resolusi render (persegi), misal 1280"
+        required: false
         default: "1280"
-
       shards:
-        description: "Jumlah parallel shards"
-        required: true
+        description: "Jumlah job paralel untuk membagi frame"
+        required: false
         default: "5"
+  push:
+    branches: [ main ]
 
 env:
   BLENDER_VERSION: "4.2.3"
   BLENDER_SERIES: "4.2"
-
   HDRI_URL: "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr"
-
-  FRAME_END: ${{ inputs.frame_end }}
-  SAMPLES: ${{ inputs.samples }}
-  RESOLUTION: ${{ inputs.resolution }}
-  SHARDS: ${{ inputs.shards }}
-
+  FRAME_END: ${{ github.event.inputs.frame_end || '120' }}
+  SAMPLES: ${{ github.event.inputs.samples || '32' }}
+  RESOLUTION: ${{ github.event.inputs.resolution || '1280' }}
+  SHARDS: ${{ github.event.inputs.shards || '5' }}
 
 jobs:
-
-  # ============================================================
-  # PLAN SHARDS
-  # ============================================================
-
+  # Job kecil hanya untuk menghasilkan daftar shard index [0, 1, 2, ...]
+  # dipakai sebagai matrix di job render.
   plan:
     runs-on: ubuntu-latest
-
     outputs:
-      shard_list: ${{ steps.generate.outputs.list }}
-
+      shard_list: ${{ steps.gen.outputs.list }}
     steps:
-
-      - name: Generate shard list
-        id: generate
-        env:
-          TOTAL_SHARDS: ${{ env.SHARDS }}
-          TOTAL_FRAMES: ${{ env.FRAME_END }}
-
+      - id: gen
         run: |
-
-          set -e
-
-          n="${TOTAL_SHARDS}"
-          frames="${TOTAL_FRAMES}"
-
-          if ! [[ "$n" =~ ^[0-9]+$ ]]; then
-            echo "::error::SHARDS harus berupa angka."
-            exit 1
-          fi
-
-          if ! [[ "$frames" =~ ^[0-9]+$ ]]; then
-            echo "::error::FRAME_END harus berupa angka."
-            exit 1
-          fi
-
-          if [ "$n" -lt 1 ]; then
-            echo "::error::SHARDS harus minimal 1."
-            exit 1
-          fi
-
-          if [ "$frames" -lt 1 ]; then
-            echo "::error::FRAME_END harus minimal 1."
-            exit 1
-          fi
-
-          if [ "$n" -gt "$frames" ]; then
-            echo "::error::SHARDS ($n) tidak boleh lebih besar dari FRAME_END ($frames)."
-            exit 1
-          fi
-
-          list="["
-
-          for ((i=0; i<n; i++)); do
-
-            if [ "$i" -gt 0 ]; then
-              list="${list},"
-            fi
-
-            list="${list}${i}"
-
-          done
-
-          list="${list}]"
-
-          echo "Shard list: $list"
-
+          n=${SHARDS}
+          list=$(python3 -c "import json;print(json.dumps(list(range($n))))")
           echo "list=$list" >> "$GITHUB_OUTPUT"
-
-
-  # ============================================================
-  # PARALLEL BLENDER RENDER
-  # ============================================================
 
   render:
     needs: plan
-
     runs-on: ubuntu-latest
-
+    timeout-minutes: 60
     strategy:
       fail-fast: false
-
       matrix:
         shard: ${{ fromJson(needs.plan.outputs.shard_list) }}
-
     steps:
-
-      # ========================================================
-      # CHECKOUT
-      # ========================================================
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache Blender install
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: /opt/blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
 
-      # ========================================================
-      # INSTALL BLENDER
-      # ========================================================
-
-      - name: Install Blender
-        shell: bash
+      - name: Download & install Blender
+        if: steps.cache-blender.outputs.cache-hit != 'true'
         run: |
+          curl -fL -o blender.tar.xz \
+            "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          mkdir -p /opt/blender
+          tar -xJf blender.tar.xz -C /opt/blender --strip-components=1
 
-          set -e
+      - name: Add Blender to PATH
+        run: echo "/opt/blender" >> "$GITHUB_PATH"
 
-          wget -q \
-            "https://download.blender.org/release/Blender4.2/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
-            -O blender.tar.xz
+      - name: Prepare folders
+        run: mkdir -p assets output/frames output/stills
 
-          tar -xf blender.tar.xz
+      - name: Download HDRI environment
+        run: curl -fL -o assets/studio.hdr "${HDRI_URL}"
 
-          mv "blender-${BLENDER_VERSION}-linux-x64" blender
-
-          echo "$GITHUB_WORKSPACE/blender" >> "$GITHUB_PATH"
-
-          "$GITHUB_WORKSPACE/blender/blender" --version
-
-
-      # ========================================================
-      # COMPUTE FRAME RANGE
-      # ========================================================
-
+      # Hitung frame awal/akhir untuk shard ini. Animasi (posisi objek per t)
+      # tetap dihitung berdasarkan TOTAL_FRAMES supaya gerakan mulus dan
+      # tersambung antar shard, hanya rentang frame yang di-render dibagi.
       - name: Compute frame range for this shard
         id: range
-
-        env:
-          TOTAL_FRAMES: ${{ env.FRAME_END }}
-          TOTAL_SHARDS: ${{ env.SHARDS }}
-          CURRENT_SHARD: ${{ matrix.shard }}
-
-        shell: bash
         run: |
-
-          set -e
-
-          python3 << 'PY' >> "$GITHUB_OUTPUT"
-
-          import os
-
-          total = int(os.environ["TOTAL_FRAMES"])
-          shards = int(os.environ["TOTAL_SHARDS"])
-          shard = int(os.environ["CURRENT_SHARD"])
-
-          per = (total + shards - 1) // shards
-
+          python3 -c "
+          total = int('${FRAME_END}')
+          shards = int('${SHARDS}')
+          shard = int('${{ matrix.shard }}')
+          per = -(-total // shards)  # ceil division
           start = shard * per + 1
           end = min(total, start + per - 1)
+          print(f'start={start}')
+          print(f'end={end}')
+          " >> "$GITHUB_OUTPUT"
 
-          print(f"start={start}")
-          print(f"end={end}")
-
-          PY
-
-
-      # ========================================================
-      # SHOW RANGE
-      # ========================================================
-
-      - name: Show shard frame range
-        shell: bash
+      - name: Write Blender script
         run: |
-
-          echo "============================================"
-          echo "Shard        : ${{ matrix.shard }}"
-          echo "Frame start  : ${{ steps.range.outputs.start }}"
-          echo "Frame end    : ${{ steps.range.outputs.end }}"
-          echo "============================================"
-
-
-      # ========================================================
-      # DOWNLOAD HDRI
-      # ========================================================
-
-      - name: Download HDRI
-        shell: bash
-        run: |
-
-          set -e
-
-          mkdir -p assets
-
-          wget -q \
-            "$HDRI_URL" \
-            -O assets/studio.hdr
-
-          test -s assets/studio.hdr
-
-
-      # ========================================================
-      # CREATE BLENDER SCRIPT
-      # ========================================================
-
-      - name: Create Blender render script
-        shell: bash
-        env:
-          START_FRAME: ${{ steps.range.outputs.start }}
-          END_FRAME: ${{ steps.range.outputs.end }}
-
-        run: |
-
-          cat > render.py << 'PY'
-
+          cat > generate_scene.py << 'PYEOF'
           import bpy
           import math
+          import random
           import os
 
-          from mathutils import Vector
+          random.seed(7)
 
-
-          # ====================================================
-          # ENVIRONMENT
-          # ====================================================
-
-          start_frame = int(os.environ["START_FRAME"])
-          end_frame = int(os.environ["END_FRAME"])
-
-          samples = int(os.environ["SAMPLES"])
-          resolution = int(os.environ["RESOLUTION"])
-
-          hdr_path = os.path.abspath("assets/studio.hdr")
-
-          output_dir = os.path.abspath("output/frames")
-
-          os.makedirs(output_dir, exist_ok=True)
-
-
-          # ====================================================
-          # RESET
-          # ====================================================
+          TOTAL_FRAMES = int(os.environ["FRAME_END"])
+          SAMPLES = int(os.environ["SAMPLES"])
+          RES = int(os.environ["RESOLUTION"])
+          SHARD_START = int(os.environ["SHARD_START"])
+          SHARD_END = int(os.environ["SHARD_END"])
 
           bpy.ops.wm.read_factory_settings(use_empty=True)
-
           scene = bpy.context.scene
 
+          # ---------- World: HDRI environment lighting ----------
+          world = bpy.data.worlds.new("World")
+          scene.world = world
+          world.use_nodes = True
+          nt = world.node_tree
+          nt.nodes.clear()
 
-          # ====================================================
-          # RENDER SETTINGS
-          # ====================================================
+          env_tex = nt.nodes.new('ShaderNodeTexEnvironment')
+          env_tex.image = bpy.data.images.load(os.path.abspath("assets/studio.hdr"))
+          mapping = nt.nodes.new('ShaderNodeMapping')
+          tex_coord = nt.nodes.new('ShaderNodeTexCoord')
+          background = nt.nodes.new('ShaderNodeBackground')
+          world_out = nt.nodes.new('ShaderNodeOutputWorld')
 
-          scene.render.engine = "BLENDER_EEVEE_NEXT"
+          background.inputs['Strength'].default_value = 1.1
+          nt.links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
+          nt.links.new(mapping.outputs['Vector'], env_tex.inputs['Vector'])
+          nt.links.new(env_tex.outputs['Color'], background.inputs['Color'])
+          nt.links.new(background.outputs['Background'], world_out.inputs['Surface'])
 
-          scene.render.resolution_x = resolution
-          scene.render.resolution_y = resolution
-          scene.render.resolution_percentage = 100
+          # ---------- Render settings (dioptimalkan untuk kecepatan) ----------
+          scene.render.engine = 'CYCLES'
+          scene.cycles.device = 'CPU'
+          scene.cycles.samples = SAMPLES
+          scene.cycles.use_denoising = True
+          scene.cycles.use_adaptive_sampling = True
+          scene.cycles.adaptive_threshold = 0.05  # berhenti lebih cepat kalau sudah cukup bersih
+          scene.render.use_persistent_data = True  # hindari rebuild BVH tiap frame
 
-          scene.render.image_settings.file_format = "PNG"
-
+          scene.render.resolution_x = RES
+          scene.render.resolution_y = RES
           scene.render.fps = 30
 
-          scene.render.film_transparent = False
+          scene.render.image_settings.file_format = 'PNG'
+          scene.render.filepath = 'output/frames/frame_'
+          scene.view_settings.view_transform = 'AgX'
+          scene.view_settings.look = 'AgX - Medium High Contrast'
 
+          # frame_start/frame_end HANYA menentukan rentang yang dirender
+          # shard ini, tapi animasi 't' tetap dihitung dari TOTAL_FRAMES.
+          scene.frame_start = SHARD_START
+          scene.frame_end = SHARD_END
 
-          # ====================================================
-          # COLOR MANAGEMENT
-          # ====================================================
-
-          try:
-              scene.view_settings.look = "AgX - Medium High Contrast"
-          except Exception:
-              pass
-
-
-          # ====================================================
-          # WORLD / HDRI
-          # ====================================================
-
-          world = bpy.data.worlds.new("World")
-
-          scene.world = world
-
-          world.use_nodes = True
-
-          nodes = world.node_tree.nodes
-          links = world.node_tree.links
-
-          nodes.clear()
-
-          output = nodes.new("ShaderNodeOutputWorld")
-          background = nodes.new("ShaderNodeBackground")
-          environment = nodes.new("ShaderNodeTexEnvironment")
-
-          environment.image = bpy.data.images.load(
-              hdr_path,
-              check_existing=True
-          )
-
-          background.inputs["Strength"].default_value = 0.35
-
-          links.new(
-              environment.outputs["Color"],
-              background.inputs["Color"]
-          )
-
-          links.new(
-              background.outputs["Background"],
-              output.inputs["Surface"]
-          )
-
-
-          # ====================================================
-          # MATERIAL HELPER
-          # ====================================================
-
-          def create_material(
-              name,
-              base_color,
-              metallic=0.0,
-              roughness=0.5,
-              emission=None,
-              emission_strength=0.0
-          ):
-
-              mat = bpy.data.materials.new(name)
-
-              mat.use_nodes = True
-
-              bsdf = mat.node_tree.nodes.get("Principled BSDF")
-
-              bsdf.inputs["Base Color"].default_value = (
-                  base_color[0],
-                  base_color[1],
-                  base_color[2],
-                  1.0
-              )
-
-              bsdf.inputs["Metallic"].default_value = metallic
-
-              bsdf.inputs["Roughness"].default_value = roughness
-
-              if emission is not None:
-
-                  bsdf.inputs["Emission Color"].default_value = (
-                      emission[0],
-                      emission[1],
-                      emission[2],
-                      1.0
-                  )
-
-                  bsdf.inputs["Emission Strength"].default_value = (
-                      emission_strength
-                  )
-
-              return mat
-
-
-          # ====================================================
-          # HERO TORUS
-          # ====================================================
-
+          # ---------- Hero object ----------
           bpy.ops.mesh.primitive_torus_add(
-              major_radius=2.0,
-              minor_radius=0.45,
-              major_segments=96,
-              minor_segments=32,
+              major_radius=2.0, minor_radius=0.5,
+              major_segments=96, minor_segments=32,
               location=(0, 0, 0)
           )
+          hero = bpy.context.active_object
+          bevel = hero.modifiers.new(name="Bevel", type='BEVEL')
+          bevel.width = 0.01
+          bevel.segments = 2
 
-          hero = bpy.context.object
+          mat = bpy.data.materials.new(name="BrushedMetal")
+          mat.use_nodes = True
+          bsdf = mat.node_tree.nodes.get('Principled BSDF')
+          bsdf.inputs['Base Color'].default_value = (0.55, 0.56, 0.6, 1)
+          bsdf.inputs['Metallic'].default_value = 1.0
+          bsdf.inputs['Roughness'].default_value = 0.18
+          hero.data.materials.append(mat)
 
-          hero.name = "Hero_Object"
-
-          hero.data.materials.append(
-              create_material(
-                  "Hero_Metal",
-                  (0.08, 0.12, 0.18),
-                  metallic=0.92,
-                  roughness=0.18
-              )
-          )
-
-
-          # ====================================================
-          # HERO BEVEL
-          # ====================================================
-
-          bevel = hero.modifiers.new(
-              name="Precision Bevel",
-              type="BEVEL"
-          )
-
-          bevel.width = 0.08
-          bevel.segments = 3
-
-
-          # ====================================================
-          # EMISSIVE INNER RING
-          # ====================================================
-
-          bpy.ops.mesh.primitive_torus_add(
-              major_radius=1.55,
-              minor_radius=0.06,
-              major_segments=96,
-              minor_segments=16,
-              location=(0, 0, 0)
-          )
-
-          glow_ring = bpy.context.object
-
-          glow_ring.name = "Glow_Ring"
-
-          glow_ring.data.materials.append(
-              create_material(
-                  "Glow_Material",
-                  (0.03, 0.08, 0.15),
-                  metallic=0.1,
-                  roughness=0.2,
-                  emission=(0.0, 0.35, 1.0),
-                  emission_strength=8.0
-              )
-          )
-
-
-          # ====================================================
-          # ORBITER MATERIAL
-          # ====================================================
-
-          orb_material = create_material(
-              "Orbiter_Glass",
-              (0.12, 0.22, 0.32),
-              metallic=0.35,
-              roughness=0.12,
-              emission=(0.0, 0.08, 0.2),
-              emission_strength=1.5
-          )
-
-
-          # ====================================================
-          # ORBITER SPHERES
-          # ====================================================
+          # ---------- Orbiting glass spheres ----------
+          glass_mat = bpy.data.materials.new(name="Glass")
+          glass_mat.use_nodes = True
+          gbsdf = glass_mat.node_tree.nodes.get('Principled BSDF')
+          gbsdf.inputs['Transmission Weight'].default_value = 1.0
+          gbsdf.inputs['Roughness'].default_value = 0.02
+          gbsdf.inputs['IOR'].default_value = 1.45
 
           orbiters = []
-
-          for i in range(6):
-
-              angle = (math.pi * 2.0 / 6.0) * i
-
-              radius = 3.6
-
-              x = math.cos(angle) * radius
-              y = math.sin(angle) * radius
-
-              z = 0.2 + math.sin(angle * 2.0) * 0.5
-
-              bpy.ops.mesh.primitive_uv_sphere_add(
-                  segments=48,
-                  ring_count=24,
-                  radius=0.25,
-                  location=(x, y, z)
+          count = 20
+          for i in range(count):
+              angle = (i / count) * math.tau
+              r = 3.4
+              x, y = r * math.cos(angle), r * math.sin(angle)
+              z = random.uniform(-0.4, 0.4)
+              bpy.ops.mesh.primitive_ico_sphere_add(
+                  radius=0.14, subdivisions=2, location=(x, y, z)
               )
+              sph = bpy.context.active_object
+              sph.data.materials.append(glass_mat)
+              orbiters.append((sph, angle, z))
 
-              orb = bpy.context.object
+          # ---------- Accent emission ring ----------
+          emit_mat = bpy.data.materials.new(name="AccentGlow")
+          emit_mat.use_nodes = True
+          enodes = emit_mat.node_tree.nodes
+          enodes.clear()
+          emit = enodes.new('ShaderNodeEmission')
+          emit.inputs['Color'].default_value = (0.25, 0.65, 1.0, 1)
+          emit.inputs['Strength'].default_value = 6.0
+          eout = enodes.new('ShaderNodeOutputMaterial')
+          emit_mat.node_tree.links.new(emit.outputs[0], eout.inputs['Surface'])
 
-              orb.name = f"Orbiter_{i:02d}"
-
-              orb.data.materials.append(orb_material)
-
-              orbiters.append(orb)
-
-
-          # ====================================================
-          # FLOOR
-          # ====================================================
-
-          floor_material = create_material(
-              "Floor_Material",
-              (0.015, 0.02, 0.03),
-              metallic=0.15,
-              roughness=0.28
+          bpy.ops.mesh.primitive_torus_add(
+              major_radius=3.4, minor_radius=0.015,
+              major_segments=96, minor_segments=6,
+              location=(0, 0, 0)
           )
+          ring = bpy.context.active_object
+          ring.data.materials.append(emit_mat)
 
-          bpy.ops.mesh.primitive_plane_add(
-              size=30,
-              location=(0, 0, -1.0)
-          )
+          # ---------- Camera ----------
+          bpy.ops.object.camera_add(location=(0, -8.5, 2.6))
+          cam = bpy.context.active_object
+          cam.rotation_euler = (math.radians(74), 0, 0)
+          cam.data.dof.use_dof = True
+          cam.data.dof.focus_distance = 8.5
+          cam.data.dof.aperture_fstop = 2.0
+          cam.data.lens = 70
+          scene.camera = cam
 
-          floor = bpy.context.object
+          # ---------- Lights ----------
+          bpy.ops.object.light_add(type='AREA', location=(5, -3, 6))
+          key = bpy.context.active_object
+          key.data.energy = 500
+          key.data.size = 4
 
-          floor.name = "Floor"
+          bpy.ops.object.light_add(type='AREA', location=(-5, 4, 3))
+          rim = bpy.context.active_object
+          rim.data.energy = 300
+          rim.data.size = 3
+          rim.data.color = (0.6, 0.8, 1.0)
 
-          floor.data.materials.append(floor_material)
-
-
-          # ====================================================
-          # CAMERA
-          # ====================================================
-
-          bpy.ops.object.camera_add(
-              location=(8.5, -8.5, 5.5)
-          )
-
-          camera = bpy.context.object
-
-          camera.name = "Camera"
-
-          scene.camera = camera
-
-          camera.data.lens = 52
-
-
-          # ====================================================
-          # CAMERA LOOK AT
-          # ====================================================
-
-          def look_at(obj, target):
-
-              direction = Vector(target) - obj.location
-
-              obj.rotation_euler = direction.to_track_quat(
-                  "-Z",
-                  "Y"
-              ).to_euler()
-
-
-          look_at(
-              camera,
-              (0, 0, 0)
-          )
-
-
-          # ====================================================
-          # AREA LIGHT HELPER
-          # ====================================================
-
-          def create_area_light(
-              name,
-              location,
-              energy,
-              size,
-              color
-          ):
-
-              bpy.ops.object.light_add(
-                  type="AREA",
-                  location=location
-              )
-
-              light = bpy.context.object
-
-              light.name = name
-
-              light.data.energy = energy
-
-              light.data.shape = "DISK"
-
-              light.data.size = size
-
-              light.data.color = color
-
-              look_at(
-                  light,
-                  (0, 0, 0)
-              )
-
-              return light
-
-
-          # ====================================================
-          # LIGHTS
-          # ====================================================
-
-          create_area_light(
-              "Key_Light",
-              (4, -4, 7),
-              1100,
-              5,
-              (0.75, 0.88, 1.0)
-          )
-
-          create_area_light(
-              "Fill_Light",
-              (-5, -2, 3),
-              800,
-              4,
-              (0.35, 0.55, 1.0)
-          )
-
-          create_area_light(
-              "Rim_Light",
-              (2, 5, 5),
-              1200,
-              4,
-              (0.2, 0.45, 1.0)
-          )
-
-
-          # ====================================================
-          # FRAME LOOP
-          # ====================================================
-
-          total_frames = max(1, end_frame - start_frame + 1)
-
-          print(
-              f"Rendering frames {start_frame} -> {end_frame}"
-          )
-
-          for frame in range(start_frame, end_frame + 1):
-
+          # ---------- Animate & render only this shard's frame range ----------
+          for frame in range(SHARD_START, SHARD_END + 1):
               scene.frame_set(frame)
+              t = (frame - 1) / (TOTAL_FRAMES - 1)  # posisi global 0..1
 
-              local_frame = frame - start_frame
-
-              t = local_frame / max(1, total_frames - 1)
-
-              angle = t * math.pi * 2.0
-
-
-              # ----------------------------------------------
-              # HERO ROTATION
-              # ----------------------------------------------
-
-              hero.rotation_euler[0] = angle * 0.55
-
-              hero.rotation_euler[1] = angle * 0.35
-
-              hero.rotation_euler[2] = angle * 1.15
-
-
-              # ----------------------------------------------
-              # HERO FLOATING MOTION
-              # ----------------------------------------------
-
-              hero.location.z = (
-                  math.sin(angle * 2.0) * 0.22
+              hero.rotation_euler = (
+                  math.sin(t * math.tau) * 0.15,
+                  t * math.tau * 0.4,
+                  math.cos(t * math.tau) * 0.15
               )
 
-
-              # ----------------------------------------------
-              # GLOW RING
-              # ----------------------------------------------
-
-              glow_ring.rotation_euler[0] = angle * 0.35
-
-              glow_ring.rotation_euler[1] = angle * 0.25
-
-              glow_ring.rotation_euler[2] = angle * 1.25
-
-              glow_ring.location.z = hero.location.z
-
-
-              # ----------------------------------------------
-              # ORBITERS
-              # ----------------------------------------------
-
-              for i, orb in enumerate(orbiters):
-
-                  base_angle = (
-                      math.pi * 2.0 / len(orbiters)
-                  ) * i
-
-                  orb_angle = (
-                      base_angle +
-                      angle * (0.55 + i * 0.025)
+              for sph, base_angle, base_z in orbiters:
+                  angle = base_angle + t * math.tau * 0.9
+                  r = 3.4 + math.sin(t * math.tau * 2 + base_angle) * 0.12
+                  sph.location = (
+                      r * math.cos(angle),
+                      r * math.sin(angle),
+                      base_z + math.sin(t * math.tau * 3 + base_angle) * 0.35
                   )
+                  sph.rotation_euler = (0, 0, angle)
 
-                  radius = 3.6 + math.sin(
-                      angle * 1.5 + i
-                  ) * 0.35
+              cam.location.x = math.sin(t * math.tau * 0.5) * 0.6
+              cam.location.z = 2.6 + math.cos(t * math.tau) * 0.25
 
-                  orb.location.x = (
-                      math.cos(orb_angle) * radius
-                  )
+              # FIX: write_still=True TIDAK otomatis menambah nomor frame
+              # ke nama file (beda dengan animation=True). Tanpa baris ini,
+              # setiap iterasi menimpa file yang sama -> cuma 1 gambar
+              # tersisa per shard -> video jadi 0 detik.
+              scene.render.filepath = f'output/frames/frame_{frame:06d}.png'
+              bpy.ops.render.render(write_still=True)
 
-                  orb.location.y = (
-                      math.sin(orb_angle) * radius
-                  )
+          print(f"Shard done: frames {SHARD_START}-{SHARD_END}")
+          PYEOF
 
-                  orb.location.z = (
-                      0.25 +
-                      math.sin(
-                          angle * 2.0 + i
-                      ) * 0.75
-                  )
-
-
-              # ----------------------------------------------
-              # CAMERA MOTION
-              # ----------------------------------------------
-
-              camera_angle = (
-                  -math.pi / 4.0 +
-                  angle * 0.18
-              )
-
-              camera_radius = 11.0
-
-              camera.location.x = (
-                  math.cos(camera_angle) *
-                  camera_radius
-              )
-
-              camera.location.y = (
-                  math.sin(camera_angle) *
-                  camera_radius
-              )
-
-              camera.location.z = (
-                  4.8 +
-                  math.sin(angle) * 1.0
-              )
-
-              look_at(
-                  camera,
-                  (
-                      0,
-                      0,
-                      hero.location.z
-                  )
-              )
-
-
-              # ----------------------------------------------
-              # OUTPUT
-              # ----------------------------------------------
-
-              filename = os.path.join(
-                  output_dir,
-                  f"frame_{frame:06d}.png"
-              )
-
-              scene.render.filepath = filename
-
-              bpy.ops.render.render(
-                  write_still=True
-              )
-
-              if not os.path.isfile(filename):
-
-                  raise RuntimeError(
-                      f"Frame tidak berhasil dibuat: {filename}"
-                  )
-
-              print(
-                  f"Completed frame {frame}: {filename}"
-              )
-
-
-          print(
-              f"Shard selesai: {start_frame} -> {end_frame}"
-          )
-
-          PY
-
-
-      # ========================================================
-      # RENDER
-      # ========================================================
-
-      - name: Render Blender frames
+      - name: Run Blender headless render (this shard only)
         env:
-          START_FRAME: ${{ steps.range.outputs.start }}
-          END_FRAME: ${{ steps.range.outputs.end }}
-
-        shell: bash
+          FRAME_END: ${{ env.FRAME_END }}
+          SAMPLES: ${{ env.SAMPLES }}
+          RESOLUTION: ${{ env.RESOLUTION }}
+          SHARD_START: ${{ steps.range.outputs.start }}
+          SHARD_END: ${{ steps.range.outputs.end }}
         run: |
-
-          set -e
-
-          blender \
-            --background \
-            --python render.py
-
-
-      # ========================================================
-      # VERIFY SHARD
-      # ========================================================
-
-      - name: Verify shard frames
-        env:
-          START_FRAME: ${{ steps.range.outputs.start }}
-          END_FRAME: ${{ steps.range.outputs.end }}
-
-        shell: bash
-        run: |
-
-          set -e
-
-          expected=$((END_FRAME - START_FRAME + 1))
-
-          actual=$(find output/frames \
-            -maxdepth 1 \
-            -type f \
-            -name 'frame_*.png' \
-            | wc -l)
-
-          echo "Expected frames: $expected"
-          echo "Actual frames  : $actual"
-
-          if [ "$actual" -ne "$expected" ]; then
-            echo "::error::Jumlah frame shard tidak sesuai."
-            exit 1
-          fi
-
-
-      # ========================================================
-      # UPLOAD SHARD
-      # ========================================================
+          blender --background --python-exit-code 1 --python generate_scene.py
 
       - name: Upload shard frames
         uses: actions/upload-artifact@v4
-
         with:
           name: frames-shard-${{ matrix.shard }}
-          path: output/frames
-          if-no-files-found: error
-          compression-level: 0
-
-
-  # ============================================================
-  # COMBINE ALL SHARDS
-  # ============================================================
+          path: output/frames/
+          retention-days: 3
 
   combine:
     needs: render
-
     runs-on: ubuntu-latest
-
     steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      # ========================================================
-      # DOWNLOAD ALL SHARDS
-      # ========================================================
-
-      - name: Download all shard artifacts
+      - name: Download all frame shards
         uses: actions/download-artifact@v4
-
         with:
           pattern: frames-shard-*
           path: all_frames_downloads
           merge-multiple: false
 
-
-      # ========================================================
-      # MERGE FRAMES
-      # ========================================================
-
-      - name: Merge shard frames
-        shell: bash
+      # Gabungkan semua shard, urutkan berdasarkan NOMOR FRAME numerik
+      # (bukan urutan alfabetis nama file), lalu renumber ulang jadi
+      # deret 000001, 000002, ... yang dijamin berurutan tanpa celah.
+      # Ini juga mendeteksi kalau ada shard yang gagal / frame hilang.
+      - name: Merge, sort numerically, and renumber frames
         run: |
-
-          set -e
-
           mkdir -p all_frames
+          python3 << 'PYEOF'
+          import glob, os, re, shutil
 
-          found=0
+          files = glob.glob('all_frames_downloads/**/frame_*.png', recursive=True)
 
-          while IFS= read -r -d '' file; do
+          def frame_num(path):
+              m = re.search(r'frame_(\d+)\.png$', os.path.basename(path))
+              return int(m.group(1)) if m else None
 
-            filename="$(basename "$file")"
+          numbered = [(frame_num(f), f) for f in files]
+          numbered = [nf for nf in numbered if nf[0] is not None]
+          numbered.sort(key=lambda nf: nf[0])  # urut numerik asli, bukan alfabetis
 
-            destination="all_frames/$filename"
+          print(f"Ditemukan {len(numbered)} file frame dari semua shard.")
 
-            if [ -e "$destination" ]; then
-              echo "::error::Duplicate frame ditemukan: $filename"
-              exit 1
-            fi
+          seen = set()
+          out_index = 1
+          for n, f in numbered:
+              if n in seen:
+                  print(f"PERINGATAN: frame nomor {n} duplikat, dilewati: {f}")
+                  continue
+              seen.add(n)
+              dst = f"all_frames/frame_{out_index:06d}.png"
+              shutil.copy2(f, dst)
+              out_index += 1
 
-            cp "$file" "$destination"
+          expected = int(os.environ.get("FRAME_END", "0"))
+          if expected and len(seen) != expected:
+              missing = sorted(set(range(1, expected + 1)) - seen)
+              print(f"::warning::Total frame unik = {len(seen)}, diharapkan {expected}.")
+              print(f"Frame yang hilang (cek job shard yang gagal): {missing[:30]}")
+          PYEOF
 
-            found=$((found + 1))
-
-          done < <(
-            find all_frames_downloads \
-              -type f \
-              -name 'frame_*.png' \
-              -print0
-          )
-
-          echo "Total merged frames: $found"
-
-          if [ "$found" -eq 0 ]; then
-            echo "::error::Tidak ada frame yang ditemukan."
+      - name: Verify frames
+        run: |
+          count=$(ls all_frames/frame_*.png 2>/dev/null | wc -l)
+          echo "Total frame final untuk video: $count"
+          if [ "$count" -lt 2 ]; then
+            echo "::error::Frame yang berhasil digabung kurang dari 2 — video tidak bisa dibuat. Cek log job render tiap shard."
             exit 1
           fi
 
-
-      # ========================================================
-      # VERIFY FRAME COUNT
-      # ========================================================
-
-      - name: Verify all frames
-        env:
-          EXPECTED_FRAMES: ${{ env.FRAME_END }}
-
-        shell: bash
+      - name: Convert PNG frames to MP4
         run: |
-
-          set -e
-
-          expected="$EXPECTED_FRAMES"
-
-          actual=$(find all_frames \
-            -maxdepth 1 \
-            -type f \
-            -name 'frame_*.png' \
-            | wc -l)
-
-          echo "Expected total frames: $expected"
-          echo "Actual total frames  : $actual"
-
-          if [ "$actual" -ne "$expected" ]; then
-            echo "::error::Total frame tidak sesuai."
-            exit 1
-          fi
-
-
-      # ========================================================
-      # CHECK MISSING / EXTRA / DUPLICATE
-      # ========================================================
-
-      - name: Validate frame sequence
-        env:
-          EXPECTED_FRAMES: ${{ env.FRAME_END }}
-
-        shell: bash
-        run: |
-
-          set -e
-
-          python3 << 'PY'
-
-          import os
-          import re
-          import sys
-
-          expected = int(os.environ["EXPECTED_FRAMES"])
-
-          files = os.listdir("all_frames")
-
-          pattern = re.compile(
-              r"^frame_(\d{6})\.png$"
-          )
-
-          numbers = []
-
-          for filename in files:
-
-              match = pattern.match(filename)
-
-              if match:
-                  numbers.append(
-                      int(match.group(1))
-                  )
-
-          numbers.sort()
-
-          expected_numbers = list(
-              range(1, expected + 1)
-          )
-
-          if numbers != expected_numbers:
-
-              missing = sorted(
-                  set(expected_numbers) -
-                  set(numbers)
-              )
-
-              extra = sorted(
-                  set(numbers) -
-                  set(expected_numbers)
-              )
-
-              print(
-                  "ERROR: Sequence frame tidak valid."
-              )
-
-              if missing:
-                  print(
-                      "Missing frames:",
-                      missing[:50]
-                  )
-
-              if extra:
-                  print(
-                      "Extra frames:",
-                      extra[:50]
-                  )
-
-              sys.exit(1)
-
-          print(
-              f"Frame sequence valid: 1 -> {expected}"
-          )
-
-          PY
-
-
-      # ========================================================
-      # NORMALIZE FRAME SEQUENCE
-      # ========================================================
-
-      - name: Normalize frames
-        shell: bash
-        run: |
-
-          set -e
-
-          mkdir -p normalized_frames
-
-          find all_frames \
-            -maxdepth 1 \
-            -type f \
-            -name 'frame_*.png' \
-            -print0 |
-          sort -z |
-          while IFS= read -r -d '' file; do
-
-            filename="$(basename "$file")"
-
-            number="${filename#frame_}"
-            number="${number%.png}"
-
-            destination="normalized_frames/frame_${number}.png"
-
-            cp "$file" "$destination"
-
-          done
-
-
-      # ========================================================
-      # VERIFY NORMALIZED FRAMES
-      # ========================================================
-
-      - name: Verify normalized frames
-        env:
-          EXPECTED_FRAMES: ${{ env.FRAME_END }}
-
-        shell: bash
-        run: |
-
-          set -e
-
-          expected="$EXPECTED_FRAMES"
-
-          actual=$(find normalized_frames \
-            -maxdepth 1 \
-            -type f \
-            -name 'frame_*.png' \
-            | wc -l)
-
-          echo "Expected normalized frames: $expected"
-          echo "Actual normalized frames  : $actual"
-
-          if [ "$actual" -ne "$expected" ]; then
-            echo "::error::Normalized frame count tidak sesuai."
-            exit 1
-          fi
-
-
-      # ========================================================
-      # INSTALL FFMPEG
-      # ========================================================
-
-      - name: Install FFmpeg
-        shell: bash
-        run: |
-
-          set -e
-
-          sudo apt-get update
-
-          sudo apt-get install -y ffmpeg
-
-
-      # ========================================================
-      # CREATE OUTPUT DIRECTORY
-      # ========================================================
-
-      - name: Prepare video output
-        shell: bash
-        run: |
-
           mkdir -p output
-
-
-      # ========================================================
-      # CREATE MP4
-      # ========================================================
-
-      - name: Create MP4
-        shell: bash
-        run: |
-
-          set -e
-
-          ffmpeg -y \
-            -framerate 30 \
+          # Sekarang penomoran dijamin berurutan 000001..N tanpa celah,
+          # jadi pattern numerik %06d + start_number aman dipakai.
+          ffmpeg -y -framerate 30 \
             -start_number 1 \
-            -i "normalized_frames/frame_%06d.png" \
-            -c:v libx264 \
-            -pix_fmt yuv420p \
-            -crf 18 \
-            -preset slow \
-            -movflags +faststart \
-            "output/creative_animation.mp4"
+            -i 'all_frames/frame_%06d.png' \
+            -c:v libx264 -pix_fmt yuv420p \
+            -crf 18 -preset slow \
+            output/creative_animation.mp4
 
-
-      # ========================================================
-      # VERIFY MP4
-      # ========================================================
-
-      - name: Verify MP4
-        shell: bash
-        run: |
-
-          set -e
-
-          video="output/creative_animation.mp4"
-
-          if [ ! -f "$video" ]; then
-            echo "::error::MP4 tidak ditemukan."
-            exit 1
-          fi
-
-          size=$(stat -c%s "$video")
-
-          echo "MP4 size: $size bytes"
-
-          if [ "$size" -le 0 ]; then
-            echo "::error::MP4 kosong."
-            exit 1
-          fi
-
-          ffprobe \
-            -v error \
-            -show_entries \
-              format=duration,size \
-            -show_entries \
-              stream=codec_name,width,height,r_frame_rate,nb_frames \
-            -of default=noprint_wrappers=1 \
-            "$video"
-
-
-      # ========================================================
-      # UPLOAD FINAL VIDEO
-      # ========================================================
-
-      - name: Upload final MP4
+      - name: Upload MP4 video
         uses: actions/upload-artifact@v4
-
         with:
-          name: blender-final-video
+          name: video-mp4
           path: output/creative_animation.mp4
-          if-no-files-found: error
-          compression-level: 0
-
-
-      # ========================================================
-      # UPLOAD MERGED FRAMES
-      # ========================================================
+          retention-days: 14
 
       - name: Upload merged frames
         uses: actions/upload-artifact@v4
-
         with:
-          name: blender-all-frames
-          path: normalized_frames
-          if-no-files-found: error
-          compression-level: 0
+          name: frames-png-merged
+          path: all_frames/
+          retention-days: 14
