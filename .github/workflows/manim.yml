@@ -1,4 +1,4 @@
-name: Manim Squirrel Ultra Smooth
+name: Manim Squirrel Hand-Drawn
 
 on:
   workflow_dispatch:
@@ -43,121 +43,65 @@ jobs:
 
 
           # ============================================================
-          # Interpolasi Catmull-Rom / B-spline untuk kurva sangat halus
+          # Interpolasi B-spline
           # ============================================================
-          def smooth_closed_curve(points, samples_per_segment=25):
-              """
-              Ambil control points (list of (x,y)), kembalikan
-              array numpy berisi banyak titik halus yang membentuk
-              kurva tertutup.
-
-              Pakai B-spline periodik (per=True) supaya kurva
-              menyambung mulus di titik awal/akhir.
-              """
+          def smooth_closed_curve(points, samples_per_segment=30):
               pts = np.array(points, dtype=float)
-
-              # B-spline butuh minimal 4 titik
               if len(pts) < 4:
                   return pts
-
-              # Parameterisasi berdasarkan jarak antar titik
-              # (bukan indeks) supaya sampling lebih natural
               diffs = np.diff(np.vstack([pts, pts[:1]]), axis=0)
               dist = np.sqrt((diffs ** 2).sum(axis=1))
               t = np.concatenate([[0], np.cumsum(dist)])
-              t = t / t[-1]  # normalisasi 0..1
-
-              # s=0 artinya interpolasi tepat melalui control points
-              # k=3 artinya cubic spline
+              t = t / t[-1]
               try:
                   tck, _ = splprep(
                       [pts[:, 0], pts[:, 1]],
-                      u=t,
-                      s=0,
-                      k=min(3, len(pts) - 1),
-                      per=True,  # periodik = kurva tertutup mulus
+                      u=t, s=0, k=min(3, len(pts) - 1), per=True,
                   )
               except Exception as e:
-                  print(f"splprep failed: {e}, fallback ke raw points")
+                  print(f"splprep failed: {e}")
                   return pts
-
-              # Sampling sangat padat
               n_samples = len(pts) * samples_per_segment
               u_new = np.linspace(0, 1, n_samples)
               x_new, y_new = splev(u_new, tck)
-
               return np.column_stack([x_new, y_new])
 
 
-          def shapely_to_vmobject(geom, stroke_color="#1a1a1a",
-                                  stroke_width=2.5,
-                                  fill_color="#1a1a1a",
-                                  fill_opacity=1.0,
-                                  smooth_samples=25):
+          def points_to_vmobject(points, stroke_color="#1a1a1a",
+                                 stroke_width=2.5,
+                                 fill_color="#1a1a1a",
+                                 fill_opacity=1.0,
+                                 smooth_samples=30):
               """
-              Konversi shapely Polygon/MultiPolygon ke VMobject Manim
-              dengan kurva sangat halus.
+              Buat VMobject dari list titik. TIDAK di-union —
+              setiap bagian jadi VMobject terpisah supaya bisa
+              dianimasikan satu per satu.
               """
+              smooth = smooth_closed_curve(points, smooth_samples)
+              arr = np.column_stack([smooth, np.zeros(len(smooth))])
+
               mob = VMobject()
+              mob.set_points_smoothly(arr)
               mob.set_stroke(color=stroke_color, width=stroke_width)
               mob.set_fill(color=fill_color, opacity=fill_opacity)
-
-              polygons = []
-              if geom.geom_type == "Polygon":
-                  polygons = [geom]
-              elif geom.geom_type == "MultiPolygon":
-                  polygons = list(geom.geoms)
-
-              all_points = []
-              for poly in polygons:
-                  exterior = list(poly.exterior.coords)[:-1]  # buang titik duplikat
-                  if len(exterior) >= 4:
-                      smooth = smooth_closed_curve(exterior, smooth_samples)
-                  else:
-                      smooth = np.array(exterior)
-                  arr = np.column_stack([smooth, np.zeros(len(smooth))])
-                  all_points.append(arr)
-
-              if all_points:
-                  combined = np.vstack(all_points)
-                  mob.set_points_smoothly(combined)
-
               return mob
 
 
-          def make_poly(points):
-              return SPolygon(points)
-
-
           # ============================================================
-          # Control points (titik kontrol, bukan titik final)
-          # Semakin banyak control points, semakin presisi bentuknya.
-          # Kurva final akan diinterpolasi dari titik-titik ini.
+          # Control points
           # ============================================================
-
-          # --- Ekor: kurva S besar di kiri ---
-          # Control points mengikuti alur ekor tupai: dari pangkal
-          # badan, naik melengkung ke atas, turun di sisi luar,
-          # lalu kembali ke pangkal.
           TAIL = [
-              # Pangkal ekor (nempel badan)
               (-0.95, 1.30), (-1.15, 1.70), (-1.40, 2.10),
-              # Naik melengkung
               (-1.75, 2.50), (-2.15, 2.85), (-2.60, 3.05),
               (-3.05, 3.15), (-3.50, 3.10), (-3.85, 2.90),
-              # Puncak luar
               (-4.10, 2.60), (-4.25, 2.20), (-4.30, 1.75),
-              # Turun sisi luar
               (-4.25, 1.25), (-4.10, 0.75), (-3.85, 0.25),
               (-3.50, -0.20), (-3.05, -0.60), (-2.55, -0.95),
-              # Bawah
               (-2.05, -1.20), (-1.55, -1.35), (-1.15, -1.30),
-              # Kembali ke pangkal
               (-0.85, -1.10), (-0.70, -0.70), (-0.68, -0.25),
               (-0.75, 0.20), (-0.85, 0.65), (-0.90, 1.00),
           ]
 
-          # --- Badan ---
           BODY = [
               (-0.90, 1.55), (-0.55, 1.85), (-0.10, 2.00),
               (0.35, 1.98), (0.75, 1.80), (1.05, 1.45),
@@ -169,7 +113,6 @@ jobs:
               (-1.25, 1.00), (-1.10, 1.30),
           ]
 
-          # --- Kepala ---
           HEAD = [
               (-0.90, 2.30), (-0.65, 2.60), (-0.30, 2.82),
               (0.10, 2.95), (0.50, 2.92), (0.85, 2.78),
@@ -179,7 +122,6 @@ jobs:
               (-0.68, 1.55), (-0.85, 1.85), (-0.92, 2.10),
           ]
 
-          # --- Telinga kiri ---
           EAR_L = [
               (-1.00, 2.50), (-1.15, 2.85), (-1.25, 3.15),
               (-1.28, 3.42), (-1.20, 3.62), (-1.05, 3.72),
@@ -187,7 +129,6 @@ jobs:
               (-0.68, 2.85), (-0.75, 2.55), (-0.85, 2.45),
           ]
 
-          # --- Telinga kanan ---
           EAR_R = [
               (0.20, 2.85), (0.28, 3.15), (0.38, 3.42),
               (0.52, 3.62), (0.70, 3.70), (0.88, 3.62),
@@ -195,7 +136,6 @@ jobs:
               (0.85, 2.60), (0.72, 2.50), (0.55, 2.50),
           ]
 
-          # --- Kaki kiri ---
           LEG_L = [
               (-0.90, -1.50), (-1.10, -1.85), (-1.25, -2.20),
               (-1.30, -2.55), (-1.22, -2.82), (-1.05, -2.95),
@@ -204,7 +144,6 @@ jobs:
               (-0.72, -1.48),
           ]
 
-          # --- Kaki kanan ---
           LEG_R = [
               (0.30, -1.60), (0.18, -1.95), (0.15, -2.30),
               (0.22, -2.62), (0.42, -2.85), (0.68, -2.92),
@@ -213,7 +152,6 @@ jobs:
               (0.55, -1.52),
           ]
 
-          # --- Lengan kiri ---
           ARM_L = [
               (-0.80, 0.70), (-0.95, 0.45), (-1.08, 0.15),
               (-1.12, -0.15), (-1.05, -0.42), (-0.88, -0.55),
@@ -222,7 +160,6 @@ jobs:
               (-0.68, 0.75),
           ]
 
-          # --- Lengan kanan ---
           ARM_R = [
               (0.35, 0.72), (0.52, 0.62), (0.68, 0.42),
               (0.80, 0.12), (0.82, -0.18), (0.72, -0.42),
@@ -232,7 +169,7 @@ jobs:
           ]
 
 
-          class SquirrelUltraSmooth(Scene):
+          class SquirrelHandDrawn(Scene):
               def construct(self):
                   self.camera.background_color = "#F5F5F7"
 
@@ -241,38 +178,73 @@ jobs:
                   WHITE = "#FFFFFF"
 
                   # ------------------------------------------------------------
-                  # 1. Union siluet utama
+                  # 1. Buat setiap bagian jadi VMobject TERPISAH
+                  #    (tidak di-union, supaya bisa dianimasikan per bagian)
                   # ------------------------------------------------------------
-                  parts = [
-                      make_poly(TAIL),
-                      make_poly(BODY),
-                      make_poly(HEAD),
-                      make_poly(EAR_L),
-                      make_poly(EAR_R),
-                      make_poly(LEG_L),
-                      make_poly(LEG_R),
-                      make_poly(ARM_L),
-                      make_poly(ARM_R),
-                  ]
-                  merged = unary_union(parts)
-                  print(f"Merged: {merged.geom_type}")
+                  tail = points_to_vmobject(TAIL, smooth_samples=30)
+                  body = points_to_vmobject(BODY, smooth_samples=30)
+                  head = points_to_vmobject(HEAD, smooth_samples=30)
+                  ear_l = points_to_vmobject(EAR_L, smooth_samples=25)
+                  ear_r = points_to_vmobject(EAR_R, smooth_samples=25)
+                  leg_l = points_to_vmobject(LEG_L, smooth_samples=25)
+                  leg_r = points_to_vmobject(LEG_R, smooth_samples=25)
+                  arm_l = points_to_vmobject(ARM_L, smooth_samples=25)
+                  arm_r = points_to_vmobject(ARM_R, smooth_samples=25)
 
-                  # Sampling sangat padat: 40 titik per control point segment
-                  silhouette = shapely_to_vmobject(
-                      merged,
-                      stroke_color=STROKE,
-                      stroke_width=2.5,
-                      fill_color=FILL,
-                      fill_opacity=1.0,
-                      smooth_samples=40,
+                  # Isi siluet dengan warna gelap, tapi TANPA stroke
+                  # (stroke akan di-animasikan terpisah)
+                  for part in [tail, body, head, ear_l, ear_r,
+                               leg_l, leg_r, arm_l, arm_r]:
+                      part.set_fill(FILL, opacity=1.0)
+                      part.set_stroke(width=0)
+
+                  # Outline terpisah untuk animasi gambar
+                  outline_tail = points_to_vmobject(TAIL, smooth_samples=30,
+                                                    fill_opacity=0,
+                                                    stroke_width=2.5)
+                  outline_body = points_to_vmobject(BODY, smooth_samples=30,
+                                                    fill_opacity=0,
+                                                    stroke_width=2.5)
+                  outline_head = points_to_vmobject(HEAD, smooth_samples=30,
+                                                    fill_opacity=0,
+                                                    stroke_width=2.5)
+                  outline_ear_l = points_to_vmobject(EAR_L, smooth_samples=25,
+                                                     fill_opacity=0,
+                                                     stroke_width=2.5)
+                  outline_ear_r = points_to_vmobject(EAR_R, smooth_samples=25,
+                                                     fill_opacity=0,
+                                                     stroke_width=2.5)
+                  outline_leg_l = points_to_vmobject(LEG_L, smooth_samples=25,
+                                                     fill_opacity=0,
+                                                     stroke_width=2.5)
+                  outline_leg_r = points_to_vmobject(LEG_R, smooth_samples=25,
+                                                     fill_opacity=0,
+                                                     stroke_width=2.5)
+                  outline_arm_l = points_to_vmobject(ARM_L, smooth_samples=25,
+                                                     fill_opacity=0,
+                                                     stroke_width=2.5)
+                  outline_arm_r = points_to_vmobject(ARM_R, smooth_samples=25,
+                                                     fill_opacity=0,
+                                                     stroke_width=2.5)
+
+                  # Gabung jadi VGroup
+                  outlines = VGroup(
+                      outline_tail, outline_body, outline_head,
+                      outline_ear_l, outline_ear_r,
+                      outline_leg_l, outline_leg_r,
+                      outline_arm_l, outline_arm_r,
                   )
-                  silhouette.move_to(ORIGIN)
-                  silhouette.scale(0.9)
+                  outlines.move_to(ORIGIN)
+                  outlines.scale(0.9)
+
+                  fills = VGroup(tail, body, head, ear_l, ear_r,
+                                 leg_l, leg_r, arm_l, arm_r)
+                  fills.move_to(ORIGIN)
+                  fills.scale(0.9)
 
                   # ------------------------------------------------------------
-                  # 2. Detail di atas siluet (tidak di-union)
+                  # 2. Detail (mata, hidung, mulut, kacang)
                   # ------------------------------------------------------------
-                  # Mata putih
                   eye_l = Circle(radius=0.30, stroke_width=2.5,
                                  stroke_color=STROKE,
                                  fill_color=WHITE, fill_opacity=1.0)
@@ -283,7 +255,6 @@ jobs:
                                  fill_color=WHITE, fill_opacity=1.0)
                   eye_r.move_to(np.array([0.45, 2.10, 0]))
 
-                  # Pupil
                   pupil_l = Circle(radius=0.12, stroke_width=0,
                                    fill_color=STROKE, fill_opacity=1.0)
                   pupil_l.move_to(np.array([-0.32, 2.15, 0]))
@@ -292,23 +263,12 @@ jobs:
                                    fill_color=STROKE, fill_opacity=1.0)
                   pupil_r.move_to(np.array([0.48, 2.15, 0]))
 
-                  # Kilau mata (highlight kecil)
-                  shine_l = Circle(radius=0.04, stroke_width=0,
-                                   fill_color=WHITE, fill_opacity=0.9)
-                  shine_l.move_to(np.array([-0.28, 2.20, 0]))
-
-                  shine_r = Circle(radius=0.04, stroke_width=0,
-                                   fill_color=WHITE, fill_opacity=0.9)
-                  shine_r.move_to(np.array([0.52, 2.20, 0]))
-
-                  # Hidung
                   nose = Ellipse(width=0.34, height=0.22,
                                  stroke_width=2.0,
                                  stroke_color=STROKE,
                                  fill_color=STROKE, fill_opacity=1.0)
                   nose.move_to(np.array([0.05, 1.55, 0]))
 
-                  # Mulut
                   mouth_l = ArcBetweenPoints(
                       np.array([0.05, 1.45, 0]),
                       np.array([-0.28, 1.12, 0]),
@@ -324,7 +284,6 @@ jobs:
                       stroke_width=2.0,
                   )
 
-                  # Kacang
                   acorn_nut = Ellipse(width=0.58, height=0.78,
                                       stroke_width=2.5,
                                       stroke_color=STROKE,
@@ -344,28 +303,55 @@ jobs:
                   # ------------------------------------------------------------
                   # 3. Z-order
                   # ------------------------------------------------------------
-                  silhouette.set_z_index(0)
-                  details = VGroup(
-                      eye_l, eye_r, pupil_l, pupil_r,
-                      shine_l, shine_r,
-                      nose, mouth_l, mouth_r,
-                      acorn_nut, acorn_cap,
-                  )
-                  details.set_z_index(1)
+                  fills.set_z_index(0)
+                  outlines.set_z_index(1)
+                  details = VGroup(eye_l, eye_r, pupil_l, pupil_r,
+                                   nose, mouth_l, mouth_r,
+                                   acorn_nut, acorn_cap)
+                  details.set_z_index(2)
 
                   # ------------------------------------------------------------
-                  # 4. Animasi
+                  # 4. ANIMASI HAND-DRAWN
+                  #    Setiap outline digambar satu per satu dengan jeda,
+                  #    lalu fill muncul perlahan setelahnya.
                   # ------------------------------------------------------------
+
+                  # Urutan menggambar: dari belakang ke depan
+                  # Ekor dulu (paling belakang), lalu badan, kepala,
+                  # telinga, kaki, lengan.
                   self.play(
-                      DrawBorderThenFill(silhouette),
-                      run_time=3.5,
+                      LaggedStart(
+                          Create(outline_tail),
+                          Create(outline_body),
+                          Create(outline_leg_l),
+                          Create(outline_leg_r),
+                          Create(outline_head),
+                          Create(outline_ear_l),
+                          Create(outline_ear_r),
+                          Create(outline_arm_l),
+                          Create(outline_arm_r),
+                          lag_ratio=0.35,
+                      ),
+                      run_time=8.0,
                       rate_func=smooth,
                   )
+
+                  self.wait(0.3)
+
+                  # Fill masuk perlahan setelah outline selesai
                   self.play(
-                      FadeIn(details, shift=UP * 0.2),
+                      FadeIn(fills, scale=1.02),
                       run_time=1.5,
                       rate_func=smooth,
                   )
+
+                  # Detail muncul terakhir
+                  self.play(
+                      FadeIn(details, shift=UP * 0.15),
+                      run_time=1.2,
+                      rate_func=smooth,
+                  )
+
                   self.wait(2)
           PYEOF
 
@@ -376,7 +362,7 @@ jobs:
 
       - name: Render with Manim
         run: |
-          xvfb-run -a manim -qh --disable_caching scene.py SquirrelUltraSmooth
+          xvfb-run -a manim -qh --disable_caching scene.py SquirrelHandDrawn
 
       - name: Find and rename output
         run: |
@@ -386,18 +372,18 @@ jobs:
             echo "ERROR: Tidak ada MP4 yang dihasilkan"
             exit 1
           fi
-          mv "$FOUND" output/squirrel-ultra.mp4
+          mv "$FOUND" output/squirrel-handdrawn.mp4
           ls -lh output/
 
       - name: Create Release and Upload MP4
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: squirrel-ultra-${{ github.run_number }}
-          name: "Squirrel Ultra Smooth ${{ github.run_number }}"
+          tag_name: squirrel-handdrawn-${{ github.run_number }}
+          name: "Squirrel Hand-Drawn ${{ github.run_number }}"
           body: |
-            Render Manim Squirrel ultra smooth dengan B-spline interpolation
+            Render Manim Squirrel dengan animasi hand-drawn
             Run: #${{ github.run_number }}
-          files: output/squirrel-ultra.mp4
+          files: output/squirrel-handdrawn.mp4
           draft: false
           prerelease: false
         env:
