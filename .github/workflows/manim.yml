@@ -1,32 +1,9 @@
-name: Manim Render (Manual Input)
+name: Manim Render
 
 on:
   workflow_dispatch:
-    inputs:
-      scene_code:
-        description: 'Tempel kode Manim lengkap di sini (dari "from manim import *" sampai akhir)'
-        required: true
-        type: string
-      scene_class:
-        description: 'Nama class Scene yang mau dirender'
-        required: true
-        default: 'IconKeyScene'
-        type: string
-      quality:
-        description: 'Kualitas render'
-        required: true
-        default: 'qh'
-        type: choice
-        options:
-          - ql
-          - qm
-          - qh
-          - qk
-      output_name:
-        description: 'Nama file output (tanpa .mp4)'
-        required: true
-        default: 'render'
-        type: string
+  push:
+    branches: [ main ]
 
 jobs:
   render:
@@ -49,15 +26,95 @@ jobs:
       - name: Install Manim
         run: pip install manim
 
-      - name: Write scene code from input
-        env:
-          SCENE_CODE: ${{ inputs.scene_code }}
+      - name: Write scene code
         run: |
-          printf '%s\n' "$SCENE_CODE" > scene.py
-          echo "=== Preview 20 baris pertama ==="
-          head -20 scene.py
-          echo "=== Total baris ==="
-          wc -l scene.py
+          cat > scene.py << 'PYEOF'
+          from manim import *
+          import numpy as np
+
+
+          class KeyIcon(VGroup):
+              """
+              Icon modern minimalis berbentuk kunci.
+              Komposisi: kepala (Circle + keyhole), badan (Line), 2 gigi (Line).
+              """
+              def __init__(self, scale_factor=1.0, **kwargs):
+                  super().__init__(**kwargs)
+
+                  stroke_color = "#1a1a1a"
+                  stroke_width = 2.5
+
+                  # Kepala kunci
+                  head = Circle(
+                      radius=0.7,
+                      stroke_color=stroke_color,
+                      stroke_width=stroke_width,
+                      fill_opacity=0,
+                  )
+                  head.move_to(np.array([0, 1.5, 0]))
+
+                  # Lubang kunci
+                  keyhole = Circle(
+                      radius=0.245,
+                      stroke_color=stroke_color,
+                      stroke_width=stroke_width * 0.8,
+                      fill_opacity=0,
+                  )
+                  keyhole.move_to(np.array([0, 1.5, 0]))
+
+                  # Badan kunci
+                  body = Line(
+                      start=np.array([0, 0.8, 0]),
+                      end=np.array([0, -1.8, 0]),
+                      stroke_color=stroke_color,
+                      stroke_width=stroke_width,
+                  )
+                  body.set_cap_style(CapStyleType.ROUND)
+
+                  # Gigi kunci
+                  tooth_1 = Line(
+                      start=np.array([0, -0.6, 0]),
+                      end=np.array([0.45, -0.6, 0]),
+                      stroke_color=stroke_color,
+                      stroke_width=stroke_width,
+                  )
+                  tooth_1.set_cap_style(CapStyleType.ROUND)
+
+                  tooth_2 = Line(
+                      start=np.array([0, -1.2, 0]),
+                      end=np.array([0.45, -1.2, 0]),
+                      stroke_color=stroke_color,
+                      stroke_width=stroke_width,
+                  )
+                  tooth_2.set_cap_style(CapStyleType.ROUND)
+
+                  self.add(head, keyhole, body, tooth_1, tooth_2)
+                  self.head = head
+                  self.keyhole = keyhole
+                  self.body = body
+                  self.tooth_1 = tooth_1
+                  self.tooth_2 = tooth_2
+
+                  if scale_factor != 1.0:
+                      self.scale(scale_factor)
+
+
+          class IconKeyScene(Scene):
+              def construct(self):
+                  self.camera.background_color = "#FFFFFF"
+                  icon = KeyIcon(scale_factor=1.4)
+
+                  self.play(Create(icon.head), run_time=0.8, rate_func=smooth)
+                  self.play(Create(icon.keyhole), run_time=0.5, rate_func=smooth)
+                  self.play(Create(icon.body), run_time=0.6, rate_func=smooth)
+                  self.play(
+                      Create(icon.tooth_1),
+                      Create(icon.tooth_2),
+                      run_time=0.8,
+                      rate_func=smooth,
+                  )
+                  self.wait(1.5)
+          PYEOF
 
       - name: Validate Python syntax
         run: |
@@ -65,15 +122,10 @@ jobs:
           echo "Syntax OK"
 
       - name: Render with Manim
-        env:
-          SCENE_CLASS: ${{ inputs.scene_class }}
-          QUALITY: ${{ inputs.quality }}
         run: |
-          xvfb-run -a manim -$QUALITY --disable_caching scene.py "$SCENE_CLASS"
+          xvfb-run -a manim -qh --disable_caching scene.py IconKeyScene
 
       - name: Find and rename output
-        env:
-          OUTPUT_NAME: ${{ inputs.output_name }}
         run: |
           mkdir -p output
           FOUND=$(find media/videos -name "*.mp4" | head -1)
@@ -81,13 +133,12 @@ jobs:
             echo "ERROR: Tidak ada MP4 yang dihasilkan"
             exit 1
           fi
-          mv "$FOUND" "output/${OUTPUT_NAME}.mp4"
-          echo "Output: output/${OUTPUT_NAME}.mp4"
+          mv "$FOUND" output/key-icon.mp4
           ls -lh output/
 
       - name: Upload video
         uses: actions/upload-artifact@v4
         with:
-          name: manim-${{ inputs.output_name }}
+          name: manim-key-icon
           path: output/*.mp4
           retention-days: 7
