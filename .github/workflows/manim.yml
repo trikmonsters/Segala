@@ -1,9 +1,8 @@
-name: Manim Render
+name: Manim Sniper Render
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+  
 
 jobs:
   render:
@@ -32,88 +31,251 @@ jobs:
           from manim import *
           import numpy as np
 
+          config.pixel_height = 1080
+          config.pixel_width = 1920
+          config.frame_height = 8.0
+          config.frame_width = 14.22
 
-          class KeyIcon(VGroup):
+
+          class SniperRifle(VGroup):
               """
-              Icon modern minimalis berbentuk kunci.
-              Komposisi: kepala (Circle + keyhole), badan (Line), 2 gigi (Line).
+              Sniper rifle sci-fi stylized 2D side-view.
+              Komposisi: stock, body, barrel, scope, magazine, grip, muzzle.
               """
+
               def __init__(self, scale_factor=1.0, **kwargs):
                   super().__init__(**kwargs)
 
-                  stroke_color = "#1a1a1a"
-                  stroke_width = 2.5
+                  DARK = "#1C1C1E"
+                  MID = "#3A3A3C"
+                  LIGHT = "#8E8E93"
+                  ENERGY = "#00D4FF"
+                  ENERGY_DIM = "#007A99"
 
-                  # Kepala kunci
-                  head = Circle(
-                      radius=0.7,
-                      stroke_color=stroke_color,
-                      stroke_width=stroke_width,
-                      fill_opacity=0,
+                  # 1. STOCK
+                  stock = Polygon(
+                      [-6.8, 0.0, 0],
+                      [-6.8, 0.7, 0],
+                      [-6.0, 0.9, 0],
+                      [-5.6, 0.6, 0],
+                      [-5.6, 0.0, 0],
+                      stroke_width=0,
+                      fill_color=DARK,
+                      fill_opacity=1.0,
                   )
-                  head.move_to(np.array([0, 1.5, 0]))
 
-                  # Lubang kunci
-                  keyhole = Circle(
-                      radius=0.245,
-                      stroke_color=stroke_color,
-                      stroke_width=stroke_width * 0.8,
-                      fill_opacity=0,
+                  cheek = RoundedRectangle(
+                      width=1.4, height=0.35, corner_radius=0.1,
+                      stroke_width=0, fill_color=MID, fill_opacity=1.0,
                   )
-                  keyhole.move_to(np.array([0, 1.5, 0]))
+                  cheek.move_to(np.array([-6.1, 1.0, 0]))
 
-                  # Badan kunci
-                  body = Line(
-                      start=np.array([0, 0.8, 0]),
-                      end=np.array([0, -1.8, 0]),
-                      stroke_color=stroke_color,
-                      stroke_width=stroke_width,
+                  # 2. RECEIVER / BODY
+                  body = Polygon(
+                      [-5.6, 0.0, 0],
+                      [-5.6, 1.0, 0],
+                      [-4.5, 1.2, 0],
+                      [-1.0, 1.2, 0],
+                      [-1.0, 0.5, 0],
+                      [-2.0, 0.3, 0],
+                      [-5.0, 0.0, 0],
+                      stroke_width=0,
+                      fill_color=DARK,
+                      fill_opacity=1.0,
                   )
-                  body.set_cap_style(CapStyleType.ROUND)
 
-                  # Gigi kunci
-                  tooth_1 = Line(
-                      start=np.array([0, -0.6, 0]),
-                      end=np.array([0.45, -0.6, 0]),
-                      stroke_color=stroke_color,
-                      stroke_width=stroke_width,
+                  top_rail = RoundedRectangle(
+                      width=4.4, height=0.25, corner_radius=0.05,
+                      stroke_width=0, fill_color=MID, fill_opacity=1.0,
                   )
-                  tooth_1.set_cap_style(CapStyleType.ROUND)
+                  top_rail.move_to(np.array([-3.3, 1.25, 0]))
 
-                  tooth_2 = Line(
-                      start=np.array([0, -1.2, 0]),
-                      end=np.array([0.45, -1.2, 0]),
-                      stroke_color=stroke_color,
-                      stroke_width=stroke_width,
+                  # 3. BARREL + HANDGUARD
+                  handguard = Polygon(
+                      [-1.0, 1.1, 0],
+                      [4.5, 1.1, 0],
+                      [4.5, 0.55, 0],
+                      [-1.0, 0.55, 0],
+                      stroke_width=0,
+                      fill_color=DARK,
+                      fill_opacity=1.0,
                   )
-                  tooth_2.set_cap_style(CapStyleType.ROUND)
 
-                  self.add(head, keyhole, body, tooth_1, tooth_2)
-                  self.head = head
-                  self.keyhole = keyhole
-                  self.body = body
-                  self.tooth_1 = tooth_1
-                  self.tooth_2 = tooth_2
+                  vents = VGroup()
+                  for i in range(9):
+                      x = -0.6 + i * 0.55
+                      vent = Line(
+                          start=np.array([x, 0.65, 0]),
+                          end=np.array([x + 0.25, 0.65, 0]),
+                          stroke_color=ENERGY_DIM,
+                          stroke_width=3,
+                      )
+                      vents.add(vent)
 
-                  if scale_factor != 1.0:
-                      self.scale(scale_factor)
+                  barrel = RoundedRectangle(
+                      width=3.0, height=0.18, corner_radius=0.05,
+                      stroke_width=0, fill_color=MID, fill_opacity=1.0,
+                  )
+                  barrel.move_to(np.array([6.0, 0.83, 0]))
+
+                  muzzle = RoundedRectangle(
+                      width=0.7, height=0.4, corner_radius=0.08,
+                      stroke_width=0, fill_color=DARK, fill_opacity=1.0,
+                  )
+                  muzzle.move_to(np.array([7.7, 0.83, 0]))
+
+                  # 4. SCOPE
+                  scope_body = RoundedRectangle(
+                      width=2.6, height=0.55, corner_radius=0.15,
+                      stroke_width=0, fill_color=DARK, fill_opacity=1.0,
+                  )
+                  scope_body.move_to(np.array([-3.0, 2.0, 0]))
+
+                  scope_front = RoundedRectangle(
+                      width=0.5, height=0.75, corner_radius=0.12,
+                      stroke_width=0, fill_color=MID, fill_opacity=1.0,
+                  )
+                  scope_front.move_to(np.array([-1.6, 2.0, 0]))
+
+                  scope_back = RoundedRectangle(
+                      width=0.5, height=0.75, corner_radius=0.12,
+                      stroke_width=0, fill_color=MID, fill_opacity=1.0,
+                  )
+                  scope_back.move_to(np.array([-4.4, 2.0, 0]))
+
+                  lens = Circle(
+                      radius=0.18, stroke_width=0,
+                      fill_color=ENERGY, fill_opacity=1.0,
+                  )
+                  lens.move_to(np.array([-1.75, 2.0, 0]))
+
+                  mount = RoundedRectangle(
+                      width=0.3, height=0.65, corner_radius=0.05,
+                      stroke_width=0, fill_color=MID, fill_opacity=1.0,
+                  )
+                  mount.move_to(np.array([-3.0, 1.55, 0]))
+
+                  # 5. MAGAZINE / ENERGY CELL
+                  mag = RoundedRectangle(
+                      width=0.7, height=1.1, corner_radius=0.1,
+                      stroke_width=0, fill_color=ENERGY, fill_opacity=0.85,
+                  )
+                  mag.move_to(np.array([-2.3, -0.1, 0]))
+
+                  mag_case = RoundedRectangle(
+                      width=0.9, height=1.3, corner_radius=0.12,
+                      stroke_width=0, fill_color=DARK, fill_opacity=1.0,
+                  )
+                  mag_case.move_to(np.array([-2.3, -0.1, 0]))
+                  mag_case.set_z_index(-1)
+
+                  # 6. TRIGGER + GRIP
+                  trigger_guard = ArcBetweenPoints(
+                      start=np.array([-3.0, -0.2, 0]),
+                      end=np.array([-3.8, -0.2, 0]),
+                      angle=-PI / 2,
+                      stroke_color=DARK,
+                      stroke_width=8,
+                  )
+
+                  trigger = Line(
+                      start=np.array([-3.35, -0.05, 0]),
+                      end=np.array([-3.45, -0.45, 0]),
+                      stroke_color=MID,
+                      stroke_width=6,
+                  )
+
+                  grip = Polygon(
+                      [-3.9, -0.1, 0],
+                      [-4.4, -0.1, 0],
+                      [-4.6, -1.4, 0],
+                      [-4.0, -1.4, 0],
+                      stroke_width=0, fill_color=DARK, fill_opacity=1.0,
+                  )
+
+                  grip_lines = VGroup()
+                  for i in range(4):
+                      y = -0.35 - i * 0.25
+                      gl = Line(
+                          start=np.array([-4.5, y, 0]),
+                          end=np.array([-3.95, y, 0]),
+                          stroke_color=MID,
+                          stroke_width=2,
+                      )
+                      grip_lines.add(gl)
+
+                  # Gabung semua
+                  self.add(
+                      stock, cheek, body, top_rail,
+                      handguard, vents, barrel, muzzle,
+                      scope_body, scope_front, scope_back, lens, mount,
+                      mag_case, mag,
+                      trigger_guard, trigger, grip, grip_lines,
+                  )
+
+                  self.scale(scale_factor)
 
 
-          class IconKeyScene(Scene):
+          class SniperScene(Scene):
               def construct(self):
-                  self.camera.background_color = "#FFFFFF"
-                  icon = KeyIcon(scale_factor=1.4)
+                  self.camera.background_color = "#F5F5F7"
 
-                  self.play(Create(icon.head), run_time=0.8, rate_func=smooth)
-                  self.play(Create(icon.keyhole), run_time=0.5, rate_func=smooth)
-                  self.play(Create(icon.body), run_time=0.6, rate_func=smooth)
-                  self.play(
-                      Create(icon.tooth_1),
-                      Create(icon.tooth_2),
-                      run_time=0.8,
-                      rate_func=smooth,
+                  rifle = SniperRifle(scale_factor=0.85)
+                  rifle.move_to(ORIGIN)
+
+                  parts_back = VGroup(
+                      rifle[0], rifle[1], rifle[2], rifle[3],
                   )
-                  self.wait(1.5)
+                  parts_mid = VGroup(
+                      rifle[4], rifle[5], rifle[6], rifle[7],
+                  )
+                  parts_scope = VGroup(
+                      rifle[8], rifle[9], rifle[10], rifle[11], rifle[12],
+                  )
+                  parts_low = VGroup(
+                      rifle[13], rifle[14], rifle[15], rifle[16], rifle[17], rifle[18],
+                  )
+
+                  self.play(
+                      LaggedStart(
+                          *[FadeIn(p, shift=RIGHT * 0.5) for p in parts_back],
+                          lag_ratio=0.15,
+                      ),
+                      run_time=1.2,
+                  )
+                  self.play(
+                      LaggedStart(
+                          *[FadeIn(p, shift=RIGHT * 0.5) for p in parts_mid],
+                          lag_ratio=0.15,
+                      ),
+                      run_time=1.2,
+                  )
+                  self.play(
+                      LaggedStart(
+                          *[FadeIn(p, shift=UP * 0.3) for p in parts_scope],
+                          lag_ratio=0.15,
+                      ),
+                      run_time=1.0,
+                  )
+                  self.play(
+                      LaggedStart(
+                          *[FadeIn(p, shift=DOWN * 0.3) for p in parts_low],
+                          lag_ratio=0.15,
+                      ),
+                      run_time=1.0,
+                  )
+
+                  self.play(
+                      rifle[13].animate.set_fill(ENERGY, opacity=1.0),
+                      run_time=0.5,
+                      rate_func=there_and_back,
+                  )
+                  self.play(
+                      rifle[13].animate.set_fill(ENERGY, opacity=0.85),
+                      run_time=0.5,
+                  )
+
+                  self.wait(2)
           PYEOF
 
       - name: Validate Python syntax
@@ -123,7 +285,7 @@ jobs:
 
       - name: Render with Manim
         run: |
-          xvfb-run -a manim -qh --disable_caching scene.py IconKeyScene
+          xvfb-run -a manim -qh --disable_caching scene.py SniperScene
 
       - name: Find and rename output
         run: |
@@ -133,12 +295,12 @@ jobs:
             echo "ERROR: Tidak ada MP4 yang dihasilkan"
             exit 1
           fi
-          mv "$FOUND" output/key-icon.mp4
+          mv "$FOUND" output/sniper.mp4
           ls -lh output/
 
       - name: Upload video
         uses: actions/upload-artifact@v4
         with:
-          name: manim-key-icon
+          name: manim-sniper
           path: output/*.mp4
           retention-days: 7
