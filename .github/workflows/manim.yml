@@ -36,6 +36,13 @@ jobs:
           config.frame_height = 8.0
           config.frame_width = 14.22
 
+          # Palet global supaya bisa diakses dari mana saja
+          DARK = "#1C1C1E"
+          MID = "#3A3A3C"
+          LIGHT = "#8E8E93"
+          ENERGY = "#00D4FF"
+          ENERGY_DIM = "#007A99"
+
 
           class SniperRifle(VGroup):
               """
@@ -45,12 +52,6 @@ jobs:
 
               def __init__(self, scale_factor=1.0, **kwargs):
                   super().__init__(**kwargs)
-
-                  DARK = "#1C1C1E"
-                  MID = "#3A3A3C"
-                  LIGHT = "#8E8E93"
-                  ENERGY = "#00D4FF"
-                  ENERGY_DIM = "#007A99"
 
                   # 1. STOCK
                   stock = Polygon(
