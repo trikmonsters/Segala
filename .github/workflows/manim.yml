@@ -1,14 +1,37 @@
-name: Manim Batik Render
+name: Manim Render (Manual Input)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+    inputs:
+      scene_code:
+        description: 'Tempel kode Manim lengkap di sini (dari "from manim import *" sampai akhir)'
+        required: true
+        type: string
+      scene_class:
+        description: 'Nama class Scene yang mau dirender'
+        required: true
+        default: 'IconKeyScene'
+        type: string
+      quality:
+        description: 'Kualitas render'
+        required: true
+        default: 'qh'
+        type: choice
+        options:
+          - ql
+          - qm
+          - qh
+          - qk
+      output_name:
+        description: 'Nama file output (tanpa .mp4)'
+        required: true
+        default: 'render'
+        type: string
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -26,126 +49,45 @@ jobs:
       - name: Install Manim
         run: pip install manim
 
-      - name: Write Batik scene
+      - name: Write scene code from input
+        env:
+          SCENE_CODE: ${{ inputs.scene_code }}
         run: |
-          cat > batik_scene.py << 'PYEOF'
-          from manim import *
-          import numpy as np
+          printf '%s\n' "$SCENE_CODE" > scene.py
+          echo "=== Preview 20 baris pertama ==="
+          head -20 scene.py
+          echo "=== Total baris ==="
+          wc -l scene.py
 
-
-          class KawungCell(VGroup):
-              """
-              Satu unit sel Kawung modern yang terdiri dari 4 kelopak elips menyilang
-              serta aksen cincin dan titik di bagian tengah.
-              """
-              def __init__(self, radius=0.75, **kwargs):
-                  super().__init__(**kwargs)
-
-                  stroke_white = "#E8E8E8"
-                  fill_white = "#FFFFFF"
-
-                  petals = VGroup()
-                  for angle in [PI / 4, 3 * PI / 4, 5 * PI / 4, 7 * PI / 4]:
-                      petal = Ellipse(
-                          width=radius * 0.7,
-                          height=radius * 1.45,
-                          stroke_color=stroke_white,
-                          stroke_width=1.2,
-                          fill_color=fill_white,
-                          fill_opacity=0.08,
-                      )
-                      petal.rotate(angle)
-                      petal.shift(
-                          np.array([
-                              radius * 0.42 * np.cos(angle),
-                              radius * 0.42 * np.sin(angle),
-                              0,
-                          ])
-                      )
-                      petals.add(petal)
-
-                  center_ring = Circle(
-                      radius=radius * 0.22,
-                      stroke_color=stroke_white,
-                      stroke_width=1.0,
-                      fill_color=fill_white,
-                      fill_opacity=0.12,
-                  )
-
-                  center_dot = Dot(
-                      point=ORIGIN,
-                      radius=0.045,
-                      color=stroke_white,
-                      fill_opacity=0.85,
-                  )
-
-                  self.add(petals, center_ring, center_dot)
-
-
-          class KawungMotif(VGroup):
-              """
-              Grid pengulangan (tessellation) motif Kawung dengan aksen belah ketupat
-              di setiap persimpangan antarsel.
-              """
-              def __init__(self, rows=3, cols=5, spacing=1.45, **kwargs):
-                  super().__init__(**kwargs)
-
-                  accent_color = "#999999"
-
-                  cells = VGroup()
-                  for i in range(rows):
-                      for j in range(cols):
-                          cell = KawungCell()
-                          pos_x = (j - (cols - 1) / 2) * spacing
-                          pos_y = (i - (rows - 1) / 2) * spacing
-                          cell.move_to(np.array([pos_x, pos_y, 0]))
-                          cells.add(cell)
-
-                  diamonds = VGroup()
-                  for i in range(rows - 1):
-                      for j in range(cols - 1):
-                          pos_x = (j - (cols - 2) / 2) * spacing
-                          pos_y = (i - (rows - 2) / 2) * spacing
-                          diamond = Square(
-                              side_length=0.18,
-                              stroke_color=accent_color,
-                              stroke_width=1.0,
-                              fill_color="#FFFFFF",
-                              fill_opacity=0.1,
-                          ).rotate(PI / 4)
-                          diamond.move_to(np.array([pos_x, pos_y, 0]))
-                          diamonds.add(diamond)
-
-                  self.add(cells, diamonds)
-
-
-          class BatikKawungModern(Scene):
-              def construct(self):
-                  self.camera.background_color = "#101114"
-
-                  kawung = KawungMotif(rows=3, cols=5, spacing=1.45)
-
-                  self.play(
-                      DrawBorderThenFill(kawung),
-                      run_time=4.0,
-                      rate_func=smooth,
-                  )
-
-                  self.wait(2)
-          PYEOF
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile scene.py
+          echo "Syntax OK"
 
       - name: Render with Manim
+        env:
+          SCENE_CLASS: ${{ inputs.scene_class }}
+          QUALITY: ${{ inputs.quality }}
         run: |
-          xvfb-run -a manim -qh --disable_caching batik_scene.py BatikKawungModern
+          xvfb-run -a manim -$QUALITY --disable_caching scene.py "$SCENE_CLASS"
 
       - name: Find and rename output
+        env:
+          OUTPUT_NAME: ${{ inputs.output_name }}
         run: |
           mkdir -p output
-          find media/videos -name "*.mp4" -exec mv {} output/batik.mp4 \;
+          FOUND=$(find media/videos -name "*.mp4" | head -1)
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: Tidak ada MP4 yang dihasilkan"
+            exit 1
+          fi
+          mv "$FOUND" "output/${OUTPUT_NAME}.mp4"
+          echo "Output: output/${OUTPUT_NAME}.mp4"
+          ls -lh output/
 
       - name: Upload video
         uses: actions/upload-artifact@v4
         with:
-          name: manim-batik
-          path: output/batik.mp4
+          name: manim-${{ inputs.output_name }}
+          path: output/*.mp4
           retention-days: 7
