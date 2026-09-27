@@ -1,0 +1,151 @@
+name: Manim Batik Render
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3-dev libcairo2-dev libpango1.0-dev ffmpeg freeglut3-dev xvfb
+
+      - name: Install Manim
+        run: pip install manim
+
+      - name: Write Batik scene
+        run: |
+          cat > batik_scene.py << 'PYEOF'
+          from manim import *
+          import numpy as np
+
+
+          class KawungCell(VGroup):
+              """
+              Satu unit sel Kawung modern yang terdiri dari 4 kelopak elips menyilang
+              serta aksen cincin dan titik di bagian tengah.
+              """
+              def __init__(self, radius=0.75, **kwargs):
+                  super().__init__(**kwargs)
+
+                  stroke_white = "#E8E8E8"
+                  fill_white = "#FFFFFF"
+
+                  petals = VGroup()
+                  for angle in [PI / 4, 3 * PI / 4, 5 * PI / 4, 7 * PI / 4]:
+                      petal = Ellipse(
+                          width=radius * 0.7,
+                          height=radius * 1.45,
+                          stroke_color=stroke_white,
+                          stroke_width=1.2,
+                          fill_color=fill_white,
+                          fill_opacity=0.08,
+                      )
+                      petal.rotate(angle)
+                      petal.shift(
+                          np.array([
+                              radius * 0.42 * np.cos(angle),
+                              radius * 0.42 * np.sin(angle),
+                              0,
+                          ])
+                      )
+                      petals.add(petal)
+
+                  center_ring = Circle(
+                      radius=radius * 0.22,
+                      stroke_color=stroke_white,
+                      stroke_width=1.0,
+                      fill_color=fill_white,
+                      fill_opacity=0.12,
+                  )
+
+                  center_dot = Dot(
+                      point=ORIGIN,
+                      radius=0.045,
+                      color=stroke_white,
+                      fill_opacity=0.85,
+                  )
+
+                  self.add(petals, center_ring, center_dot)
+
+
+          class KawungMotif(VGroup):
+              """
+              Grid pengulangan (tessellation) motif Kawung dengan aksen belah ketupat
+              di setiap persimpangan antarsel.
+              """
+              def __init__(self, rows=3, cols=5, spacing=1.45, **kwargs):
+                  super().__init__(**kwargs)
+
+                  accent_color = "#999999"
+
+                  cells = VGroup()
+                  for i in range(rows):
+                      for j in range(cols):
+                          cell = KawungCell()
+                          pos_x = (j - (cols - 1) / 2) * spacing
+                          pos_y = (i - (rows - 1) / 2) * spacing
+                          cell.move_to(np.array([pos_x, pos_y, 0]))
+                          cells.add(cell)
+
+                  diamonds = VGroup()
+                  for i in range(rows - 1):
+                      for j in range(cols - 1):
+                          pos_x = (j - (cols - 2) / 2) * spacing
+                          pos_y = (i - (rows - 2) / 2) * spacing
+                          diamond = Square(
+                              side_length=0.18,
+                              stroke_color=accent_color,
+                              stroke_width=1.0,
+                              fill_color="#FFFFFF",
+                              fill_opacity=0.1,
+                          ).rotate(PI / 4)
+                          diamond.move_to(np.array([pos_x, pos_y, 0]))
+                          diamonds.add(diamond)
+
+                  self.add(cells, diamonds)
+
+
+          class BatikKawungModern(Scene):
+              def construct(self):
+                  self.camera.background_color = "#101114"
+
+                  kawung = KawungMotif(rows=3, cols=5, spacing=1.45)
+
+                  self.play(
+                      DrawBorderThenFill(kawung),
+                      run_time=4.0,
+                      rate_func=smooth,
+                  )
+
+                  self.wait(2)
+          PYEOF
+
+      - name: Render with Manim
+        run: |
+          xvfb-run -a manim -qh --disable_caching batik_scene.py BatikKawungModern
+
+      - name: Find and rename output
+        run: |
+          mkdir -p output
+          find media/videos -name "*.mp4" -exec mv {} output/batik.mp4 \;
+
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: manim-batik
+          path: output/batik.mp4
+          retention-days: 7
