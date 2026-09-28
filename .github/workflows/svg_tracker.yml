@@ -1,0 +1,51 @@
+name: Vectorize Image to SVG
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: 'URL of the image to vectorize'
+        required: true
+        type: string
+      output_name:
+        description: 'Output SVG file name (without .svg)'
+        required: false
+        default: 'output'
+        type: string
+
+jobs:
+  vectorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install VTracer
+        run: cargo install vtracer
+
+      - name: Download image
+        run: |
+          curl -L "${{ github.event.inputs.image_url }}" -o input_image.png
+
+      - name: Convert image to SVG
+        run: |
+          vtracer --input input_image.png \
+            --output ${{ github.event.inputs.output_name }}.svg \
+            --colormode color \
+            --color_precision 6 \
+            --filter_speckle 4 \
+            --gradient_step 16 \
+            --corner_threshold 60 \
+            --segment_length 4.0 \
+            --splice_threshold 45 \
+            --path_precision 3 \
+            --optimize 2
+
+      - name: Upload SVG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vectorized-svg
+          path: ${{ github.event.inputs.output_name }}.svg
