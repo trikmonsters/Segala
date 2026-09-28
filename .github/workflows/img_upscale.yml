@@ -154,12 +154,28 @@ jobs:
           print(f"SVG dibuat: {output} ({size:,} bytes)")
           EOF
 
+      - name: Buat SVGO config
+        run: |
+          cat > svgo.config.mjs << 'EOF'
+          export default {
+            multipass: true,
+            precision: 2,
+            plugins: [
+              'preset-default',
+              'removeComments',
+              'removeMetadata',
+              'cleanupNumericValues',
+              'convertPathData',
+              'collapseGroups'
+            ]
+          };
+          EOF
+          cat svgo.config.mjs
+
       - name: Optimize SVG dengan SVGO
         run: |
-          svgo "${{ github.event.inputs.output_name }}.svg" \
-            --multipass \
-            --precision=2 \
-            --enable=removeMetadata,removeComments,cleanupNumericValues,convertPathData,collapseGroups \
+          svgo -c svgo.config.mjs \
+            -i "${{ github.event.inputs.output_name }}.svg" \
             -o "${{ github.event.inputs.output_name }}_optimized.svg"
 
           ls -lh "${{ github.event.inputs.output_name }}_optimized.svg"
