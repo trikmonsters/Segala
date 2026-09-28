@@ -42,15 +42,15 @@ jobs:
           import vtracer
           vtracer.convert_image_to_svg_py(
               'input_image.jpg',
-              '${{ github.event.inputs.output_name }}.svg',
+              'output.svg',
               colormode='color',
-              color_precision=6,
-              filter_speckle=4,
-              layer_difference=16,
+              color_precision=8,        # Naikkan dari 6 → lebih banyak warna
+              filter_speckle=2,         # Turunkan dari 4 → simpan detail kecil
+              layer_difference=4,       # Turunkan dari 16 → lebih banyak layer gradasi
               corner_threshold=60,
-              length_threshold=4.0,
+              length_threshold=2.0,     # Turunkan dari 4.0 → kurva lebih halus
               splice_threshold=45,
-              path_precision=3
+              path_precision=5          # Naikkan dari 3 → path lebih presisi
           )
           "
 
