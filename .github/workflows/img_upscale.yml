@@ -1,4 +1,4 @@
-name: Upscale Image (Real-ESRGAN x4plus)
+name: Upscale Image 2K (4xNomos8kDAT)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       image_url:
         description: 'URL gambar input'
         required: true
-        default: 'https://example.com/input.jpg'
+        default: 'https://i.pinimg.com/736x/6d/7d/2b/6d7d2bcf1ab0bb7beeab6969d345cde2.jpg'
 
 permissions:
   contents: write
@@ -29,19 +29,19 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
-          pip install spandrel pillow numpy
+          pip install spandrel pillow numpy opencv-python-headless
 
-      - name: Download Real-ESRGAN x4plus model
+      - name: Download 4xNomos8kDAT model
         run: |
-          curl -fL -o RealESRGAN_x4plus.pth \
-            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+          curl -fL -o 4xNomos8kDAT.pth \
+            "https://github.com/Phhofm/models/releases/download/4xNomos8kDAT/4xNomos8kDAT.pth"
 
       - name: Download input image from URL
         run: |
           curl -fL -o input.jpg "${{ github.event.inputs.image_url }}"
           ls -lh input.jpg
 
-      - name: Upscale + strip metadata
+      - name: Upscale to 2K + strip metadata
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -55,13 +55,14 @@ jobs:
           torch.set_num_threads(os.cpu_count())
 
           input_file = "input.jpg"
-          base_name = os.path.splitext(input_file)[0]
-          output_file = f"{base_name}_upscaled_4k.png"
+          output_file = "output_2k.png"
 
           TILE_SIZE = 256
           OVERLAP = 16
+          TARGET_WIDTH = 2048  # 2K
 
-          model = ModelLoader().load_from_file("RealESRGAN_x4plus.pth")
+          # Load model
+          model = ModelLoader().load_from_file("4xNomos8kDAT.pth")
           assert isinstance(model, ImageModelDescriptor)
           model.eval()
           scale = model.scale
@@ -98,15 +99,21 @@ jobs:
                       out[y*scale:y_end*scale, x*scale:x_end*scale, :] = \
                           result[crop_top:crop_top+crop_h, crop_left:crop_left+crop_w, :]
                       done += 1
-                      print(f"[{done}/{total_tiles}] y={y}-{y_end}, x={x}-{x_end}", flush=True)
+                      print(f"[{done}/{total_tiles}] tile selesai", flush=True)
                       x += TILE_SIZE
                   y += TILE_SIZE
 
           out = (out * 255.0).round().astype(np.uint8)
+          img_out = Image.fromarray(out)
 
-          # === STRIP METADATA: create a clean image without EXIF ===
-          clean_img = Image.fromarray(out)
-          # Simpan tanpa parameter exif -> tidak ada metadata yang tersimpan
+          # Resize ke 2K
+          if img_out.width > TARGET_WIDTH:
+              new_height = int(img_out.height * TARGET_WIDTH / img_out.width)
+              img_out = img_out.resize((TARGET_WIDTH, new_height), Image.LANCZOS)
+              print(f"Resized to 2K: {img_out.size}", flush=True)
+
+          # Simpan tanpa metadata
+          clean_img = Image.fromarray(np.array(img_out))
           clean_img.save(output_file, "PNG", exif=Image.Exif())
           print(f"Done: {output_file}, size: {clean_img.size}", flush=True)
 
@@ -118,7 +125,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: upscale-${{ github.run_number }}
-          name: "Upscaled Image #${{ github.run_number }}"
+          name: "Upscaled 2K Image #${{ github.run_number }}"
           files: ${{ env.OUTPUT_FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
