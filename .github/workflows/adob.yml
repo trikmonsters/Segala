@@ -1,12 +1,12 @@
-name: Adobe Stock Contributor - Visit with Cookie (Tilion)
+name: Adobe Stock Contributor - Upload Image
 
 on:
   workflow_dispatch:
 
 jobs:
-  visit:
+  upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
 
@@ -21,20 +21,26 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright tilion
-          # Playwright chromium sebagai fallback kalau Fortress gagal start
+          pip install playwright requests
           playwright install --with-deps chromium
 
-      - name: Start Fortress & Visit Adobe
+      - name: Download image
+        run: |
+          curl -L -A "Mozilla/5.0" \
+            -o upload.jpg \
+            "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg"
+          ls -la upload.jpg
+          file upload.jpg
+
+      - name: Run Upload Script
         env:
           ADOBE_COOKIE: ${{ secrets.ADOBE_COOKIE }}
         run: |
-          cat > visit.py << 'EOF'
+          cat > upload.py << 'EOF'
           import asyncio
           import os
           import json
           import base64
-          import traceback
           from playwright.async_api import async_playwright
 
           def parse_cookies(raw):
@@ -97,60 +103,131 @@ jobs:
                   cookies.append(item)
               return cookies
 
-          def start_fortress():
-              """Coba start Tilion Fortress, return cdp_url atau None."""
-              try:
-                  from tilion import Tilion
-                  fortress = Tilion()
-                  # Tilion biasanya expose .cdp_url atau .ws_endpoint
-                  cdp = getattr(fortress, "cdp_url", None) or \
-                        getattr(fortress, "ws_endpoint", None)
-                  print(f"[Tilion] Fortress CDP: {cdp}")
-                  return fortress, cdp
-              except Exception as e:
-                  print(f"[Tilion] Gagal start Fortress: {e}")
-                  traceback.print_exc()
-                  return None, None
+          def log(msg):
+              print(f"[UPLOAD] {msg}", flush=True)
 
           async def main():
               raw = os.environ["ADOBE_COOKIE"]
               cookies = parse_cookies(raw)
-              print(f"[Cookie] Loaded {len(cookies)} cookies")
-
-              fortress, cdp = start_fortress()
+              log(f"Loaded {len(cookies)} cookies")
 
               async with async_playwright() as p:
-                  if cdp:
-                      print(f"[Browser] Connect over CDP: {cdp}")
-                      browser = await p.chromium.connect_over_cdp(cdp)
-                      context = await browser.new_context()
-                  else:
-                      print("[Browser] Fallback: Playwright chromium launch")
-                      browser = await p.chromium.launch(
-                          headless=True,
-                          args=["--no-sandbox",
-                                "--disable-blink-features=AutomationControlled"],
-                      )
-                      context = await browser.new_context(
-                          user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-                          viewport={"width": 1366, "height": 900},
-                          locale="en-US",
-                      )
-
+                  browser = await p.chromium.launch(
+                      headless=True,
+                      args=["--no-sandbox",
+                            "--disable-blink-features=AutomationControlled"],
+                  )
+                  context = await browser.new_context(
+                      user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+                      viewport={"width": 1366, "height": 900},
+                      locale="en-US",
+                  )
                   await context.add_cookies(cookies)
 
                   page = await context.new_page()
-                  await page.goto(
-                      "https://contributor.stock.adobe.com/en/portfolio",
-                      wait_until="domcontentloaded",
-                  )
-                  await page.wait_for_timeout(6000)
 
-                  print(f"[Result] URL: {page.url}")
-                  print(f"[Result] Title: {await page.title()}")
+                  # 1. Buka halaman upload langsung
+                  target = "https://contributor.stock.adobe.com/en/upload"
+                  log(f"Buka {target}")
+                  await page.goto(target, wait_until="domcontentloaded")
+                  await page.wait_for_timeout(5000)
+                  log(f"URL: {page.url}")
 
-                  await page.screenshot(path="adobe.png", full_page=True)
+                  # 2. Kalau tidak langsung ke upload, klik tombol Upload di header
+                  if "/upload" not in page.url:
+                      log("Klik tombol Upload di header...")
+                      for sel in [
+                          'a[href*="/upload"]',
+                          'button:has-text("Upload")',
+                          'a:has-text("Upload")',
+                          '[data-testid="upload-button"]',
+                      ]:
+                          try:
+                              el = page.locator(sel).first
+                              if await el.count() > 0:
+                                  await el.click()
+                                  log(f"Klik: {sel}")
+                                  break
+                          except Exception:
+                              continue
+                      await page.wait_for_timeout(5000)
+                      log(f"URL setelah klik: {page.url}")
+
+                  # 3. Tunggu area drag & drop muncul
+                  log("Menunggu area drag & drop...")
+                  drop_area = None
+                  for sel in [
+                      'text=Drag & Drop files or',
+                      'text=Drag & Drop',
+                      'div[class*="dropzone"]',
+                      'div[class*="DropZone"]',
+                      'div[class*="upload-area"]',
+                      'input[type="file"]',
+                  ]:
+                      try:
+                          el = page.locator(sel).first
+                          await el.wait_for(timeout=5000)
+                          drop_area = el
+                          log(f"Drop area ditemukan: {sel}")
+                          break
+                      except Exception:
+                          continue
+
+                  # 4. Cara paling reliable: pakai input[type=file] (hidden)
+                  # Adobe pakai input file tersembunyi sebagai target drop
+                  log("Set file via input[type=file]...")
+                  try:
+                      file_input = page.locator('input[type="file"]').first
+                      await file_input.set_input_files("upload.jpg", timeout=15000)
+                      log("✅ File di-set via input[type=file]")
+                  except Exception as e:
+                      log(f"set_input_files gagal: {e}")
+
+                      # 5. Fallback: simulasi drag & drop dengan DataTransfer
+                      if drop_area:
+                          log("Fallback: simulasi drag & drop...")
+                          await page.evaluate("""
+                          async () => {
+                              const resp = await fetch(
+                                  "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg"
+                              );
+                              const blob = await resp.blob();
+                              const file = new File([blob], "upload.jpg", {type: "image/jpeg"});
+
+                              const dt = new DataTransfer();
+                              dt.items.add(file);
+
+                              // Cari drop zone: elemen dengan teks "Drag & Drop"
+                              const all = document.querySelectorAll('div, section, main');
+                              let target = null;
+                              for (const el of all) {
+                                  if (el.innerText && el.innerText.includes("Drag & Drop")) {
+                                      target = el;
+                                      break;
+                                  }
+                              }
+                              if (!target) target = document.body;
+
+                              const events = ["dragenter", "dragover", "drop"];
+                              for (const type of events) {
+                                  const ev = new DragEvent(type, {
+                                      bubbles: true, cancelable: true, dataTransfer: dt
+                                  });
+                                  target.dispatchEvent(ev);
+                              }
+                              console.log("Drag & drop dispatched");
+                          }
+                          """)
+                          log("✅ Drag & drop disimulasikan")
+
+                  # 6. Tunggu preview / progress upload muncul
+                  log("Menunggu preview upload...")
+                  await page.wait_for_timeout(15000)
+
+                  await page.screenshot(path="adobe_upload.png", full_page=True)
+                  log(f"Final URL: {page.url}")
+                  log(f"Title: {await page.title()}")
 
                   try:
                       await browser.close()
@@ -161,7 +238,7 @@ jobs:
               asyncio.run(main())
           EOF
 
-          python visit.py
+          python upload.py
 
       - name: Upload Screenshot to Release
         if: always()
@@ -169,12 +246,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          if [ ! -f adobe.png ]; then
+          if [ ! -f adobe_upload.png ]; then
             echo "Screenshot tidak ada, skip."
             exit 0
           fi
 
-          # Hapus release lama dengan prefix adobe-shot-
+          # Hapus release lama dengan prefix adobe-upload-
           OLD=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/$REPO/releases?per_page=100" \
             | python3 -c "
@@ -182,7 +259,7 @@ jobs:
           try:
               data = json.load(sys.stdin)
               for r in data:
-                  if r.get('tag_name','').startswith('adobe-shot-'):
+                  if r.get('tag_name','').startswith('adobe-upload-'):
                       print(r['id'])
           except: pass
           ")
@@ -191,12 +268,12 @@ jobs:
               "https://api.github.com/repos/$REPO/releases/$id" > /dev/null
           done
 
-          TAG="adobe-shot-$(date +%Y%m%d_%H%M%S)"
+          TAG="adobe-upload-$(date +%Y%m%d_%H%M%S)"
           RESP=$(curl -s -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/$REPO/releases" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"Adobe Shot $TAG\",\"body\":\"Auto-generated screenshot\"}")
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"Adobe Upload $TAG\",\"body\":\"Auto-generated\"}")
 
           UPLOAD_URL=$(echo "$RESP" | python3 -c \
             "import sys,json; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))")
@@ -204,7 +281,7 @@ jobs:
           curl -s -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: image/png" \
-            --data-binary @adobe.png \
-            "$UPLOAD_URL?name=adobe.png"
+            --data-binary @adobe_upload.png \
+            "$UPLOAD_URL?name=adobe_upload.png"
 
-          echo "✅ Uploaded to release: $TAG"
+          echo "✅ Uploaded: $TAG"
