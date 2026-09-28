@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install VTracer (Python)
+      - name: Install VTracer
         run: pip install vtracer
 
       - name: Download image
@@ -46,9 +46,9 @@ jobs:
               colormode='color',
               color_precision=6,
               filter_speckle=4,
-              gradient_step=16,
+              layer_difference=16,
               corner_threshold=60,
-              segment_length=4.0,
+              length_threshold=4.0,
               splice_threshold=45,
               path_precision=3
           )
