@@ -30,34 +30,56 @@ jobs:
           python-version: '3.11'
 
       - name: Install VTracer
-        run: pip install vtracer
+        run: |
+          pip install vtracer
+          python -c "import vtracer; print('VTracer version:', vtracer.__version__ if hasattr(vtracer, '__version__') else 'unknown')"
 
       - name: Download image
         run: |
-          curl -L "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg" -o input_image.jpg
+          curl -L -A "Mozilla/5.0" "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg" -o input_image.jpg
+          ls -lh input_image.jpg
+          file input_image.jpg
 
       - name: Convert image to SVG
         run: |
-          python -c "
+          python << 'EOF'
           import vtracer
-          vtracer.convert_image_to_svg_py(
-              'input_image.jpg',
-              'output.svg',
-              colormode='color',
-              color_precision=8,        # Naikkan dari 6 → lebih banyak warna
-              filter_speckle=2,         # Turunkan dari 4 → simpan detail kecil
-              layer_difference=4,       # Turunkan dari 16 → lebih banyak layer gradasi
-              corner_threshold=60,
-              length_threshold=2.0,     # Turunkan dari 4.0 → kurva lebih halus
-              splice_threshold=45,
-              path_precision=5          # Naikkan dari 3 → path lebih presisi
-          )
-          "
+          import os
+          import traceback
+          
+          output_file = "${{ github.event.inputs.output_name }}.svg"
+          try:
+              vtracer.convert_image_to_svg_py(
+                  'input_image.jpg',
+                  output_file,
+                  colormode='color',
+                  color_precision=8,
+                  filter_speckle=2,
+                  layer_difference=4,
+                  corner_threshold=60,
+                  length_threshold=2.0,
+                  splice_threshold=45,
+                  path_precision=5
+              )
+              if os.path.exists(output_file):
+                  print(f"✅ SVG created: {output_file} ({os.path.getsize(output_file)} bytes)")
+              else:
+                  raise FileNotFoundError(f"VTracer selesai tapi file {output_file} tidak ditemukan")
+          except Exception as e:
+              print(f"❌ Error: {e}")
+              traceback.print_exc()
+              raise
+          EOF
 
       - name: Verify SVG
         run: |
+          if [ ! -f "${{ github.event.inputs.output_name }}.svg" ]; then
+            echo "❌ File SVG tidak ditemukan!"
+            ls -la
+            exit 1
+          fi
           ls -lh ${{ github.event.inputs.output_name }}.svg
-          head -c 200 ${{ github.event.inputs.output_name }}.svg
+          head -c 300 ${{ github.event.inputs.output_name }}.svg
 
       - name: Create Release & Upload SVG
         uses: softprops/action-gh-release@v2
