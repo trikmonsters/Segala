@@ -1,4 +1,4 @@
-name: Vectorize dengan Background Remover & Custom Background
+name: Vectorize with Inkscape Simplify
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
         default: 'vectorized'
         type: string
       bg_color:
-        description: 'Warna background (hex, contoh: #ffffff, #000000, #FF5733)'
+        description: 'Warna background (hex, contoh: #ffffff)'
         required: true
         default: '#ffffff'
         type: string
@@ -24,7 +24,7 @@ on:
         default: '100'
         type: string
       model_name:
-        description: 'Model rembg (birefnet-general, isnet-general-use, u2net)'
+        description: 'Model rembg'
         required: true
         default: 'birefnet-general'
         type: choice
@@ -38,7 +38,7 @@ permissions:
   contents: write
 
 jobs:
-  vectorize-with-bg:
+  vectorize:
     runs-on: ubuntu-latest
 
     steps:
@@ -54,28 +54,23 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install "rembg[cpu]" pillow vtracer numpy
+          sudo apt-get update
+          sudo apt-get install -y inkscape
           npm install -g svgo
 
-      - name: Download gambar sumber
+      - name: Download gambar
         run: |
           curl -L -A "Mozilla/5.0" "${{ github.event.inputs.image_url }}" -o source_image.jpg
           file source_image.jpg
 
-      - name: Hapus background dengan rembg
+      - name: Hapus background (rembg)
         run: |
           python << 'EOF'
           from rembg import remove, new_session
           from PIL import Image
-          import os
 
-          model_name = "${{ github.event.inputs.model_name }}"
-          print(f"Memuat model: {model_name}")
-
-          session = new_session(model_name)
-
+          session = new_session("${{ github.event.inputs.model_name }}")
           input_image = Image.open('source_image.jpg').convert('RGB')
-          print(f"Ukuran gambar asli: {input_image.size}")
-
           output_image = remove(
               input_image,
               session=session,
@@ -84,59 +79,35 @@ jobs:
               alpha_matting_background_threshold=10,
               alpha_matting_erode_size=10,
           )
-
           output_image.save('image_no_bg.png')
-          print(f"Background dihapus. Mode: {output_image.mode}, Size: {output_image.size}")
+          print(f"Background dihapus: {output_image.size}")
           EOF
 
-      - name: Verifikasi hasil background removal
-        run: |
-          python << 'EOF'
-          from PIL import Image
-          img = Image.open('image_no_bg.png')
-          print(f"Mode: {img.mode}, Size: {img.size}")
-          if img.mode == 'RGBA':
-              print("✅ Alpha channel terdeteksi (background transparan)")
-          else:
-              print("⚠️ Tidak ada alpha channel")
-          EOF
-
-      - name: Gabungkan dengan warna background custom
+      - name: Gabungkan background custom
         run: |
           python << 'EOF'
           from PIL import Image
 
           bg_hex = "${{ github.event.inputs.bg_color }}".lstrip('#')
           bg_opacity = int("${{ github.event.inputs.bg_opacity }}")
-
           if len(bg_hex) == 3:
               bg_hex = ''.join([c*2 for c in bg_hex])
           bg_rgb = tuple(int(bg_hex[i:i+2], 16) for i in (0, 2, 4))
           bg_alpha = int(255 * bg_opacity / 100)
 
-          print(f"Warna background: RGB{bg_rgb}, Alpha: {bg_alpha}")
-
           image = Image.open('image_no_bg.png').convert('RGBA')
           width, height = image.size
-
           background = Image.new('RGBA', (width, height), bg_rgb + (bg_alpha,))
-
           result = Image.alpha_composite(background, image)
-
-          result_rgb = result.convert('RGB')
-          result_rgb.save('image_with_bg.jpg', quality=95)
-          result.save('image_with_bg_rgba.png')
-          print(f"Komposit disimpan: {width}x{height}")
+          result.convert('RGB').save('image_with_bg.jpg', quality=95)
+          print(f"Komposit: {width}x{height}")
           EOF
 
       - name: Vectorize dengan VTracer
         run: |
           python << 'EOF'
-          import vtracer
-          import os
-
+          import vtracer, os
           output = "${{ github.event.inputs.output_name }}.svg"
-
           vtracer.convert_image_to_svg_py(
               'image_with_bg.jpg',
               output,
@@ -149,10 +120,16 @@ jobs:
               splice_threshold=45,
               path_precision=5
           )
-
-          size = os.path.getsize(output)
-          print(f"SVG dibuat: {output} ({size:,} bytes)")
+          print(f"SVG: {output} ({os.path.getsize(output):,} bytes)")
           EOF
+
+      - name: Simplify path dengan Inkscape
+        run: |
+          inkscape "${{ github.event.inputs.output_name }}.svg" \
+            --batch-process \
+            --actions='select-all;path-simplify;export-plain-svg' \
+            --export-filename="${{ github.event.inputs.output_name }}_simplified.svg"
+          ls -lh "${{ github.event.inputs.output_name }}_simplified.svg"
 
       - name: Buat SVGO config
         run: |
@@ -170,15 +147,12 @@ jobs:
             ]
           };
           EOF
-          echo "--- Isi svgo.config.mjs ---"
-          cat svgo.config.mjs
 
       - name: Optimize SVG dengan SVGO
         run: |
           svgo --config svgo.config.mjs \
-            -i "${{ github.event.inputs.output_name }}.svg" \
+            -i "${{ github.event.inputs.output_name }}_simplified.svg" \
             -o "${{ github.event.inputs.output_name }}_optimized.svg"
-
           ls -lh "${{ github.event.inputs.output_name }}_optimized.svg"
 
       - name: Verifikasi output
@@ -190,24 +164,17 @@ jobs:
           fi
           echo "✅ File output:"
           ls -lh *.svg *.png *.jpg 2>/dev/null || true
-          echo ""
-          echo "Preview header SVG:"
-          head -c 200 "${{ github.event.inputs.output_name }}_optimized.svg"
 
-      - name: Buat Release dengan SVG
+      - name: Buat Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.output_name }}-v${{ github.run_number }}
           name: "Vectorized SVG - ${{ github.event.inputs.output_name }}"
           body: |
-            ## Hasil Vektorisasi
-
+            ## Hasil Vektorisasi (dengan Inkscape Simplify)
             **Sumber:** ${{ github.event.inputs.image_url }}
             **Model rembg:** ${{ github.event.inputs.model_name }}
-            **Warna Background:** ${{ github.event.inputs.bg_color }} (opacity: ${{ github.event.inputs.bg_opacity }}%)
             **Output:** ${{ github.event.inputs.output_name }}_optimized.svg
-
-            Diproses dengan rembg + VTracer + SVGO.
           files: |
             ${{ github.event.inputs.output_name }}_optimized.svg
             ${{ github.event.inputs.output_name }}.svg
