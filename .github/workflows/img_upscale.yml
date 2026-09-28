@@ -14,42 +14,111 @@ permissions:
 jobs:
   upscale:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
-      - name: Install dependencies (Vulkan + curl)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl unzip libvulkan1 mesa-vulkan-drivers
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Download Real-ESRGAN NCNN binary
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
         run: |
-          curl -fL -o realesrgan.zip \
-            https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip
-          unzip realesrgan.zip
-          chmod +x realesrgan-ncnn-vulkan
+          pip install --upgrade pip
+          pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install spandrel pillow numpy
+
+      - name: Download Real-ESRGAN x4plus model
+        run: |
+          curl -fL -o RealESRGAN_x4plus.pth \
+            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
 
       - name: Download input image from URL
         run: |
           curl -fL -o input.jpg "${{ github.event.inputs.image_url }}"
           ls -lh input.jpg
 
-      - name: Run RealESRGAN x4plus
+      - name: Upscale + strip metadata
+        env:
+          PYTHONUNBUFFERED: "1"
         run: |
-          ./realesrgan-ncnn-vulkan \
-            -i input.jpg \
-            -o output.png \
-            -n realesrgan-x4plus \
-            -s 4 \
-            -t 256 \
-            -v
-          ls -lh output.png
+          python -u - <<'EOF'
+          import os
+          import torch
+          from spandrel import ModelLoader, ImageModelDescriptor
+          from PIL import Image
+          import numpy as np
+
+          torch.set_num_threads(os.cpu_count())
+
+          input_file = "input.jpg"
+          base_name = os.path.splitext(input_file)[0]
+          output_file = f"{base_name}_upscaled_4k.png"
+
+          TILE_SIZE = 256
+          OVERLAP = 16
+
+          model = ModelLoader().load_from_file("RealESRGAN_x4plus.pth")
+          assert isinstance(model, ImageModelDescriptor)
+          model.eval()
+          scale = model.scale
+
+          img = Image.open(input_file).convert("RGB")
+          arr = np.array(img).astype(np.float32) / 255.0
+          h, w, _ = arr.shape
+          print(f"Input size: {w}x{h}, target: {w*scale}x{h*scale}", flush=True)
+
+          out = np.zeros((h * scale, w * scale, 3), dtype=np.float32)
+          total_tiles = ((h + TILE_SIZE - 1) // TILE_SIZE) * ((w + TILE_SIZE - 1) // TILE_SIZE)
+          done = 0
+
+          with torch.no_grad():
+              y = 0
+              while y < h:
+                  y_end = min(y + TILE_SIZE, h)
+                  y_start_pad = max(y - OVERLAP, 0)
+                  y_end_pad = min(y_end + OVERLAP, h)
+                  x = 0
+                  while x < w:
+                      x_end = min(x + TILE_SIZE, w)
+                      x_start_pad = max(x - OVERLAP, 0)
+                      x_end_pad = min(x_end + OVERLAP, w)
+                      tile = arr[y_start_pad:y_end_pad, x_start_pad:x_end_pad, :]
+                      tensor = torch.from_numpy(tile).permute(2, 0, 1).unsqueeze(0)
+                      result = model(tensor)
+                      result = result.squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
+
+                      crop_top = (y - y_start_pad) * scale
+                      crop_left = (x - x_start_pad) * scale
+                      crop_h = (y_end - y) * scale
+                      crop_w = (x_end - x) * scale
+                      out[y*scale:y_end*scale, x*scale:x_end*scale, :] = \
+                          result[crop_top:crop_top+crop_h, crop_left:crop_left+crop_w, :]
+                      done += 1
+                      print(f"[{done}/{total_tiles}] y={y}-{y_end}, x={x}-{x_end}", flush=True)
+                      x += TILE_SIZE
+                  y += TILE_SIZE
+
+          out = (out * 255.0).round().astype(np.uint8)
+
+          # === STRIP METADATA: create a clean image without EXIF ===
+          clean_img = Image.fromarray(out)
+          # Simpan tanpa parameter exif -> tidak ada metadata yang tersimpan
+          clean_img.save(output_file, "PNG", exif=Image.Exif())
+          print(f"Done: {output_file}, size: {clean_img.size}", flush=True)
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"OUTPUT_FILE={output_file}\n")
+          EOF
 
       - name: Upload to GitHub Release (no zip)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: upscale-${{ github.run_number }}
           name: "Upscaled Image #${{ github.run_number }}"
-          files: output.png
+          files: ${{ env.OUTPUT_FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
