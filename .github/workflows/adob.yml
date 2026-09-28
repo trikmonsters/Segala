@@ -1,0 +1,134 @@
+name: Adobe Stock Contributor Login
+
+on:
+  workflow_dispatch: # Memungkinkan pemicu manual dari tab Actions
+  schedule:
+    - cron: '0 0 * * *' # Opsional: Jalankan setiap hari pada tengah malam UTC
+
+jobs:
+  login-and-verify:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Checkout repositori
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Python (Tilion berbasis Python)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Install dependensi: Tilion (yang membawa Fortress Chromium) & Playwright
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install tilion playwright
+          # Playwright tidak perlu install browser karena kita akan menggunakan binary dari Tilion
+
+      # 4. Jalankan skrip login menggunakan cookie dari Secrets
+      - name: Execute Login Script
+        env:
+          # Cookie diambil dari GitHub Secrets, bukan hardcoded di YAML
+          ADOBE_COOKIE: ${{ secrets.ADOBE_COOKIE }}
+        run: |
+          cat << 'EOF' > login_adobe.py
+          import asyncio
+          import os
+          import json
+          from tilion import Tilion
+          from playwright.async_api import async_playwright
+
+          async def main():
+              # Inisialisasi Tilion (Fortress)
+              t = Tilion()
+              
+              # Dapatkan CDP URL untuk Playwright
+              cdp_url = t.cdp_url
+              print(f"Connecting Playwright to Tilion CDP at: {cdp_url}")
+
+              async with async_playwright() as p:
+                  # Hubungkan Playwright ke instance Fortress milik Tilion
+                  browser = await p.chromium.connect_over_cdp(cdp_url)
+                  
+                  # Buat konteks dan halaman baru
+                  context = await browser.new_context()
+                  page = await context.new_page()
+
+                  # Ambil cookie dari Environment Variable (Secret)
+                  cookie_raw = os.environ.get("ADOBE_COOKIE")
+                  if not cookie_raw:
+                      raise ValueError("ADOBE_COOKIE tidak ditemukan di environment/secrets")
+
+                  # Parse cookie (Asumsi format JSON array dari ekstensi Cookie-Editor)
+                  # Contoh format: [{"name":"...", "value":"...", "domain":".adobe.com", ...}]
+                  try:
+                      cookies = json.loads(cookie_raw)
+                      # Normalisasi cookie agar sesuai dengan format Playwright
+                      # (menghapus properti yang tidak valid, mengubah sameSite)
+                      valid_cookies = []
+                      for c in cookies:
+                          valid = {
+                              "name": c.get("name"),
+                              "value": c.get("value"),
+                              "domain": c.get("domain"),
+                              "path": c.get("path", "/"),
+                          }
+                          # Handle sameSite
+                          ss = c.get("sameSite")
+                          if ss in ["Strict", "Lax", "None"]:
+                              valid["sameSite"] = ss
+                          else:
+                              valid["sameSite"] = "Lax" # Default aman
+                          
+                          # Handle expires/expirationDate
+                          if "expirationDate" in c:
+                              valid["expires"] = int(c["expirationDate"])
+                          elif "expires" in c and c["expires"] != -1:
+                              valid["expires"] = int(c["expires"])
+                          
+                          if valid["name"] and valid["value"] and valid["domain"]:
+                              valid_cookies.append(valid)
+                      
+                      await context.add_cookies(valid_cookies)
+                      print(f"Successfully added {len(valid_cookies)} cookies.")
+                  except json.JSONDecodeError as e:
+                      print("Error parsing cookie JSON. Pastikan formatnya adalah JSON Array.")
+                      raise e
+
+                  # Arahkan ke halaman portfolio Adobe Stock Contributor
+                  target_url = "https://contributor.stock.adobe.com/en/portfolio"
+                  print(f"Navigating to {target_url}...")
+                  await page.goto(target_url, wait_until="domcontentloaded")
+
+                  # Tunggu selector yang menandakan berhasil login (sesuaikan jika perlu)
+                  # Contoh: elemen avatar profil atau teks selamat datang
+                  try:
+                      await page.wait_for_selector("[data-testid='user-avatar'], .profile-avatar, [aria-label='Profile']", timeout=15000)
+                      print("Login verified: Found profile indicator.")
+                  except Exception as e:
+                      print("Login verification failed. Mungkin cookie kadaluarsa atau selector berubah.")
+                      # Ambil screenshot untuk debugging (opsional)
+                      await page.screenshot(path="login_debug.png")
+                      raise e
+
+                  # (Opsional) Ambil screenshot bukti berhasil
+                  await page.screenshot(path="portfolio_success.png")
+                  
+                  await browser.close()
+
+          if __name__ == "__main__":
+              asyncio.run(main())
+          EOF
+
+          python login_adobe.py
+
+      # 5. (Opsional) Upload screenshot sebagai artifact untuk verifikasi
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-screenshots
+          path: "*.png"
+          if-no-files-found: ignore
