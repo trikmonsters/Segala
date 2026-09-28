@@ -23,6 +23,16 @@ on:
         required: true
         default: '100'
         type: string
+      model_name:
+        description: 'Model rembg (birefnet-general, isnet-general-use, u2net)'
+        required: true
+        default: 'birefnet-general'
+        type: choice
+        options:
+          - birefnet-general
+          - isnet-general-use
+          - u2net
+          - u2netp
 
 permissions:
   contents: write
@@ -30,7 +40,7 @@ permissions:
 jobs:
   vectorize-with-bg:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,9 +52,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install vtracer
-          pip install torch torchvision transformers pillow numpy
-          pip install "transformers>=4.48.0"
+          pip install --upgrade pip
+          pip install "rembg[cpu]" pillow vtracer numpy
           npm install -g svgo
 
       - name: Download gambar sumber
@@ -52,89 +61,82 @@ jobs:
           curl -L -A "Mozilla/5.0" "${{ github.event.inputs.image_url }}" -o source_image.jpg
           file source_image.jpg
 
-      - name: Hapus background dengan RMBG-2.0
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - name: Hapus background dengan rembg
         run: |
           python << 'EOF'
-          import os
-          import torch
-          from transformers import AutoModelForImageSegmentation
-          from torchvision import transforms
+          from rembg import remove, new_session
           from PIL import Image
-          
-          token = os.environ["HF_TOKEN"]
-          
-          print("Memuat model RMBG-2.0...")
-          model = AutoModelForImageSegmentation.from_pretrained(
-              'briaai/RMBG-2.0',
-              trust_remote_code=True,
-              token=token
+          import os
+
+          model_name = "${{ github.event.inputs.model_name }}"
+          print(f"Memuat model: {model_name}")
+
+          session = new_session(model_name)
+
+          input_image = Image.open('source_image.jpg').convert('RGB')
+          print(f"Ukuran gambar asli: {input_image.size}")
+
+          output_image = remove(
+              input_image,
+              session=session,
+              alpha_matting=True,
+              alpha_matting_foreground_threshold=240,
+              alpha_matting_background_threshold=10,
+              alpha_matting_erode_size=10,
           )
-          device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-          model.to(device)
-          model.eval()
-          print(f"Model dimuat di {device}")
-          
-          transform = transforms.Compose([
-              transforms.Resize((1024, 1024)),
-              transforms.ToTensor(),
-              transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-          ])
-          
-          image = Image.open('source_image.jpg').convert('RGB')
-          original_size = image.size
-          
-          input_tensor = transform(image).unsqueeze(0).to(device)
-          
-          with torch.no_grad():
-              preds = model(input_tensor)[-1].sigmoid().cpu()
-          
-          pred = preds[0].squeeze()
-          mask = transforms.ToPILImage()(pred).resize(original_size)
-          
-          image_rgba = image.convert('RGBA')
-          image_rgba.putalpha(mask)
-          image_rgba.save('image_no_bg.png')
-          print("Background dihapus. Gambar RGBA disimpan.")
+
+          output_image.save('image_no_bg.png')
+          print(f"Background dihapus. Mode: {output_image.mode}, Size: {output_image.size}")
+          EOF
+
+      - name: Verifikasi hasil background removal
+        run: |
+          python << 'EOF'
+          from PIL import Image
+          img = Image.open('image_no_bg.png')
+          print(f"Mode: {img.mode}, Size: {img.size}")
+          if img.mode == 'RGBA':
+              print("✅ Alpha channel terdeteksi (background transparan)")
+          else:
+              print("⚠️ Tidak ada alpha channel")
           EOF
 
       - name: Gabungkan dengan warna background custom
         run: |
           python << 'EOF'
           from PIL import Image
-          
+
           bg_hex = "${{ github.event.inputs.bg_color }}".lstrip('#')
           bg_opacity = int("${{ github.event.inputs.bg_opacity }}")
-          
+
           if len(bg_hex) == 3:
               bg_hex = ''.join([c*2 for c in bg_hex])
           bg_rgb = tuple(int(bg_hex[i:i+2], 16) for i in (0, 2, 4))
           bg_alpha = int(255 * bg_opacity / 100)
-          
+
           print(f"Warna background: RGB{bg_rgb}, Alpha: {bg_alpha}")
-          
+
           image = Image.open('image_no_bg.png').convert('RGBA')
           width, height = image.size
-          
+
           background = Image.new('RGBA', (width, height), bg_rgb + (bg_alpha,))
-          
+
           result = Image.alpha_composite(background, image)
-          
+
           result_rgb = result.convert('RGB')
           result_rgb.save('image_with_bg.jpg', quality=95)
           result.save('image_with_bg_rgba.png')
           print(f"Komposit disimpan: {width}x{height}")
           EOF
 
-      - name: Vectorize dengan VTracer (parameter optimized)
+      - name: Vectorize dengan VTracer
         run: |
           python << 'EOF'
           import vtracer
           import os
-          
+
           output = "${{ github.event.inputs.output_name }}.svg"
-          
+
           vtracer.convert_image_to_svg_py(
               'image_with_bg.jpg',
               output,
@@ -147,7 +149,7 @@ jobs:
               splice_threshold=45,
               path_precision=5
           )
-          
+
           size = os.path.getsize(output)
           print(f"SVG dibuat: {output} ({size:,} bytes)")
           EOF
@@ -159,7 +161,7 @@ jobs:
             --precision=2 \
             --enable=removeMetadata,removeComments,cleanupNumericValues,convertPathData,collapseGroups \
             -o "${{ github.event.inputs.output_name }}_optimized.svg"
-          
+
           ls -lh "${{ github.event.inputs.output_name }}_optimized.svg"
 
       - name: Verifikasi output
@@ -182,12 +184,13 @@ jobs:
           name: "Vectorized SVG - ${{ github.event.inputs.output_name }}"
           body: |
             ## Hasil Vektorisasi
-            
+
             **Sumber:** ${{ github.event.inputs.image_url }}
+            **Model rembg:** ${{ github.event.inputs.model_name }}
             **Warna Background:** ${{ github.event.inputs.bg_color }} (opacity: ${{ github.event.inputs.bg_opacity }}%)
             **Output:** ${{ github.event.inputs.output_name }}_optimized.svg
-            
-            Diproses dengan RMBG-2.0 + VTracer + SVGO.
+
+            Diproses dengan rembg + VTracer + SVGO.
           files: |
             ${{ github.event.inputs.output_name }}_optimized.svg
             ${{ github.event.inputs.output_name }}.svg
