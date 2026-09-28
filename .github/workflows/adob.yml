@@ -1,4 +1,4 @@
-name: Adobe Stock Contributor - Upload Image
+name: Adobe Stock Contributor - Upload JPEG (Step Screenshots)
 
 on:
   workflow_dispatch:
@@ -21,27 +21,108 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright requests
+          pip install playwright requests Pillow
           playwright install --with-deps chromium
 
-      - name: Download image
+      - name: Download & Prepare Image
         run: |
-          curl -L -A "Mozilla/5.0" \
-            -o upload.jpg \
-            "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg"
+          cat > prepare.py << 'EOF'
+          import os
+          import sys
+          import requests
+          from io import BytesIO
+          from PIL import Image
+
+          SRC_URL = "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg"
+          OUT = "upload.jpg"
+
+          MIN_MP = 4.0
+          MAX_MP = 100.0
+          MAX_MB = 45.0
+
+          def log(m): print(f"[PREP] {m}", flush=True)
+
+          log(f"Download {SRC_URL}")
+          headers = {
+              "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+              "Referer": "https://www.pinterest.com/",
+          }
+          r = requests.get(SRC_URL, headers=headers, timeout=30)
+          r.raise_for_status()
+          log(f"Downloaded {len(r.content)} bytes")
+
+          img = Image.open(BytesIO(r.content))
+          log(f"Original: {img.size[0]}x{img.size[1]} {img.mode} {img.format}")
+          w, h = img.size
+          mp = (w * h) / 1_000_000
+          log(f"Original: {mp:.2f} MP")
+
+          if img.mode in ("RGBA", "LA", "P"):
+              img = img.convert("RGB")
+              log("Converted to RGB")
+
+          if mp < MIN_MP:
+              target_mp = 12.0
+              scale = (target_mp / mp) ** 0.5
+              new_w = int(w * scale)
+              new_h = int(h * scale)
+              log(f"Upscale: {w}x{h} -> {new_w}x{new_h}")
+              img = img.resize((new_w, new_h), Image.LANCZOS)
+              w, h = new_w, new_h
+              mp = (w * h) / 1_000_000
+              log(f"New: {mp:.2f} MP")
+
+          if mp > MAX_MP:
+              scale = (MAX_MP / mp) ** 0.5
+              new_w = int(w * scale)
+              new_h = int(h * scale)
+              log(f"Downscale: {w}x{h} -> {new_w}x{new_h}")
+              img = img.resize((new_w, new_h), Image.LANCZOS)
+              w, h = new_w, new_h
+              mp = (w * h) / 1_000_000
+
+          quality = 92
+          while quality >= 60:
+              img.save(OUT, "JPEG", quality=quality, optimize=True, progressive=True)
+              size_mb = os.path.getsize(OUT) / (1024 * 1024)
+              log(f"Quality {quality} -> {size_mb:.2f} MB")
+              if size_mb <= MAX_MB:
+                  break
+              quality -= 5
+
+          size_mb = os.path.getsize(OUT) / (1024 * 1024)
+          log(f"FINAL: {OUT} | {w}x{h} | {mp:.2f} MP | {size_mb:.2f} MB")
+
+          errors = []
+          if mp < MIN_MP: errors.append(f"MP {mp:.2f} < {MIN_MP}")
+          if mp > MAX_MP: errors.append(f"MP {mp:.2f} > {MAX_MP}")
+          if size_mb > MAX_MB: errors.append(f"Size {size_mb:.2f} MB > {MAX_MB} MB")
+
+          if errors:
+              log("❌ VALIDASI GAGAL: " + ", ".join(errors))
+              sys.exit(1)
+          else:
+              log("✅ Validasi lolos (JPEG, MP, size)")
+          EOF
+
+          python prepare.py
           ls -la upload.jpg
           file upload.jpg
 
-      - name: Run Upload Script
+      - name: Upload to Adobe (with screenshots)
         env:
           ADOBE_COOKIE: ${{ secrets.ADOBE_COOKIE }}
         run: |
+          mkdir -p shots
           cat > upload.py << 'EOF'
           import asyncio
           import os
           import json
           import base64
           from playwright.async_api import async_playwright
+
+          SHOTS_DIR = "shots"
 
           def parse_cookies(raw):
               raw = raw.strip()
@@ -103,8 +184,15 @@ jobs:
                   cookies.append(item)
               return cookies
 
-          def log(msg):
-              print(f"[UPLOAD] {msg}", flush=True)
+          def log(m): print(f"[UPLOAD] {m}", flush=True)
+
+          async def shot(page, name):
+              try:
+                  path = os.path.join(SHOTS_DIR, f"{name}.png")
+                  await page.screenshot(path=path, full_page=True)
+                  log(f"📸 Screenshot: {path}")
+              except Exception as e:
+                  log(f"❌ Gagal screenshot {name}: {e}")
 
           async def main():
               raw = os.environ["ADOBE_COOKIE"]
@@ -127,21 +215,21 @@ jobs:
 
                   page = await context.new_page()
 
-                  # 1. Buka halaman upload langsung
+                  # ───── STEP 1: Buka halaman upload ─────
                   target = "https://contributor.stock.adobe.com/en/upload"
-                  log(f"Buka {target}")
+                  log(f"[STEP 1] Buka {target}")
                   await page.goto(target, wait_until="domcontentloaded")
                   await page.wait_for_timeout(5000)
                   log(f"URL: {page.url}")
+                  await shot(page, "01_halaman_upload")
 
-                  # 2. Kalau tidak langsung ke upload, klik tombol Upload di header
+                  # ───── STEP 2: Klik tombol Upload (kalau perlu) ─────
                   if "/upload" not in page.url:
-                      log("Klik tombol Upload di header...")
+                      log("[STEP 2] Klik tombol Upload di header...")
                       for sel in [
                           'a[href*="/upload"]',
                           'button:has-text("Upload")',
                           'a:has-text("Upload")',
-                          '[data-testid="upload-button"]',
                       ]:
                           try:
                               el = page.locator(sel).first
@@ -153,79 +241,107 @@ jobs:
                               continue
                       await page.wait_for_timeout(5000)
                       log(f"URL setelah klik: {page.url}")
+                  else:
+                      log("[STEP 2] Sudah di halaman upload, skip klik")
 
-                  # 3. Tunggu area drag & drop muncul
-                  log("Menunggu area drag & drop...")
-                  drop_area = None
-                  for sel in [
-                      'text=Drag & Drop files or',
-                      'text=Drag & Drop',
-                      'div[class*="dropzone"]',
-                      'div[class*="DropZone"]',
-                      'div[class*="upload-area"]',
-                      'input[type="file"]',
-                  ]:
+                  await shot(page, "02_setelah_klik_upload")
+
+                  # ───── STEP 3: Tunggu input file muncul ─────
+                  log("[STEP 3] Menunggu input[type=file]...")
+                  file_input = None
+                  for i in range(30):
                       try:
-                          el = page.locator(sel).first
-                          await el.wait_for(timeout=5000)
-                          drop_area = el
-                          log(f"Drop area ditemukan: {sel}")
-                          break
+                          fi = page.locator('input[type="file"]').first
+                          if await fi.count() > 0:
+                              file_input = fi
+                              log(f"input[type=file] ditemukan pada detik ke-{i}")
+                              break
                       except Exception:
-                          continue
+                          pass
+                      await page.wait_for_timeout(1000)
 
-                  # 4. Cara paling reliable: pakai input[type=file] (hidden)
-                  # Adobe pakai input file tersembunyi sebagai target drop
-                  log("Set file via input[type=file]...")
-                  try:
-                      file_input = page.locator('input[type="file"]').first
-                      await file_input.set_input_files("upload.jpg", timeout=15000)
-                      log("✅ File di-set via input[type=file]")
-                  except Exception as e:
-                      log(f"set_input_files gagal: {e}")
+                  await shot(page, "03_drop_area_siap")
 
-                      # 5. Fallback: simulasi drag & drop dengan DataTransfer
-                      if drop_area:
-                          log("Fallback: simulasi drag & drop...")
-                          await page.evaluate("""
-                          async () => {
-                              const resp = await fetch(
-                                  "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg"
-                              );
-                              const blob = await resp.blob();
-                              const file = new File([blob], "upload.jpg", {type: "image/jpeg"});
+                  # ───── STEP 4: Set file ─────
+                  if file_input:
+                      log("[STEP 4] Set file via input[type=file]...")
+                      await file_input.set_input_files("upload.jpg", timeout=30000)
+                      log("✅ File di-set")
+                  else:
+                      log("[STEP 4] Fallback: simulasi drag & drop...")
+                      with open("upload.jpg", "rb") as f:
+                          b64 = base64.b64encode(f.read()).decode()
 
-                              const dt = new DataTransfer();
-                              dt.items.add(file);
+                      await page.evaluate("""
+                      async (b64) => {
+                          const bin = atob(b64);
+                          const arr = new Uint8Array(bin.length);
+                          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                          const file = new File([arr], "upload.jpg", {type: "image/jpeg"});
 
-                              // Cari drop zone: elemen dengan teks "Drag & Drop"
-                              const all = document.querySelectorAll('div, section, main');
-                              let target = null;
-                              for (const el of all) {
-                                  if (el.innerText && el.innerText.includes("Drag & Drop")) {
-                                      target = el;
-                                      break;
-                                  }
+                          const dt = new DataTransfer();
+                          dt.items.add(file);
+
+                          const all = document.querySelectorAll('div, section, main');
+                          let target = null;
+                          for (const el of all) {
+                              if (el.innerText && el.innerText.includes("Drag & Drop")) {
+                                  target = el; break;
                               }
-                              if (!target) target = document.body;
-
-                              const events = ["dragenter", "dragover", "drop"];
-                              for (const type of events) {
-                                  const ev = new DragEvent(type, {
-                                      bubbles: true, cancelable: true, dataTransfer: dt
-                                  });
-                                  target.dispatchEvent(ev);
-                              }
-                              console.log("Drag & drop dispatched");
                           }
-                          """)
-                          log("✅ Drag & drop disimulasikan")
+                          if (!target) target = document.body;
 
-                  # 6. Tunggu preview / progress upload muncul
-                  log("Menunggu preview upload...")
-                  await page.wait_for_timeout(15000)
+                          for (const type of ["dragenter", "dragover", "drop"]) {
+                              target.dispatchEvent(new DragEvent(type, {
+                                  bubbles: true, cancelable: true, dataTransfer: dt
+                              }));
+                          }
+                      }
+                      """, b64)
+                      log("✅ Drag & drop disimulasikan")
 
-                  await page.screenshot(path="adobe_upload.png", full_page=True)
+                  await page.wait_for_timeout(3000)
+                  await shot(page, "04_file_baru_diset")
+
+                  # ───── STEP 5: Tunggu Adobe proses ─────
+                  log("[STEP 5] Menunggu Adobe proses file (20 detik)...")
+                  await page.wait_for_timeout(10000)
+                  await shot(page, "05_upload_berjalan_10s")
+
+                  await page.wait_for_timeout(10000)
+                  await shot(page, "06_upload_selesai_20s")
+
+                  # ───── STEP 6: Cek error validasi di UI ─────
+                  log("[STEP 6] Cek pesan error / status di UI...")
+                  try:
+                      body_text = await page.locator("body").inner_text()
+                      found = []
+                      for kw in ["4 MP", "4 megapixel", "minimum", "45 MB",
+                                 "not supported", "invalid", "rejected",
+                                 "too small", "too large", "error"]:
+                          if kw.lower() in body_text.lower():
+                              found.append(kw)
+                      if found:
+                          log(f"⚠️  Keyword error ditemukan: {found}")
+                      else:
+                          log("✅ Tidak ada keyword error di body")
+                  except Exception as e:
+                      log(f"Cek body gagal: {e}")
+
+                  # ───── STEP 7: Cek apakah file muncul di list ─────
+                  log("[STEP 7] Cek apakah file muncul di daftar upload...")
+                  try:
+                      # Cari elemen yang mengandung "upload.jpg" atau thumbnail
+                      count = await page.locator(
+                          'img[src*="blob:"], [class*="thumbnail"], '
+                          '[class*="preview"], [data-testid*="file"]'
+                      ).count()
+                      log(f"Elemen preview/thumbnail ditemukan: {count}")
+                  except Exception as e:
+                      log(f"Cek preview gagal: {e}")
+
+                  await shot(page, "07_hasil_akhir")
+
                   log(f"Final URL: {page.url}")
                   log(f"Title: {await page.title()}")
 
@@ -240,14 +356,15 @@ jobs:
 
           python upload.py
 
-      - name: Upload Screenshot to Release
+      - name: Upload All Screenshots to Release
         if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          if [ ! -f adobe_upload.png ]; then
-            echo "Screenshot tidak ada, skip."
+          # Cek ada screenshot atau tidak
+          if [ ! -d shots ] || [ -z "$(ls -A shots 2>/dev/null)" ]; then
+            echo "Tidak ada screenshot, skip."
             exit 0
           fi
 
@@ -273,15 +390,21 @@ jobs:
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/$REPO/releases" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"Adobe Upload $TAG\",\"body\":\"Auto-generated\"}")
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"Adobe Upload $TAG\",\"body\":\"Step-by-step screenshots\"}")
 
           UPLOAD_URL=$(echo "$RESP" | python3 -c \
             "import sys,json; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))")
 
-          curl -s -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: image/png" \
-            --data-binary @adobe_upload.png \
-            "$UPLOAD_URL?name=adobe_upload.png"
+          # Upload semua file di shots/
+          for f in shots/*.png; do
+            [ -f "$f" ] || continue
+            NAME=$(basename "$f")
+            curl -s -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: image/png" \
+              --data-binary @"$f" \
+              "$UPLOAD_URL?name=$NAME"
+            echo "Uploaded: $NAME"
+          done
 
-          echo "✅ Uploaded: $TAG"
+          echo "✅ Semua screenshot diupload ke release: $TAG"
