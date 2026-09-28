@@ -1,17 +1,21 @@
-name: Vectorize Image to SVG
+name: Vectorize Image to SVG Release
 
 on:
   workflow_dispatch:
     inputs:
-      image_url:
-        description: 'URL of the image to vectorize'
+      tag_name:
+        description: 'Tag untuk release (misal: v1.0.0)'
         required: true
+        default: 'v1.0.0'
         type: string
       output_name:
-        description: 'Output SVG file name (without .svg)'
-        required: false
-        default: 'output'
+        description: 'Nama file SVG (tanpa .svg)'
+        required: true
+        default: 'vectorized'
         type: string
+
+permissions:
+  contents: write
 
 jobs:
   vectorize:
@@ -20,32 +24,51 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Install VTracer
-        run: cargo install vtracer
+      - name: Install VTracer (Python)
+        run: pip install vtracer
 
       - name: Download image
         run: |
-          curl -L "${{ github.event.inputs.image_url }}" -o input_image.png
+          curl -L "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg" -o input_image.jpg
 
       - name: Convert image to SVG
         run: |
-          vtracer --input input_image.png \
-            --output ${{ github.event.inputs.output_name }}.svg \
-            --colormode color \
-            --color_precision 6 \
-            --filter_speckle 4 \
-            --gradient_step 16 \
-            --corner_threshold 60 \
-            --segment_length 4.0 \
-            --splice_threshold 45 \
-            --path_precision 3 \
-            --optimize 2
+          python -c "
+          import vtracer
+          vtracer.convert_image_to_svg_py(
+              'input_image.jpg',
+              '${{ github.event.inputs.output_name }}.svg',
+              colormode='color',
+              color_precision=6,
+              filter_speckle=4,
+              gradient_step=16,
+              corner_threshold=60,
+              segment_length=4.0,
+              splice_threshold=45,
+              path_precision=3
+          )
+          "
 
-      - name: Upload SVG artifact
-        uses: actions/upload-artifact@v4
+      - name: Verify SVG
+        run: |
+          ls -lh ${{ github.event.inputs.output_name }}.svg
+          head -c 200 ${{ github.event.inputs.output_name }}.svg
+
+      - name: Create Release & Upload SVG
+        uses: softprops/action-gh-release@v2
         with:
-          name: vectorized-svg
-          path: ${{ github.event.inputs.output_name }}.svg
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: "Vectorized SVG - ${{ github.event.inputs.tag_name }}"
+          body: |
+            Hasil vektorisasi otomatis dari:
+            https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg
+
+            Dibuat dengan VTracer.
+          files: ${{ github.event.inputs.output_name }}.svg
+          draft: false
+          prerelease: false
