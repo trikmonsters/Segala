@@ -170,11 +170,12 @@ jobs:
             ]
           };
           EOF
+          echo "--- Isi svgo.config.mjs ---"
           cat svgo.config.mjs
 
       - name: Optimize SVG dengan SVGO
         run: |
-          svgo -c svgo.config.mjs \
+          svgo --config svgo.config.mjs \
             -i "${{ github.event.inputs.output_name }}.svg" \
             -o "${{ github.event.inputs.output_name }}_optimized.svg"
 
