@@ -1,131 +1,197 @@
-name: Upscale Image 2K (4xNomos8kDAT)
+name: Vectorize dengan Background Remover & Custom Background
 
 on:
   workflow_dispatch:
     inputs:
       image_url:
-        description: 'URL gambar input'
+        description: 'URL gambar sumber'
         required: true
-        default: 'https://i.pinimg.com/736x/6d/7d/2b/6d7d2bcf1ab0bb7beeab6969d345cde2.jpg'
+        default: 'https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg'
+        type: string
+      output_name:
+        description: 'Nama file SVG (tanpa .svg)'
+        required: true
+        default: 'vectorized'
+        type: string
+      bg_color:
+        description: 'Warna background (hex, contoh: #ffffff, #000000, #FF5733)'
+        required: true
+        default: '#ffffff'
+        type: string
+      bg_opacity:
+        description: 'Opacity background (0-100)'
+        required: true
+        default: '100'
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  upscale:
+  vectorize-with-bg:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
+    
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
-          pip install spandrel pillow numpy opencv-python-headless
+          pip install vtracer
+          pip install torch torchvision transformers pillow numpy
+          pip install "transformers>=4.48.0"
+          npm install -g svgo
 
-      - name: Download 4xNomos8kDAT model
+      - name: Download gambar sumber
         run: |
-          curl -fL -o 4xNomos8kDAT.pth \
-            "https://github.com/Phhofm/models/releases/download/4xNomos8kDAT/4xNomos8kDAT.pth"
+          curl -L -A "Mozilla/5.0" "${{ github.event.inputs.image_url }}" -o source_image.jpg
+          file source_image.jpg
 
-      - name: Download input image from URL
-        run: |
-          curl -fL -o input.jpg "${{ github.event.inputs.image_url }}"
-          ls -lh input.jpg
-
-      - name: Upscale to 2K + strip metadata
+      - name: Hapus background dengan RMBG-2.0
         env:
-          PYTHONUNBUFFERED: "1"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          python -u - <<'EOF'
+          python << 'EOF'
           import os
           import torch
-          from spandrel import ModelLoader, ImageModelDescriptor
+          from transformers import AutoModelForImageSegmentation
+          from torchvision import transforms
           from PIL import Image
-          import numpy as np
-
-          torch.set_num_threads(os.cpu_count())
-
-          input_file = "input.jpg"
-          output_file = "output_2k.png"
-
-          TILE_SIZE = 256
-          OVERLAP = 16
-          TARGET_WIDTH = 2048  # 2K
-
-          # Load model
-          model = ModelLoader().load_from_file("4xNomos8kDAT.pth")
-          assert isinstance(model, ImageModelDescriptor)
+          
+          token = os.environ["HF_TOKEN"]
+          
+          print("Memuat model RMBG-2.0...")
+          model = AutoModelForImageSegmentation.from_pretrained(
+              'briaai/RMBG-2.0',
+              trust_remote_code=True,
+              token=token
+          )
+          device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+          model.to(device)
           model.eval()
-          scale = model.scale
-
-          img = Image.open(input_file).convert("RGB")
-          arr = np.array(img).astype(np.float32) / 255.0
-          h, w, _ = arr.shape
-          print(f"Input size: {w}x{h}, target: {w*scale}x{h*scale}", flush=True)
-
-          out = np.zeros((h * scale, w * scale, 3), dtype=np.float32)
-          total_tiles = ((h + TILE_SIZE - 1) // TILE_SIZE) * ((w + TILE_SIZE - 1) // TILE_SIZE)
-          done = 0
-
+          print(f"Model dimuat di {device}")
+          
+          transform = transforms.Compose([
+              transforms.Resize((1024, 1024)),
+              transforms.ToTensor(),
+              transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+          ])
+          
+          image = Image.open('source_image.jpg').convert('RGB')
+          original_size = image.size
+          
+          input_tensor = transform(image).unsqueeze(0).to(device)
+          
           with torch.no_grad():
-              y = 0
-              while y < h:
-                  y_end = min(y + TILE_SIZE, h)
-                  y_start_pad = max(y - OVERLAP, 0)
-                  y_end_pad = min(y_end + OVERLAP, h)
-                  x = 0
-                  while x < w:
-                      x_end = min(x + TILE_SIZE, w)
-                      x_start_pad = max(x - OVERLAP, 0)
-                      x_end_pad = min(x_end + OVERLAP, w)
-                      tile = arr[y_start_pad:y_end_pad, x_start_pad:x_end_pad, :]
-                      tensor = torch.from_numpy(tile).permute(2, 0, 1).unsqueeze(0)
-                      result = model(tensor)
-                      result = result.squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
-
-                      crop_top = (y - y_start_pad) * scale
-                      crop_left = (x - x_start_pad) * scale
-                      crop_h = (y_end - y) * scale
-                      crop_w = (x_end - x) * scale
-                      out[y*scale:y_end*scale, x*scale:x_end*scale, :] = \
-                          result[crop_top:crop_top+crop_h, crop_left:crop_left+crop_w, :]
-                      done += 1
-                      print(f"[{done}/{total_tiles}] tile selesai", flush=True)
-                      x += TILE_SIZE
-                  y += TILE_SIZE
-
-          out = (out * 255.0).round().astype(np.uint8)
-          img_out = Image.fromarray(out)
-
-          # Resize ke 2K
-          if img_out.width > TARGET_WIDTH:
-              new_height = int(img_out.height * TARGET_WIDTH / img_out.width)
-              img_out = img_out.resize((TARGET_WIDTH, new_height), Image.LANCZOS)
-              print(f"Resized to 2K: {img_out.size}", flush=True)
-
-          # Simpan tanpa metadata
-          clean_img = Image.fromarray(np.array(img_out))
-          clean_img.save(output_file, "PNG", exif=Image.Exif())
-          print(f"Done: {output_file}, size: {clean_img.size}", flush=True)
-
-          with open(os.environ["GITHUB_ENV"], "a") as f:
-              f.write(f"OUTPUT_FILE={output_file}\n")
+              preds = model(input_tensor)[-1].sigmoid().cpu()
+          
+          pred = preds[0].squeeze()
+          mask = transforms.ToPILImage()(pred).resize(original_size)
+          
+          image_rgba = image.convert('RGBA')
+          image_rgba.putalpha(mask)
+          image_rgba.save('image_no_bg.png')
+          print("Background dihapus. Gambar RGBA disimpan.")
           EOF
 
-      - name: Upload to GitHub Release (no zip)
+      - name: Gabungkan dengan warna background custom
+        run: |
+          python << 'EOF'
+          from PIL import Image
+          
+          bg_hex = "${{ github.event.inputs.bg_color }}".lstrip('#')
+          bg_opacity = int("${{ github.event.inputs.bg_opacity }}")
+          
+          if len(bg_hex) == 3:
+              bg_hex = ''.join([c*2 for c in bg_hex])
+          bg_rgb = tuple(int(bg_hex[i:i+2], 16) for i in (0, 2, 4))
+          bg_alpha = int(255 * bg_opacity / 100)
+          
+          print(f"Warna background: RGB{bg_rgb}, Alpha: {bg_alpha}")
+          
+          image = Image.open('image_no_bg.png').convert('RGBA')
+          width, height = image.size
+          
+          background = Image.new('RGBA', (width, height), bg_rgb + (bg_alpha,))
+          
+          result = Image.alpha_composite(background, image)
+          
+          result_rgb = result.convert('RGB')
+          result_rgb.save('image_with_bg.jpg', quality=95)
+          result.save('image_with_bg_rgba.png')
+          print(f"Komposit disimpan: {width}x{height}")
+          EOF
+
+      - name: Vectorize dengan VTracer (parameter optimized)
+        run: |
+          python << 'EOF'
+          import vtracer
+          import os
+          
+          output = "${{ github.event.inputs.output_name }}.svg"
+          
+          vtracer.convert_image_to_svg_py(
+              'image_with_bg.jpg',
+              output,
+              colormode='color',
+              color_precision=8,
+              filter_speckle=2,
+              layer_difference=4,
+              corner_threshold=60,
+              length_threshold=2.0,
+              splice_threshold=45,
+              path_precision=5
+          )
+          
+          size = os.path.getsize(output)
+          print(f"SVG dibuat: {output} ({size:,} bytes)")
+          EOF
+
+      - name: Optimize SVG dengan SVGO
+        run: |
+          svgo "${{ github.event.inputs.output_name }}.svg" \
+            --multipass \
+            --precision=2 \
+            --enable=removeMetadata,removeComments,cleanupNumericValues,convertPathData,collapseGroups \
+            -o "${{ github.event.inputs.output_name }}_optimized.svg"
+          
+          ls -lh "${{ github.event.inputs.output_name }}_optimized.svg"
+
+      - name: Verifikasi output
+        run: |
+          if [ ! -f "${{ github.event.inputs.output_name }}_optimized.svg" ]; then
+            echo "❌ SVG optimized tidak ditemukan!"
+            ls -la
+            exit 1
+          fi
+          echo "✅ File output:"
+          ls -lh *.svg *.png *.jpg 2>/dev/null || true
+          echo ""
+          echo "Preview header SVG:"
+          head -c 200 "${{ github.event.inputs.output_name }}_optimized.svg"
+
+      - name: Buat Release dengan SVG
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: upscale-${{ github.run_number }}
-          name: "Upscaled 2K Image #${{ github.run_number }}"
-          files: ${{ env.OUTPUT_FILE }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.event.inputs.output_name }}-v${{ github.run_number }}
+          name: "Vectorized SVG - ${{ github.event.inputs.output_name }}"
+          body: |
+            ## Hasil Vektorisasi
+            
+            **Sumber:** ${{ github.event.inputs.image_url }}
+            **Warna Background:** ${{ github.event.inputs.bg_color }} (opacity: ${{ github.event.inputs.bg_opacity }}%)
+            **Output:** ${{ github.event.inputs.output_name }}_optimized.svg
+            
+            Diproses dengan RMBG-2.0 + VTracer + SVGO.
+          files: |
+            ${{ github.event.inputs.output_name }}_optimized.svg
+            ${{ github.event.inputs.output_name }}.svg
+            image_no_bg.png
+            image_with_bg.jpg
+          draft: false
+          prerelease: false
