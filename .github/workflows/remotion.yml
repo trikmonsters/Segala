@@ -1,42 +1,41 @@
-name: Render Adobe Stock Videos
+name: Render Neural Genesis Stock Video
 
 on:
   workflow_dispatch:
     inputs:
-      accentColor:
-        description: 'Accent color (hex)'
+      version:
+        description: 'Release version tag'
+        required: true
+        default: 'v1.0.0'
+      primaryColor:
+        description: 'Primary color (hex)'
         required: false
-        default: '#3b82f6'
+        default: '#6366f1'
+      secondaryColor:
+        description: 'Secondary color (hex)'
+        required: false
+        default: '#06b6d4'
       bgColor:
         description: 'Background color (hex)'
         required: false
-        default: '#0f172a'
-      textColor:
-        description: 'Text color (hex)'
-        required: false
-        default: '#f8fafc'
-      title:
-        description: 'Main title text'
-        required: false
-        default: 'Move Faster'
-      subtitle:
-        description: 'Subtitle text'
-        required: false
-        default: 'Design systems for modern teams'
+        default: '#020617'
+
+permissions:
+  contents: write
 
 jobs:
-  setup-and-render:
+  build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - comp: 'HorizontalStock'
-            output: 'stock_horizontal.mp4'
+            output: 'neural-genesis-1920x1080.mp4'
           - comp: 'VerticalStock'
-            output: 'stock_vertical.mp4'
+            output: 'neural-genesis-1080x1920.mp4'
           - comp: 'SquareStock'
-            output: 'stock_square.mp4'
+            output: 'neural-genesis-1080x1080.mp4'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,12 +52,10 @@ jobs:
 
           cat > package.json <<'EOF'
           {
-            "name": "remotion-stock",
+            "name": "neural-genesis",
             "version": "1.0.0",
             "private": true,
-            "scripts": {
-              "start": "remotion studio src/index.ts"
-            },
+            "scripts": { "start": "remotion studio src/index.ts" },
             "dependencies": {
               "@remotion/cli": "4.0.290",
               "remotion": "4.0.290",
@@ -94,7 +91,7 @@ jobs:
           EOF
 
           cat > src/Root.tsx <<'EOF'
-          import React from 'react';
+          import React, { useMemo } from 'react';
           import {
             Composition,
             AbsoluteFill,
@@ -102,112 +99,210 @@ jobs:
             useVideoConfig,
             interpolate,
             spring,
+            Easing,
           } from 'remotion';
 
           const colors = {
-            accent: process.env.REMOTION_ACCENT_COLOR || '#3b82f6',
-            bg: process.env.REMOTION_BG_COLOR || '#0f172a',
-            text: process.env.REMOTION_TEXT_COLOR || '#f8fafc',
+            primary: process.env.REMOTION_PRIMARY_COLOR || '#6366f1',
+            secondary: process.env.REMOTION_SECONDARY_COLOR || '#06b6d4',
+            bg: process.env.REMOTION_BG_COLOR || '#020617',
           };
 
-          const title = process.env.REMOTION_TITLE || 'Move Faster';
-          const subtitle = process.env.REMOTION_SUBTITLE || 'Design systems for modern teams';
+          // Deterministic seeded random
+          const seeded = (i: number, seed: number) => {
+            const x = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453;
+            return x - Math.floor(x);
+          };
 
-          const ModernMinimal: React.FC<{ width: number; height: number }> = ({ width, height }) => {
+          // === NEURAL NODE GENERATOR ===
+          // Mensimulasikan neuron yang tumbuh dan saling terhubung
+          interface Neuron {
+            x: number; y: number; size: number;
+            growthDelay: number; pulseOffset: number;
+          }
+          interface Synapse {
+            from: number; to: number;
+            delay: number; strength: number;
+          }
+
+          const generateNetwork = (count: number, width: number, height: number) => {
+            const neurons: Neuron[] = [];
+            const synapses: Synapse[] = [];
+
+            for (let i = 0; i < count; i++) {
+              const angle = seeded(i, 1) * Math.PI * 2;
+              const radius = Math.sqrt(seeded(i, 2)) * Math.min(width, height) * 0.38;
+              const jitterX = (seeded(i, 10) - 0.5) * width * 0.15;
+              const jitterY = (seeded(i, 11) - 0.5) * height * 0.15;
+              neurons.push({
+                x: width / 2 + Math.cos(angle) * radius + jitterX,
+                y: height / 2 + Math.sin(angle) * radius * 0.85 + jitterY,
+                size: 2 + seeded(i, 3) * 4,
+                growthDelay: seeded(i, 4) * 0.6,
+                pulseOffset: seeded(i, 5) * Math.PI * 2,
+              });
+            }
+
+            // Buat sinapsis: hubungkan neuron yang berdekatan
+            for (let i = 0; i < neurons.length; i++) {
+              for (let j = i + 1; j < neurons.length; j++) {
+                const dx = neurons[i].x - neurons[j].x;
+                const dy = neurons[i].y - neurons[j].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const maxDist = Math.min(width, height) * 0.22;
+                if (dist < maxDist && seeded(i * 100 + j, 20) > 0.55) {
+                  synapses.push({
+                    from: i, to: j,
+                    delay: seeded(i * 100 + j, 21) * 0.5,
+                    strength: 1 - dist / maxDist,
+                  });
+                }
+              }
+            }
+            return { neurons, synapses };
+          };
+
+          const NeuralScene: React.FC<{ width: number; height: number }> = ({ width, height }) => {
             const frame = useCurrentFrame();
             const { fps, durationInFrames } = useVideoConfig();
+            const isVertical = height > width;
 
-            const bgAngle = interpolate(frame, [0, durationInFrames], [0, 45]);
+            // === TIMELINE (18 detik) ===
+            // 0-5s   : neuron muncul satu per satu (growth)
+            // 5-8s   : sinapsis terbentuk (connections)
+            // 8-15s  : data flow + pulsing (aktivitas)
+            // 15-18s : fade out sinematik
 
-            const titleProgress = spring({
-              frame: frame - 5,
-              fps,
-              config: { damping: 20, stiffness: 80 },
-            });
-            const titleY = interpolate(titleProgress, [0, 1], [40, 0]);
+            const network = useMemo(() => generateNetwork(90, width, height), [width, height]);
 
-            const subtitleProgress = spring({
-              frame: frame - 20,
-              fps,
-              config: { damping: 20, stiffness: 80 },
-            });
-            const subtitleY = interpolate(subtitleProgress, [0, 1], [30, 0]);
+            const globalProgress = interpolate(
+              frame,
+              [0, fps * 5],
+              [0, 1],
+              { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+            );
 
-            const lineProgress = spring({
-              frame: frame - 15,
-              fps,
-              config: { damping: 25, stiffness: 90 },
-            });
-            const lineWidth = interpolate(lineProgress, [0, 1], [0, Math.min(width * 0.5, 400)]);
+            const synapseProgress = interpolate(
+              frame,
+              [fps * 4, fps * 8],
+              [0, 1],
+              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
+            );
+
+            // Data flow: partikel kecil yang bergerak sepanjang sinapsis
+            const dataFlowProgress = interpolate(
+              frame,
+              [fps * 7, fps * 14],
+              [0, 1],
+              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+            );
 
             const exitOpacity = interpolate(
               frame,
-              [durationInFrames - 30, durationInFrames - 5],
+              [durationInFrames - fps * 2, durationInFrames - fps * 0.3],
               [1, 0],
               { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
             );
 
-            const isVertical = height > width;
-            const baseFontSize = isVertical ? width * 0.08 : height * 0.08;
+            // Camera drift halus
+            const camX = Math.sin(frame / 100) * width * 0.008;
+            const camY = Math.cos(frame / 120) * height * 0.006;
+            const camZoom = 1 + Math.sin(frame / 160) * 0.006;
+
+            // Background gradient breathing
+            const gradientAngle = interpolate(frame, [0, durationInFrames], [135, 225]);
 
             return (
-              <AbsoluteFill
-                style={{
-                  background: `linear-gradient(${bgAngle}deg, ${colors.bg} 0%, ${colors.bg}dd 50%, ${colors.accent}15 100%)`,
-                  justifyContent: 'center',
-                  alignItems: isVertical ? 'flex-start' : 'center',
-                  paddingLeft: isVertical ? width * 0.12 : 0,
-                  paddingRight: isVertical ? width * 0.12 : 0,
-                  opacity: exitOpacity,
-                }}
-              >
-                <div
-                  style={{
-                    maxWidth: isVertical ? '100%' : width * 0.7,
-                    textAlign: isVertical ? 'left' : 'center',
-                  }}
-                >
-                  <h1
-                    style={{
-                      fontSize: baseFontSize,
-                      color: colors.text,
-                      fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
-                      fontWeight: 700,
-                      letterSpacing: '-0.03em',
-                      margin: 0,
-                      opacity: titleProgress,
-                      transform: `translateY(${titleY}px)`,
-                    }}
-                  >
-                    {title}
-                  </h1>
-                  <div
-                    style={{
-                      height: isVertical ? 4 : 3,
-                      width: lineWidth,
-                      background: colors.accent,
-                      marginTop: isVertical ? 20 : 16,
-                      marginBottom: isVertical ? 24 : 20,
-                      borderRadius: 2,
-                      marginLeft: isVertical ? 0 : 'auto',
-                      marginRight: isVertical ? 0 : 'auto',
-                    }}
-                  />
-                  <p
-                    style={{
-                      fontSize: baseFontSize * 0.35,
-                      color: `${colors.text}aa`,
-                      fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
-                      fontWeight: 400,
-                      letterSpacing: '0.02em',
-                      margin: 0,
-                      opacity: subtitleProgress,
-                      transform: `translateY(${subtitleY}px)`,
-                    }}
-                  >
-                    {subtitle}
-                  </p>
-                </div>
+              <AbsoluteFill style={{ background: colors.bg, overflow: 'hidden', opacity: exitOpacity }}>
+                {/* Layer 1: gradient background */}
+                <AbsoluteFill style={{
+                  background: `linear-gradient(${gradientAngle}deg, ${colors.bg} 0%, ${colors.bg} 50%, ${colors.primary}12 100%)`,
+                }} />
+
+                {/* Layer 2: radial glow di tengah */}
+                <AbsoluteFill style={{
+                  background: `radial-gradient(circle at 50% 50%, ${colors.primary}10 0%, transparent 65%)`,
+                }} />
+
+                {/* Layer 3: SVG Network */}
+                <AbsoluteFill style={{
+                  transform: `translate(${camX}px, ${camY}px) scale(${camZoom})`,
+                }}>
+                  <svg width={width} height={height} style={{ position: 'absolute' }}>
+                    <defs>
+                      <filter id="glow">
+                        <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+                        <feMerge>
+                          <feMergeNode in="coloredBlur" />
+                          <feMergeNode in="SourceGraphic" />
+                        </feMerge>
+                      </filter>
+                      <linearGradient id="synapseGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stopColor={colors.primary} stopOpacity="0.2" />
+                        <stop offset="50%" stopColor={colors.secondary} stopOpacity="0.8" />
+                        <stop offset="100%" stopColor={colors.primary} stopOpacity="0.2" />
+                      </linearGradient>
+                    </defs>
+
+                    {/* Synapses */}
+                    {network.synapses.map((s, i) => {
+                      const from = network.neurons[s.from];
+                      const to = network.neurons[s.to];
+                      const localProgress = Math.max(0, Math.min(1, (synapseProgress - s.delay) / (1 - s.delay)));
+                      if (localProgress <= 0) return null;
+                      const drawProgress = 1 - Math.pow(1 - localProgress, 2);
+
+                      // Data flow: partikel bergerak sepanjang garis
+                      const flowT = (dataFlowProgress + s.delay * 0.5) % 1;
+                      const flowX = from.x + (to.x - from.x) * flowT;
+                      const flowY = from.y + (to.y - from.y) * flowT;
+                      const flowOpacity = dataFlowProgress > 0 && dataFlowProgress < 1 ? 0.9 : 0;
+
+                      return (
+                        <g key={`s-${i}`}>
+                          <line
+                            x1={from.x} y1={from.y}
+                            x2={from.x + (to.x - from.x) * drawProgress}
+                            y2={from.y + (to.y - from.y) * drawProgress}
+                            stroke="url(#synapseGrad)"
+                            strokeWidth={1.2 * s.strength}
+                            opacity={0.6 * localProgress}
+                          />
+                          {flowOpacity > 0 && (
+                            <circle cx={flowX} cy={flowY} r={2.5 * s.strength} fill={colors.secondary} opacity={flowOpacity} filter="url(#glow)" />
+                          )}
+                        </g>
+                      );
+                    })}
+
+                    {/* Neurons */}
+                    {network.neurons.map((n, i) => {
+                      const localProgress = Math.max(0, Math.min(1, (globalProgress - n.growthDelay) / (1 - n.growthDelay)));
+                      if (localProgress <= 0) return null;
+                      const scale = 1 - Math.pow(1 - localProgress, 3);
+                      const pulse = 0.7 + Math.sin(frame / 18 + n.pulseOffset) * 0.3;
+                      const size = n.size * scale * pulse;
+
+                      return (
+                        <g key={`n-${i}`}>
+                          {/* Outer glow */}
+                          <circle cx={n.x} cy={n.y} r={size * 4} fill={colors.primary} opacity={0.08 * localProgress} />
+                          {/* Core */}
+                          <circle cx={n.x} cy={n.y} r={size} fill={i % 3 === 0 ? colors.secondary : colors.primary} opacity={0.9 * localProgress} filter="url(#glow)" />
+                          {/* Inner bright dot */}
+                          <circle cx={n.x} cy={n.y} r={size * 0.4} fill="#ffffff" opacity={0.8 * localProgress} />
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </AbsoluteFill>
+
+                {/* Layer 4: vignette */}
+                <AbsoluteFill style={{
+                  background: `radial-gradient(ellipse at center, transparent 50%, ${colors.bg} 110%)`,
+                  mixBlendMode: 'multiply',
+                  pointerEvents: 'none',
+                }} />
               </AbsoluteFill>
             );
           };
@@ -215,33 +310,9 @@ jobs:
           export const RemotionRoot: React.FC = () => {
             return (
               <>
-                <Composition
-                  id="HorizontalStock"
-                  component={ModernMinimal}
-                  durationInFrames={450}
-                  fps={30}
-                  width={1920}
-                  height={1080}
-                  defaultProps={{ width: 1920, height: 1080 }}
-                />
-                <Composition
-                  id="VerticalStock"
-                  component={ModernMinimal}
-                  durationInFrames={450}
-                  fps={30}
-                  width={1080}
-                  height={1920}
-                  defaultProps={{ width: 1080, height: 1920 }}
-                />
-                <Composition
-                  id="SquareStock"
-                  component={ModernMinimal}
-                  durationInFrames={450}
-                  fps={30}
-                  width={1080}
-                  height={1080}
-                  defaultProps={{ width: 1080, height: 1080 }}
-                />
+                <Composition id="HorizontalStock" component={NeuralScene} durationInFrames={540} fps={30} width={1920} height={1080} defaultProps={{ width: 1920, height: 1080 }} />
+                <Composition id="VerticalStock" component={NeuralScene} durationInFrames={540} fps={30} width={1080} height={1920} defaultProps={{ width: 1080, height: 1920 }} />
+                <Composition id="SquareStock" component={NeuralScene} durationInFrames={540} fps={30} width={1080} height={1080} defaultProps={{ width: 1080, height: 1080 }} />
               </>
             );
           };
@@ -251,26 +322,28 @@ jobs:
         working-directory: remotion-project
         run: npm install
 
-      - name: Install CJK font
+      - name: Install fonts
         run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
 
       - name: Render ${{ matrix.comp }}
         working-directory: remotion-project
         env:
-          REMOTION_ACCENT_COLOR: ${{ inputs.accentColor }}
+          REMOTION_PRIMARY_COLOR: ${{ inputs.primaryColor }}
+          REMOTION_SECONDARY_COLOR: ${{ inputs.secondaryColor }}
           REMOTION_BG_COLOR: ${{ inputs.bgColor }}
-          REMOTION_TEXT_COLOR: ${{ inputs.textColor }}
-          REMOTION_TITLE: ${{ inputs.title }}
-          REMOTION_SUBTITLE: ${{ inputs.subtitle }}
         run: |
           npx remotion render ${{ matrix.comp }} out/${{ matrix.output }} \
             --codec=h264 \
             --concurrency=2 \
-            --jpeg-quality=95
+            --jpeg-quality=95 \
+            --crf=16
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ matrix.comp }}
-          path: remotion-project/out/${{ matrix.output }}
-          retention-days: 7
+          tag_name: ${{ inputs.version }}
+          name: "Neural Genesis ${{ inputs.version }}"
+          files: remotion-project/out/${{ matrix.output }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
