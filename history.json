@@ -1,0 +1,40 @@
+{
+  "rendered": [
+    {
+      "id": "neural-bloom",
+      "type": "neural-network",
+      "concept": "GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
+      "renderedAt": "2026-09-30T22:12:55.484Z",
+      "run": "3"
+    },
+    {
+      "id": "tidal-fragments",
+      "type": "particle-morph",
+      "concept": "ORDER vs CHAOS — particles snap into a perfect ring then dissolve",
+      "renderedAt": "2026-09-30T22:12:55.484Z",
+      "run": "3"
+    },
+    {
+      "id": "data-river",
+      "type": "data-flow",
+      "concept": "SPEED vs STILLNESS — packets rush while the background holds perfectly still",
+      "renderedAt": "2026-09-30T22:12:55.484Z",
+      "run": "3"
+    },
+    {
+      "id": "root-memory",
+      "type": "organic-growth",
+      "concept": "FRAGILITY vs STRENGTH — thin branches thicken into a resilient root system",
+      "renderedAt": "2026-09-30T22:12:55.484Z",
+      "run": "3"
+    },
+    {
+      "id": "prism-fold",
+      "type": "geometric-transform",
+      "concept": "ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
+      "renderedAt": "2026-09-30T22:12:55.484Z",
+      "run": "3"
+    }
+  ],
+  "version": 1
+}
