@@ -1,8 +1,8 @@
-name: Auto Stock 4K Generator
+name: Auto Stock 4K Generator (Parallel 5)
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # 3x sehari (4K lebih berat)
+    - cron: '0 */8 * * *'   # 3x sehari
   workflow_dispatch:
 
 permissions:
@@ -13,9 +13,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  generate-and-render:
+  # ══════════════════════════════════════════════════════════
+  # JOB 1 — PREPARE: Generate ide via Gemini (retry 3, 5 model)
+  # ══════════════════════════════════════════════════════════
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 30
+    outputs:
+      comps: ${{ steps.comps.outputs.list }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +30,6 @@ jobs:
         with:
           node-version: '22'
 
-      # ============ RESTORE HISTORY (anti-duplikat) ============
       - name: Restore idea history
         uses: actions/cache/restore@v4
         with:
@@ -41,7 +45,6 @@ jobs:
           fi
           echo "History entries: $(node -e "console.log(require('./history.json').rendered.length)")"
 
-      # ============ SCAFFOLD ============
       - name: Scaffold Remotion project
         run: |
           mkdir -p remotion-project/src
@@ -61,7 +64,6 @@ jobs:
           }
           EOF
 
-      # ============ GEMINI: 3-LAYER CREATIVE PROMPT ============
       - name: Generate ideas with Gemini
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -142,7 +144,12 @@ jobs:
           "animationStyle":"","durationSeconds":15,
           "elements":[{"name":"","behavior":"","timing":{"start":0,"end":5}}]}}]}`;
 
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          const ai = new GoogleGenAI({
+            apiKey: process.env.GEMINI_API_KEY,
+            httpOptions: {
+              retryOptions: { attempts: 3, initialDelay: 1000 }
+            }
+          });
 
           const FALLBACK = { videos: [
             { id:"neural-bloom", title:"Neural Bloom", concept:"GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
@@ -172,43 +179,50 @@ jobs:
                 elements:[{name:"nesting",behavior:"polygons scale outward",timing:{start:0,end:4}},{name:"rotation",behavior:"counter-rotating layers",timing:{start:3,end:12}},{name:"intersect",behavior:"vertices connect across layers",timing:{start:10,end:15}}] } },
           ]};
 
-          let data;
-          try {
-            const res = await ai.models.generateContent({
-              model: "gemini-3.7-flash",
-              contents: PROMPT,
-              config: {
-                responseMimeType: "application/json",
-                temperature: 1.15,
-                topP: 0.95,
-              },
-            });
-            data = JSON.parse(res.text);
-            if (!data.videos || data.videos.length !== 5) throw new Error("bad count");
+          const MODELS_TO_TRY = [
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite"
+          ];
 
-            // Validation: each type exactly once
-            const types = data.videos.map(v => v.composition.type);
-            const required = ["neural-network","particle-morph","data-flow","organic-growth","geometric-transform"];
-            const ok = required.every(t => types.filter(x => x === t).length === 1);
-            if (!ok) throw new Error("type distribution invalid");
+          async function generateWithFallback() {
+            for (const modelName of MODELS_TO_TRY) {
+              try {
+                console.log(`[INFO] Mencoba model: ${modelName}...`);
+                const res = await ai.models.generateContent({
+                  model: modelName,
+                  contents: PROMPT,
+                  config: { responseMimeType: "application/json", temperature: 1.15, topP: 0.95 },
+                });
 
-            // Anti-duplicate check
-            const newIds = data.videos.map(v => v.id);
-            const collision = newIds.filter(id => previousIds.includes(id));
-            if (collision.length) throw new Error("id collision: " + collision.join(","));
+                const data = JSON.parse(res.text);
+                if (!data.videos || data.videos.length !== 5) throw new Error("bad count");
 
-            console.log("Gemini OK:", data.videos.length, "ideas");
-          } catch (e) {
-            console.error("Gemini failed (" + e.message + "), using fallback");
-            data = FALLBACK;
-            // Filter fallback against history
-            data.videos = data.videos.filter(v => !previousIds.includes(v.id));
-            if (data.videos.length < 5) {
-              console.warn("Fallback reduced to " + data.videos.length + " (history collision)");
+                const types = data.videos.map(v => v.composition.type);
+                const required = ["neural-network","particle-morph","data-flow","organic-growth","geometric-transform"];
+                const ok = required.every(t => types.filter(x => x === t).length === 1);
+                if (!ok) throw new Error("type distribution invalid");
+
+                const newIds = data.videos.map(v => v.id);
+                const collision = newIds.filter(id => previousIds.includes(id));
+                if (collision.length) throw new Error("id collision: " + collision.join(","));
+
+                console.log(`[SUCCESS] Model ${modelName} berhasil.`);
+                fs.writeFileSync("video-ideas.json", JSON.stringify(data, null, 2));
+                return;
+              } catch (e) {
+                console.warn(`[FAILED] ${modelName}: ${e.message}`);
+              }
             }
+
+            console.error("Semua model gagal. Pakai fallback statis.");
+            const filtered = FALLBACK.videos.filter(v => !previousIds.includes(v.id));
+            fs.writeFileSync("video-ideas.json", JSON.stringify({ videos: filtered }, null, 2));
           }
 
-          fs.writeFileSync("video-ideas.json", JSON.stringify(data, null, 2));
+          await generateWithFallback();
           GENEOF
 
           node gen.mjs
@@ -234,7 +248,6 @@ jobs:
           EOF
           node gen-ideas.mjs
 
-      # ============ REMOTION CODE (5 ENGINE) ============
       - name: Write Remotion code
         run: |
           cd remotion-project
@@ -257,7 +270,6 @@ jobs:
           type Idea = { id: string; type: string; colors: { primary: string; secondary: string; bg: string }; duration: number };
           type C = { primary: string; secondary: string };
 
-          // Single shared glow filter to reduce GPU texture pressure at 4K
           const Defs: React.FC = () => (
             <defs>
               <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
@@ -267,20 +279,14 @@ jobs:
             </defs>
           );
 
-          // ---------- ENGINE 1: NEURAL NETWORK ----------
           const NeuralNetwork: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
             const nodes = useMemo(() => Array.from({ length: 70 }, (_, i) => {
               const a = seeded(i, 1) * Math.PI * 2;
               const r = Math.sqrt(seeded(i, 2)) * Math.min(w, h) * 0.38;
-              return {
-                x: w / 2 + Math.cos(a) * r,
-                y: h / 2 + Math.sin(a) * r * 0.85,
-                size: 2 + seeded(i, 3) * 4,
-                delay: seeded(i, 4) * 0.5,
-                pulse: seeded(i, 5) * 6.28,
-              };
+              return { x: w / 2 + Math.cos(a) * r, y: h / 2 + Math.sin(a) * r * 0.85,
+                size: 2 + seeded(i, 3) * 4, delay: seeded(i, 4) * 0.5, pulse: seeded(i, 5) * 6.28 };
             }), [w, h]);
             const links = useMemo(() => {
               const out: any[] = [];
@@ -318,7 +324,6 @@ jobs:
             );
           };
 
-          // ---------- ENGINE 2: PARTICLE MORPH ----------
           const ParticleMorph: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
             const frame = useCurrentFrame();
             const { fps, durationInFrames } = useVideoConfig();
@@ -326,14 +331,8 @@ jobs:
               const sx = seeded(i, 1) * w, sy = seeded(i, 2) * h;
               const a = seeded(i, 3) * Math.PI * 2;
               const r = Math.min(w, h) * 0.28;
-              return {
-                sx, sy,
-                tx: w / 2 + Math.cos(a) * r,
-                ty: h / 2 + Math.sin(a) * r,
-                size: 1.5 + seeded(i, 4) * 2.5,
-                delay: seeded(i, 5) * 0.5,
-                hue: seeded(i, 6),
-              };
+              return { sx, sy, tx: w / 2 + Math.cos(a) * r, ty: h / 2 + Math.sin(a) * r,
+                size: 1.5 + seeded(i, 4) * 2.5, delay: seeded(i, 5) * 0.5, hue: seeded(i, 6) };
             }), [w, h]);
             const inP = interpolate(frame, [0, fps * 3.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) });
             const outP = interpolate(frame, [durationInFrames - fps * 2, durationInFrames], [0, 1], { extrapolateLeft: 'clamp' });
@@ -347,62 +346,49 @@ jobs:
                   const y = p.sy + (p.ty - p.sy) * e + Math.sin(orbit) * orbit;
                   const col = p.hue > 0.5 ? c.primary : c.secondary;
                   return <div key={i} style={{
-                    position: 'absolute', left: x, top: y,
-                    width: p.size, height: p.size, borderRadius: '50%',
-                    background: col,
-                    opacity: Math.min(1, local * 2) * (1 - outP * 0.5),
-                  }} />;
+                    position: 'absolute', left: x, top: y, width: p.size, height: p.size,
+                    borderRadius: '50%', background: col,
+                    opacity: Math.min(1, local * 2) * (1 - outP * 0.5) }} />;
                 })}
               </>
             );
           };
 
-          // ---------- ENGINE 3: DATA FLOW ----------
           const DataFlow: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
             const frame = useCurrentFrame();
             const streams = useMemo(() => Array.from({ length: 18 }, (_, i) => ({
-              y: (i + 0.5) * (h / 18),
-              speed: 0.3 + seeded(i, 1) * 0.9,
-              offset: seeded(i, 2) * w,
-              thickness: 1 + seeded(i, 3) * 2,
-              hue: seeded(i, 4),
+              y: (i + 0.5) * (h / 18), speed: 0.3 + seeded(i, 1) * 0.9,
+              offset: seeded(i, 2) * w, thickness: 1 + seeded(i, 3) * 2, hue: seeded(i, 4),
             })), [h]);
             return (
               <>
                 {streams.map((s, i) => (
-                  <div key={`l${i}`} style={{
-                    position: 'absolute', left: 0, top: s.y, width: w, height: s.thickness,
-                    background: `linear-gradient(90deg, transparent, ${s.hue > 0.5 ? c.primary : c.secondary}22, transparent)`,
-                  }} />
+                  <div key={`l${i}`} style={{ position: 'absolute', left: 0, top: s.y, width: w, height: s.thickness,
+                    background: `linear-gradient(90deg, transparent, ${s.hue > 0.5 ? c.primary : c.secondary}22, transparent)` }} />
                 ))}
                 {streams.map((s, i) => {
                   const x = (s.offset + frame * s.speed * 6) % (w + 200) - 100;
                   const col = s.hue > 0.5 ? c.primary : c.secondary;
                   return (
                     <div key={`d${i}`}>
-                      {[0, 1, 2, 3, 4].map(k => {
+                      {[0,1,2,3,4].map(k => {
                         const size = 6 - k * 0.9;
-                        return <div key={k} style={{
-                          position: 'absolute', left: x - k * 12, top: s.y - size / 2,
-                          width: size, height: size, borderRadius: '50%',
-                          background: col, opacity: (1 - k / 5) * 0.9,
-                        }} />;
+                        return <div key={k} style={{ position: 'absolute', left: x - k * 12, top: s.y - size / 2,
+                          width: size, height: size, borderRadius: '50%', background: col,
+                          opacity: (1 - k / 5) * 0.9 }} />;
                       })}
                     </div>
                   );
                 })}
-                {[0, 1, 2].map(i => (
-                  <div key={`v${i}`} style={{
-                    position: 'absolute', left: w * (0.3 + i * 0.2), top: 0,
+                {[0,1,2].map(i => (
+                  <div key={`v${i}`} style={{ position: 'absolute', left: w * (0.3 + i * 0.2), top: 0,
                     width: 1.5, height: h,
-                    background: `linear-gradient(180deg, transparent, ${c.secondary}33, transparent)`,
-                  }} />
+                    background: `linear-gradient(180deg, transparent, ${c.secondary}33, transparent)` }} />
                 ))}
               </>
             );
           };
 
-          // ---------- ENGINE 4: ORGANIC GROWTH ----------
           const OrganicGrowth: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
@@ -426,12 +412,8 @@ jobs:
                 {branches.map((b, i) => {
                   const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
                   if (p <= 0) return null;
-                  return <line key={i}
-                    x1={b.x1} y1={b.y1}
-                    x2={b.x1 + (b.x2 - b.x1) * p} y2={b.y1 + (b.y2 - b.y1) * p}
-                    stroke={b.d % 2 === 0 ? c.primary : c.secondary}
-                    strokeWidth={3 - b.d * 0.4} opacity={0.7 - b.d * 0.1}
-                    strokeLinecap="round" />;
+                  return <line key={i} x1={b.x1} y1={b.y1} x2={b.x1 + (b.x2 - b.x1) * p} y2={b.y1 + (b.y2 - b.y1) * p}
+                    stroke={b.d % 2 === 0 ? c.primary : c.secondary} strokeWidth={3 - b.d * 0.4} opacity={0.7 - b.d * 0.1} strokeLinecap="round" />;
                 })}
                 {branches.filter(b => b.d === 5).map((b, i) => {
                   const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
@@ -442,16 +424,12 @@ jobs:
             );
           };
 
-          // ---------- ENGINE 5: GEOMETRIC TRANSFORM ----------
           const GeometricTransform: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
             const frame = useCurrentFrame();
             const { durationInFrames } = useVideoConfig();
             const shapes = useMemo(() => Array.from({ length: 5 }, (_, i) => ({
-              sides: 3 + i,
-              radius: Math.min(w, h) * (0.12 + i * 0.06),
-              rotation: seeded(i, 1) * Math.PI,
-              speed: (seeded(i, 2) - 0.5) * 0.02,
-              hue: seeded(i, 3),
+              sides: 3 + i, radius: Math.min(w, h) * (0.12 + i * 0.06),
+              rotation: seeded(i, 1) * Math.PI, speed: (seeded(i, 2) - 0.5) * 0.02, hue: seeded(i, 3),
             })), [w, h]);
             const prog = interpolate(frame, [0, durationInFrames], [0, 1]);
             const poly = (cx: number, cy: number, r: number, sides: number, rot: number) => {
@@ -490,7 +468,6 @@ jobs:
             );
           };
 
-          // ---------- DISPATCHER ----------
           export const Scene: React.FC<{ idea: Idea }> = ({ idea }) => {
             const frame = useCurrentFrame();
             const { fps, durationInFrames, width, height } = useVideoConfig();
@@ -529,9 +506,6 @@ jobs:
           import { Scene } from './Scene';
           import { IDEAS } from './ideas';
 
-          // 4K resolutions accepted by Adobe Stock
-          // Horizontal: 3840x2160 (UHD)
-          // Vertical:   2160x3840 (UHD 9:16)
           export const RemotionRoot: React.FC = () => (
             <>
               {IDEAS.map((idea: any) => (
@@ -560,41 +534,108 @@ jobs:
           );
           EOF
 
-      - name: Install CJK fonts
-        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
-
-      # ============ RENDER 4K (concurrency=1 for memory safety) ============
-      - name: Render all ideas in 4K
+      - name: Build composition list
+        id: comps
         run: |
           cd remotion-project
           node -e "
             const d = require('./video-ideas.json');
-            const lines = [];
+            const list = [];
             d.videos.forEach(v => {
-              lines.push(v.id + '-16x9-4k');
-              lines.push(v.id + '-9x16-4k');
+              list.push(v.id + '-16x9-4k');
+              list.push(v.id + '-9x16-4k');
             });
-            require('fs').writeFileSync('comps.txt', lines.join('\n'));
+            require('fs').writeFileSync('comps.json', JSON.stringify(list));
           "
-          while IFS= read -r comp; do
-            echo "Rendering 4K: $comp"
-            npx remotion render "$comp" "out/$comp.mp4" \
-              --codec=h264 \
-              --concurrency=1 \
-              --jpeg-quality=92 \
-              --crf=14 \
-              --pixel-format=yuv420p
-          done < comps.txt
+          echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
 
-      # ============ UPDATE HISTORY (anti-duplikat) ============
-      - name: Update history
-        if: always()
+      - name: Upload project artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: remotion-project
+          path: |
+            remotion-project/
+            history.json
+          retention-days: 1
+
+  # ══════════════════════════════════════════════════════════
+  # JOB 2 — RENDER PARALEL (max-parallel: 5)
+  # ══════════════════════════════════════════════════════════
+  render:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        comp: ${{ fromJSON(needs.prepare.outputs.comps) }}
+    steps:
+      - name: Download project
+        uses: actions/download-artifact@v4
+        with:
+          name: remotion-project
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CJK fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
+      - name: Render ${{ matrix.comp }}
         run: |
           cd remotion-project
+          npx remotion render "${{ matrix.comp }}" "out/${{ matrix.comp }}.mp4" \
+            --codec=h264 \
+            --concurrency=2 \
+            --jpeg-quality=92 \
+            --crf=14 \
+            --pixel-format=yuv420p
+
+      - name: Upload rendered video
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ matrix.comp }}
+          path: remotion-project/out/${{ matrix.comp }}.mp4
+          retention-days: 1
+
+  # ══════════════════════════════════════════════════════════
+  # JOB 3 — RELEASE (setelah semua render selesai)
+  # ══════════════════════════════════════════════════════════
+  release:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all rendered videos
+        uses: actions/download-artifact@v4
+        with:
+          pattern: video-*
+          merge-multiple: true
+          path: final-output
+
+      - name: Download project (untuk history & ideas)
+        uses: actions/download-artifact@v4
+        with:
+          name: remotion-project
+          path: project-restore
+
+      - name: Restore history
+        run: |
+          cp project-restore/history.json ./history.json
+          echo "Restored history with $(node -e "console.log(require('./history.json').rendered.length)") entries"
+
+      - name: Update history
+        run: |
           node -e "
             const fs = require('fs');
-            const hist = JSON.parse(fs.readFileSync('../history.json','utf8'));
-            const ideas = JSON.parse(fs.readFileSync('video-ideas.json','utf8'));
+            const hist = JSON.parse(fs.readFileSync('./history.json','utf8'));
+            const ideas = JSON.parse(fs.readFileSync('./project-restore/remotion-project/video-ideas.json','utf8'));
             const rendered = ideas.videos.map(v => ({
               id: v.id,
               type: v.composition.type,
@@ -603,9 +644,8 @@ jobs:
               run: process.env.GITHUB_RUN_NUMBER,
             }));
             hist.rendered = hist.rendered.concat(rendered);
-            // Keep last 500 entries
             if (hist.rendered.length > 500) hist.rendered = hist.rendered.slice(-500);
-            fs.writeFileSync('../history.json', JSON.stringify(hist, null, 2));
+            fs.writeFileSync('./history.json', JSON.stringify(hist, null, 2));
             console.log('History now has', hist.rendered.length, 'entries');
           "
 
@@ -629,13 +669,16 @@ jobs:
             git push || echo "Push failed (non-fatal)"
           fi
 
-      # ============ UPLOAD ============
+      - name: Show output files
+        run: |
+          ls -lh final-output/
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: batch-${{ github.run_number }}
           name: "Stock 4K Batch ${{ github.run_number }}"
-          files: remotion-project/out/*.mp4
+          files: final-output/*.mp4
           draft: false
           prerelease: false
           generate_release_notes: true
