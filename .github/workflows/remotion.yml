@@ -559,7 +559,7 @@ jobs:
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 2 — RENDER PARALEL (max-parallel: 5)
+  # JOB 2 — RENDER PARALEL (max-parallel: 5) — FIXED
   # ══════════════════════════════════════════════════════════
   render:
     needs: prepare
@@ -579,6 +579,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      # ✅ FIX: Install dependencies di setiap runner paralel
+      - name: Install dependencies
+        run: |
+          cd remotion-project
+          npm install
 
       - name: Install CJK fonts
         run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
