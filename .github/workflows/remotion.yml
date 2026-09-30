@@ -1,88 +1,243 @@
-name: Render Neural Genesis Stock Video
+name: Auto Stock 4K Generator
 
 on:
+  schedule:
+    - cron: '0 */8 * * *'   # 3x sehari (4K lebih berat)
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version tag'
-        required: true
-        default: 'v1.0.0'
-      primaryColor:
-        description: 'Primary color (hex)'
-        required: false
-        default: '#6366f1'
-      secondaryColor:
-        description: 'Secondary color (hex)'
-        required: false
-        default: '#06b6d4'
-      bgColor:
-        description: 'Background color (hex)'
-        required: false
-        default: '#020617'
 
 permissions:
   contents: write
 
+concurrency:
+  group: stock-render
+  cancel-in-progress: false
+
 jobs:
-  build:
+  generate-and-render:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - comp: 'HorizontalStock'
-            output: 'neural-genesis-1920x1080.mp4'
-          - comp: 'VerticalStock'
-            output: 'neural-genesis-1080x1920.mp4'
-          - comp: 'SquareStock'
-            output: 'neural-genesis-1080x1080.mp4'
+    timeout-minutes: 340
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
         with:
-          node-version: '20'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ============ RESTORE HISTORY (anti-duplikat) ============
+      - name: Restore idea history
+        uses: actions/cache/restore@v4
+        with:
+          path: history.json
+          key: idea-history-${{ github.run_id }}
+          restore-keys: |
+            idea-history-
+
+      - name: Init history if missing
+        run: |
+          if [ ! -f history.json ]; then
+            echo '{"rendered":[],"version":1}' > history.json
+          fi
+          echo "History entries: $(node -e "console.log(require('./history.json').rendered.length)")"
+
+      # ============ SCAFFOLD ============
       - name: Scaffold Remotion project
         run: |
           mkdir -p remotion-project/src
           cd remotion-project
-
-          cat > package.json <<'EOF'
-          {
-            "name": "neural-genesis",
-            "version": "1.0.0",
-            "private": true,
-            "scripts": { "start": "remotion studio src/index.ts" },
-            "dependencies": {
-              "@remotion/cli": "4.0.290",
-              "remotion": "4.0.290",
-              "react": "18.3.1",
-              "react-dom": "18.3.1"
-            },
-            "devDependencies": {
-              "@types/react": "18.3.12",
-              "typescript": "5.6.3"
-            }
-          }
-          EOF
+          npm init -y
+          npm install remotion@4.0.290 @remotion/cli@4.0.290 \
+            react@18.3.1 react-dom@18.3.1 @google/genai
+          npm install -D typescript@5.6.3 @types/react@18.3.12
 
           cat > tsconfig.json <<'EOF'
           {
             "compilerOptions": {
-              "target": "ES2020",
-              "module": "ESNext",
-              "jsx": "react-jsx",
-              "strict": true,
-              "esModuleInterop": true,
-              "skipLibCheck": true,
-              "moduleResolution": "bundler",
-              "lib": ["DOM", "ES2020"]
+              "target": "ES2020", "module": "ESNext", "jsx": "react-jsx",
+              "strict": true, "esModuleInterop": true, "skipLibCheck": true,
+              "moduleResolution": "bundler", "lib": ["DOM", "ES2020"]
             }
           }
           EOF
+
+      # ============ GEMINI: 3-LAYER CREATIVE PROMPT ============
+      - name: Generate ideas with Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd remotion-project
+          cp ../history.json .
+
+          cat > gen.mjs <<'GENEOF'
+          import { GoogleGenAI } from "@google/genai";
+          import fs from "fs";
+
+          const history = JSON.parse(fs.readFileSync("history.json", "utf8"));
+          const previousIds = history.rendered.map(r => r.id);
+          const previousConcepts = history.rendered.map(r => `${r.type}:${r.concept}`);
+
+          const PROMPT = `You are an elite motion-design director for Adobe Stock,
+          specialized in Abstract & Conceptual Motion — a category with HIGH demand
+          and LOW competition.
+
+          ═══════════════════════════════════════════════
+          PHASE 1 — MARKET TENSION DECONSTRUCTION
+          ═══════════════════════════════════════════════
+          The stock-video market rewards visuals that hold TWO opposing tensions
+          simultaneously. Before generating ideas, reason through these tensions:
+            - GROWTH vs DECAY
+            - ORDER vs CHAOS
+            - ORGANIC vs MECHANICAL
+            - ISOLATION vs CONNECTION
+            - SPEED vs STILLNESS
+            - FRAGILITY vs STRENGTH
+          Buyers purchase B-roll to inject emotional depth. The best B-roll
+          carries an unresolved tension that the editor can "solve" with voiceover.
+
+          ═══════════════════════════════════════════════
+          PHASE 2 — SYNTHESIS
+          ═══════════════════════════════════════════════
+          For each of the 5 ideas, pick ONE tension pair from Phase 1 and
+          resolve it through a visual metaphor that has NEVER been rendered in
+          stock video. Avoid: glowing robot heads, binary rain, generic network
+          nodes, floating geometric shapes without meaning.
+
+          ═══════════════════════════════════════════════
+          PHASE 3 — ANTI-DUPLICATE VALIDATION
+          ═══════════════════════════════════════════════
+          ALREADY RENDERED (do NOT repeat these concepts or close variants):
+          ${previousConcepts.length ? previousConcepts.map(c => "  - " + c).join("\n") : "  (none yet — first batch)"}
+
+          ALL PREVIOUS IDs (must not collide):
+          ${previousIds.length ? previousIds.join(", ") : "(none)"}
+
+          ═══════════════════════════════════════════════
+          HARD CONSTRAINTS
+          ═══════════════════════════════════════════════
+          1. EXACTLY 5 ideas. Each uses a DIFFERENT composition.type:
+             "neural-network" | "particle-morph" | "data-flow" | "organic-growth" | "geometric-transform"
+             Each type appears EXACTLY ONCE.
+          2. Colors MUST be modern & muted (avoid pure #FF0000, #00FF00, #0000FF).
+             Palette guidance per type:
+               neural-network    → indigo/cyan on deep navy
+               particle-morph    → amber/pink on near-black
+               data-flow         → emerald/blue on midnight
+               organic-growth    → green/lime on dark forest
+               geometric-transform → violet/rose on deep plum
+          3. Duration: 12–18 seconds (integer). Sweet spot for vertical: 15s.
+          4. First 2 seconds MUST contain a visual hook (motion already underway).
+          5. Every idea must describe at least 3 distinct animated elements
+             with explicit start/end seconds that stay within the duration.
+          6. Keywords: 18–24 terms. Include "abstract", "motion", "background",
+             "conceptual", "4K", and (for 9:16) "vertical". No brand names.
+          7. description: 1–2 sentences, commercial, no first-person.
+
+          Output ONLY valid JSON matching this schema:
+          {"videos":[{"id":"kebab-case-unique","title":"max 60 chars",
+          "description":"","concept":"<tension pair + metaphor, one line>",
+          "keywords":["..."],
+          "composition":{"type":"","primaryColor":"#rrggbb",
+          "secondaryColor":"#rrggbb","bgColor":"#rrggbb",
+          "animationStyle":"","durationSeconds":15,
+          "elements":[{"name":"","behavior":"","timing":{"start":0,"end":5}}]}}]}`;
+
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+          const FALLBACK = { videos: [
+            { id:"neural-bloom", title:"Neural Bloom", concept:"GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
+              description:"Abstract neural network unfurling organically like bioluminescent roots.",
+              keywords:["neural","network","ai","abstract","particle","growth","digital","technology","brain","connection","synapse","data","future","innovation","conceptual","motion","background","4K","organic","science"],
+              composition:{ type:"neural-network", primaryColor:"#6366f1", secondaryColor:"#22d3ee", bgColor:"#020617", animationStyle:"organic", durationSeconds:15,
+                elements:[{name:"neurons",behavior:"grow outward from center",timing:{start:0,end:5}},{name:"synapses",behavior:"connect nearest neighbors",timing:{start:4,end:9}},{name:"data-pulses",behavior:"travel along synapses",timing:{start:8,end:15}}] } },
+            { id:"tidal-fragments", title:"Tidal Fragments", concept:"ORDER vs CHAOS — particles snap into a perfect ring then dissolve",
+              description:"Particles converge into a luminous ring before dissolving into chaos.",
+              keywords:["particle","morph","ring","abstract","motion","technology","transformation","innovation","digital","future","conceptual","glow","dynamic","background","4K","fluid","energy","orbit","cinematic","science"],
+              composition:{ type:"particle-morph", primaryColor:"#f59e0b", secondaryColor:"#ec4899", bgColor:"#0a0a0a", animationStyle:"fluid", durationSeconds:15,
+                elements:[{name:"scatter",behavior:"particles drift randomly",timing:{start:0,end:3}},{name:"converge",behavior:"form ring",timing:{start:3,end:9}},{name:"dissolve",behavior:"ring breaks apart",timing:{start:12,end:15}}] } },
+            { id:"data-river", title:"Data River", concept:"SPEED vs STILLNESS — packets rush while the background holds perfectly still",
+              description:"Streaming data packets with luminous trails across a calm field.",
+              keywords:["data","flow","stream","network","abstract","technology","speed","digital","information","motion","future","connection","cyber","background","conceptual","4K","bandwidth","packet","signal","transmission"],
+              composition:{ type:"data-flow", primaryColor:"#10b981", secondaryColor:"#3b82f6", bgColor:"#030712", animationStyle:"mechanical", durationSeconds:15,
+                elements:[{name:"lanes",behavior:"faint horizontal guides appear",timing:{start:0,end:3}},{name:"packets",behavior:"travel with trails",timing:{start:2,end:13}},{name:"burst",behavior:"surge of packets",timing:{start:11,end:15}}] } },
+            { id:"root-memory", title:"Root Memory", concept:"FRAGILITY vs STRENGTH — thin branches thicken into a resilient root system",
+              description:"Fractal branches growing and thickening like an ancient root system.",
+              keywords:["organic","growth","branch","root","fractal","nature","abstract","motion","life","green","evolution","conceptual","background","4K","botanical","tree","structure","biology","cinematic","macrophotography"],
+              composition:{ type:"organic-growth", primaryColor:"#22c55e", secondaryColor:"#a3e635", bgColor:"#0c1510", animationStyle:"organic", durationSeconds:15,
+                elements:[{name:"trunk",behavior:"single line grows upward",timing:{start:0,end:3}},{name:"branches",behavior:"recursive splitting",timing:{start:2,end:11}},{name:"thickening",behavior:"lines gain weight",timing:{start:10,end:15}}] } },
+            { id:"prism-fold", title:"Prism Fold", concept:"ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
+              description:"Nested polygons rotating and folding inward until their edges intersect.",
+              keywords:["geometric","polygon","abstract","motion","shape","geometry","structure","business","strategy","minimal","modern","background","conceptual","digital","design","4K","sacred","symmetry","kaleidoscope","mathematics"],
+              composition:{ type:"geometric-transform", primaryColor:"#a855f7", secondaryColor:"#f472b6", bgColor:"#0b0614", animationStyle:"mechanical", durationSeconds:15,
+                elements:[{name:"nesting",behavior:"polygons scale outward",timing:{start:0,end:4}},{name:"rotation",behavior:"counter-rotating layers",timing:{start:3,end:12}},{name:"intersect",behavior:"vertices connect across layers",timing:{start:10,end:15}}] } },
+          ]};
+
+          let data;
+          try {
+            const res = await ai.models.generateContent({
+              model: "gemini-3.7-flash",
+              contents: PROMPT,
+              config: {
+                responseMimeType: "application/json",
+                temperature: 1.15,
+                topP: 0.95,
+              },
+            });
+            data = JSON.parse(res.text);
+            if (!data.videos || data.videos.length !== 5) throw new Error("bad count");
+
+            // Validation: each type exactly once
+            const types = data.videos.map(v => v.composition.type);
+            const required = ["neural-network","particle-morph","data-flow","organic-growth","geometric-transform"];
+            const ok = required.every(t => types.filter(x => x === t).length === 1);
+            if (!ok) throw new Error("type distribution invalid");
+
+            // Anti-duplicate check
+            const newIds = data.videos.map(v => v.id);
+            const collision = newIds.filter(id => previousIds.includes(id));
+            if (collision.length) throw new Error("id collision: " + collision.join(","));
+
+            console.log("Gemini OK:", data.videos.length, "ideas");
+          } catch (e) {
+            console.error("Gemini failed (" + e.message + "), using fallback");
+            data = FALLBACK;
+            // Filter fallback against history
+            data.videos = data.videos.filter(v => !previousIds.includes(v.id));
+            if (data.videos.length < 5) {
+              console.warn("Fallback reduced to " + data.videos.length + " (history collision)");
+            }
+          }
+
+          fs.writeFileSync("video-ideas.json", JSON.stringify(data, null, 2));
+          GENEOF
+
+          node gen.mjs
+
+      - name: Generate ideas.ts
+        run: |
+          cd remotion-project
+          cat > gen-ideas.mjs <<'EOF'
+          import fs from "fs";
+          const data = JSON.parse(fs.readFileSync("video-ideas.json","utf8"));
+          const ideas = data.videos.map(v => ({
+            id: v.id,
+            type: v.composition.type,
+            colors: {
+              primary: v.composition.primaryColor,
+              secondary: v.composition.secondaryColor,
+              bg: v.composition.bgColor,
+            },
+            duration: v.composition.durationSeconds || 15,
+          }));
+          fs.writeFileSync("src/ideas.ts",
+            "export const IDEAS = " + JSON.stringify(ideas, null, 2) + ";\n");
+          EOF
+          node gen-ideas.mjs
+
+      # ============ REMOTION CODE (5 ENGINE) ============
+      - name: Write Remotion code
+        run: |
+          cd remotion-project
 
           cat > src/index.ts <<'EOF'
           import { registerRoot } from 'remotion';
@@ -90,260 +245,399 @@ jobs:
           registerRoot(RemotionRoot);
           EOF
 
-          cat > src/Root.tsx <<'EOF'
+          cat > src/Scene.tsx <<'EOF'
           import React, { useMemo } from 'react';
-          import {
-            Composition,
-            AbsoluteFill,
-            useCurrentFrame,
-            useVideoConfig,
-            interpolate,
-            spring,
-            Easing,
-          } from 'remotion';
+          import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
 
-          const colors = {
-            primary: process.env.REMOTION_PRIMARY_COLOR || '#6366f1',
-            secondary: process.env.REMOTION_SECONDARY_COLOR || '#06b6d4',
-            bg: process.env.REMOTION_BG_COLOR || '#020617',
-          };
-
-          // Deterministic seeded random
-          const seeded = (i: number, seed: number) => {
-            const x = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453;
+          const seeded = (i: number, s: number) => {
+            const x = Math.sin(i * 12.9898 + s * 78.233) * 43758.5453;
             return x - Math.floor(x);
           };
 
-          // === NEURAL NODE GENERATOR ===
-          // Mensimulasikan neuron yang tumbuh dan saling terhubung
-          interface Neuron {
-            x: number; y: number; size: number;
-            growthDelay: number; pulseOffset: number;
-          }
-          interface Synapse {
-            from: number; to: number;
-            delay: number; strength: number;
-          }
+          type Idea = { id: string; type: string; colors: { primary: string; secondary: string; bg: string }; duration: number };
+          type C = { primary: string; secondary: string };
 
-          const generateNetwork = (count: number, width: number, height: number) => {
-            const neurons: Neuron[] = [];
-            const synapses: Synapse[] = [];
+          // Single shared glow filter to reduce GPU texture pressure at 4K
+          const Defs: React.FC = () => (
+            <defs>
+              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3" result="b" />
+                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            </defs>
+          );
 
-            for (let i = 0; i < count; i++) {
-              const angle = seeded(i, 1) * Math.PI * 2;
-              const radius = Math.sqrt(seeded(i, 2)) * Math.min(width, height) * 0.38;
-              const jitterX = (seeded(i, 10) - 0.5) * width * 0.15;
-              const jitterY = (seeded(i, 11) - 0.5) * height * 0.15;
-              neurons.push({
-                x: width / 2 + Math.cos(angle) * radius + jitterX,
-                y: height / 2 + Math.sin(angle) * radius * 0.85 + jitterY,
+          // ---------- ENGINE 1: NEURAL NETWORK ----------
+          const NeuralNetwork: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const nodes = useMemo(() => Array.from({ length: 70 }, (_, i) => {
+              const a = seeded(i, 1) * Math.PI * 2;
+              const r = Math.sqrt(seeded(i, 2)) * Math.min(w, h) * 0.38;
+              return {
+                x: w / 2 + Math.cos(a) * r,
+                y: h / 2 + Math.sin(a) * r * 0.85,
                 size: 2 + seeded(i, 3) * 4,
-                growthDelay: seeded(i, 4) * 0.6,
-                pulseOffset: seeded(i, 5) * Math.PI * 2,
-              });
-            }
-
-            // Buat sinapsis: hubungkan neuron yang berdekatan
-            for (let i = 0; i < neurons.length; i++) {
-              for (let j = i + 1; j < neurons.length; j++) {
-                const dx = neurons[i].x - neurons[j].x;
-                const dy = neurons[i].y - neurons[j].y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const maxDist = Math.min(width, height) * 0.22;
-                if (dist < maxDist && seeded(i * 100 + j, 20) > 0.55) {
-                  synapses.push({
-                    from: i, to: j,
-                    delay: seeded(i * 100 + j, 21) * 0.5,
-                    strength: 1 - dist / maxDist,
-                  });
-                }
+                delay: seeded(i, 4) * 0.5,
+                pulse: seeded(i, 5) * 6.28,
+              };
+            }), [w, h]);
+            const links = useMemo(() => {
+              const out: any[] = [];
+              for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+                const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+                const d = Math.sqrt(dx * dx + dy * dy);
+                if (d < Math.min(w, h) * 0.2 && seeded(i * 100 + j, 20) > 0.65)
+                  out.push({ from: i, to: j, delay: seeded(i * 100 + j, 21) * 0.4 });
               }
-            }
-            return { neurons, synapses };
+              return out;
+            }, [nodes, w, h]);
+            const prog = interpolate(frame, [0, fps * 5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+            return (
+              <svg width={w} height={h} style={{ position: 'absolute' }}>
+                <Defs />
+                {links.map((l, i) => {
+                  const f = nodes[l.from], t = nodes[l.to];
+                  const p = Math.max(0, Math.min(1, (prog - 0.35 - l.delay) / 0.4));
+                  if (p <= 0) return null;
+                  return <line key={i} x1={f.x} y1={f.y} x2={f.x + (t.x - f.x) * p} y2={f.y + (t.y - f.y) * p} stroke={c.secondary} strokeWidth={1.2} opacity={0.5 * p} />;
+                })}
+                {nodes.map((n, i) => {
+                  const p = Math.max(0, Math.min(1, (prog - n.delay) / 0.5));
+                  if (p <= 0) return null;
+                  const pulse = 0.7 + Math.sin(frame / 18 + n.pulse) * 0.3;
+                  return (
+                    <g key={i}>
+                      <circle cx={n.x} cy={n.y} r={n.size * 4 * p} fill={c.primary} opacity={0.08 * p} />
+                      <circle cx={n.x} cy={n.y} r={n.size * p * pulse} fill={i % 3 === 0 ? c.secondary : c.primary} opacity={0.9 * p} filter="url(#glow)" />
+                      <circle cx={n.x} cy={n.y} r={n.size * 0.35 * p} fill="#fff" opacity={0.85 * p} />
+                    </g>
+                  );
+                })}
+              </svg>
+            );
           };
 
-          const NeuralScene: React.FC<{ width: number; height: number }> = ({ width, height }) => {
+          // ---------- ENGINE 2: PARTICLE MORPH ----------
+          const ParticleMorph: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
             const frame = useCurrentFrame();
             const { fps, durationInFrames } = useVideoConfig();
-            const isVertical = height > width;
-
-            // === TIMELINE (18 detik) ===
-            // 0-5s   : neuron muncul satu per satu (growth)
-            // 5-8s   : sinapsis terbentuk (connections)
-            // 8-15s  : data flow + pulsing (aktivitas)
-            // 15-18s : fade out sinematik
-
-            const network = useMemo(() => generateNetwork(90, width, height), [width, height]);
-
-            const globalProgress = interpolate(
-              frame,
-              [0, fps * 5],
-              [0, 1],
-              { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+            const particles = useMemo(() => Array.from({ length: 200 }, (_, i) => {
+              const sx = seeded(i, 1) * w, sy = seeded(i, 2) * h;
+              const a = seeded(i, 3) * Math.PI * 2;
+              const r = Math.min(w, h) * 0.28;
+              return {
+                sx, sy,
+                tx: w / 2 + Math.cos(a) * r,
+                ty: h / 2 + Math.sin(a) * r,
+                size: 1.5 + seeded(i, 4) * 2.5,
+                delay: seeded(i, 5) * 0.5,
+                hue: seeded(i, 6),
+              };
+            }), [w, h]);
+            const inP = interpolate(frame, [0, fps * 3.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) });
+            const outP = interpolate(frame, [durationInFrames - fps * 2, durationInFrames], [0, 1], { extrapolateLeft: 'clamp' });
+            return (
+              <>
+                {particles.map((p, i) => {
+                  const local = Math.max(0, Math.min(1, (inP - p.delay) / (1 - p.delay)));
+                  const e = 1 - Math.pow(1 - local, 3);
+                  const orbit = Math.sin(frame / 30 + p.delay * 10) * 8;
+                  const x = p.sx + (p.tx - p.sx) * e + Math.cos(orbit) * orbit;
+                  const y = p.sy + (p.ty - p.sy) * e + Math.sin(orbit) * orbit;
+                  const col = p.hue > 0.5 ? c.primary : c.secondary;
+                  return <div key={i} style={{
+                    position: 'absolute', left: x, top: y,
+                    width: p.size, height: p.size, borderRadius: '50%',
+                    background: col,
+                    opacity: Math.min(1, local * 2) * (1 - outP * 0.5),
+                  }} />;
+                })}
+              </>
             );
+          };
 
-            const synapseProgress = interpolate(
-              frame,
-              [fps * 4, fps * 8],
-              [0, 1],
-              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
+          // ---------- ENGINE 3: DATA FLOW ----------
+          const DataFlow: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const streams = useMemo(() => Array.from({ length: 18 }, (_, i) => ({
+              y: (i + 0.5) * (h / 18),
+              speed: 0.3 + seeded(i, 1) * 0.9,
+              offset: seeded(i, 2) * w,
+              thickness: 1 + seeded(i, 3) * 2,
+              hue: seeded(i, 4),
+            })), [h]);
+            return (
+              <>
+                {streams.map((s, i) => (
+                  <div key={`l${i}`} style={{
+                    position: 'absolute', left: 0, top: s.y, width: w, height: s.thickness,
+                    background: `linear-gradient(90deg, transparent, ${s.hue > 0.5 ? c.primary : c.secondary}22, transparent)`,
+                  }} />
+                ))}
+                {streams.map((s, i) => {
+                  const x = (s.offset + frame * s.speed * 6) % (w + 200) - 100;
+                  const col = s.hue > 0.5 ? c.primary : c.secondary;
+                  return (
+                    <div key={`d${i}`}>
+                      {[0, 1, 2, 3, 4].map(k => {
+                        const size = 6 - k * 0.9;
+                        return <div key={k} style={{
+                          position: 'absolute', left: x - k * 12, top: s.y - size / 2,
+                          width: size, height: size, borderRadius: '50%',
+                          background: col, opacity: (1 - k / 5) * 0.9,
+                        }} />;
+                      })}
+                    </div>
+                  );
+                })}
+                {[0, 1, 2].map(i => (
+                  <div key={`v${i}`} style={{
+                    position: 'absolute', left: w * (0.3 + i * 0.2), top: 0,
+                    width: 1.5, height: h,
+                    background: `linear-gradient(180deg, transparent, ${c.secondary}33, transparent)`,
+                  }} />
+                ))}
+              </>
             );
+          };
 
-            // Data flow: partikel kecil yang bergerak sepanjang sinapsis
-            const dataFlowProgress = interpolate(
-              frame,
-              [fps * 7, fps * 14],
-              [0, 1],
-              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+          // ---------- ENGINE 4: ORGANIC GROWTH ----------
+          const OrganicGrowth: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const branches = useMemo(() => {
+              const out: any[] = [];
+              const grow = (x: number, y: number, a: number, len: number, d: number, id: number, delay: number) => {
+                const ex = x + Math.cos(a) * len, ey = y + Math.sin(a) * len;
+                out.push({ x1: x, y1: y, x2: ex, y2: ey, d, delay });
+                if (d < 5) {
+                  const nl = len * 0.72;
+                  grow(ex, ey, a - 0.4 - seeded(id, 1) * 0.3, nl, d + 1, id * 2, delay + 0.05);
+                  grow(ex, ey, a + 0.4 + seeded(id, 2) * 0.3, nl, d + 1, id * 2 + 1, delay + 0.05);
+                }
+              };
+              grow(w / 2, h * 0.9, -Math.PI / 2, Math.min(w, h) * 0.14, 0, 1, 0);
+              return out;
+            }, [w, h]);
+            const prog = interpolate(frame, [0, fps * 5.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) });
+            return (
+              <svg width={w} height={h} style={{ position: 'absolute' }}>
+                {branches.map((b, i) => {
+                  const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
+                  if (p <= 0) return null;
+                  return <line key={i}
+                    x1={b.x1} y1={b.y1}
+                    x2={b.x1 + (b.x2 - b.x1) * p} y2={b.y1 + (b.y2 - b.y1) * p}
+                    stroke={b.d % 2 === 0 ? c.primary : c.secondary}
+                    strokeWidth={3 - b.d * 0.4} opacity={0.7 - b.d * 0.1}
+                    strokeLinecap="round" />;
+                })}
+                {branches.filter(b => b.d === 5).map((b, i) => {
+                  const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
+                  if (p <= 0) return null;
+                  return <circle key={`t${i}`} cx={b.x2} cy={b.y2} r={3 + Math.sin(frame / 15 + i) * 0.8} fill={c.secondary} opacity={0.7 * p} />;
+                })}
+              </svg>
             );
+          };
 
-            const exitOpacity = interpolate(
-              frame,
-              [durationInFrames - fps * 2, durationInFrames - fps * 0.3],
-              [1, 0],
-              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+          // ---------- ENGINE 5: GEOMETRIC TRANSFORM ----------
+          const GeometricTransform: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { durationInFrames } = useVideoConfig();
+            const shapes = useMemo(() => Array.from({ length: 5 }, (_, i) => ({
+              sides: 3 + i,
+              radius: Math.min(w, h) * (0.12 + i * 0.06),
+              rotation: seeded(i, 1) * Math.PI,
+              speed: (seeded(i, 2) - 0.5) * 0.02,
+              hue: seeded(i, 3),
+            })), [w, h]);
+            const prog = interpolate(frame, [0, durationInFrames], [0, 1]);
+            const poly = (cx: number, cy: number, r: number, sides: number, rot: number) => {
+              const pts: string[] = [];
+              for (let k = 0; k < sides; k++) {
+                const a = rot + (k / sides) * Math.PI * 2;
+                pts.push(`${cx + Math.cos(a) * r},${cy + Math.sin(a) * r}`);
+              }
+              return pts.join(' ');
+            };
+            return (
+              <svg width={w} height={h} style={{ position: 'absolute' }}>
+                <Defs />
+                {shapes.map((s, i) => {
+                  const rot = s.rotation + frame * s.speed;
+                  const scale = 0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4;
+                  const r = s.radius * scale;
+                  const col = s.hue > 0.5 ? c.primary : c.secondary;
+                  return (
+                    <g key={i} filter="url(#glow)">
+                      <polygon points={poly(w / 2, h / 2, r, s.sides, rot)} fill="none" stroke={col} strokeWidth={2} opacity={0.7} />
+                      <polygon points={poly(w / 2, h / 2, r * 0.96, s.sides, rot + 0.1)} fill="none" stroke={col} strokeWidth={1} opacity={0.3} />
+                    </g>
+                  );
+                })}
+                {shapes.map((s, i) => {
+                  const rot = s.rotation + frame * s.speed;
+                  const r = s.radius * (0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4);
+                  const col = s.hue > 0.5 ? c.primary : c.secondary;
+                  return Array.from({ length: s.sides }).map((_, k) => {
+                    const a = rot + (k / s.sides) * Math.PI * 2;
+                    return <circle key={`${i}-${k}`} cx={w / 2 + Math.cos(a) * r} cy={h / 2 + Math.sin(a) * r} r={3} fill={col} opacity={0.9} />;
+                  });
+                })}
+              </svg>
             );
+          };
 
-            // Camera drift halus
+          // ---------- DISPATCHER ----------
+          export const Scene: React.FC<{ idea: Idea }> = ({ idea }) => {
+            const frame = useCurrentFrame();
+            const { fps, durationInFrames, width, height } = useVideoConfig();
+            const { primary, secondary, bg } = idea.colors;
             const camX = Math.sin(frame / 100) * width * 0.008;
             const camY = Math.cos(frame / 120) * height * 0.006;
             const camZoom = 1 + Math.sin(frame / 160) * 0.006;
-
-            // Background gradient breathing
-            const gradientAngle = interpolate(frame, [0, durationInFrames], [135, 225]);
-
+            const gradAngle = interpolate(frame, [0, durationInFrames], [135, 225]);
+            const exitOp = interpolate(frame, [durationInFrames - fps * 1.5, durationInFrames - fps * 0.3], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+            const c = { primary, secondary };
+            const engine = (() => {
+              switch (idea.type) {
+                case 'particle-morph': return <ParticleMorph w={width} h={height} c={c} />;
+                case 'data-flow': return <DataFlow w={width} h={height} c={c} />;
+                case 'organic-growth': return <OrganicGrowth w={width} h={height} c={c} />;
+                case 'geometric-transform': return <GeometricTransform w={width} h={height} c={c} />;
+                default: return <NeuralNetwork w={width} h={height} c={c} />;
+              }
+            })();
             return (
-              <AbsoluteFill style={{ background: colors.bg, overflow: 'hidden', opacity: exitOpacity }}>
-                {/* Layer 1: gradient background */}
-                <AbsoluteFill style={{
-                  background: `linear-gradient(${gradientAngle}deg, ${colors.bg} 0%, ${colors.bg} 50%, ${colors.primary}12 100%)`,
-                }} />
-
-                {/* Layer 2: radial glow di tengah */}
-                <AbsoluteFill style={{
-                  background: `radial-gradient(circle at 50% 50%, ${colors.primary}10 0%, transparent 65%)`,
-                }} />
-
-                {/* Layer 3: SVG Network */}
-                <AbsoluteFill style={{
-                  transform: `translate(${camX}px, ${camY}px) scale(${camZoom})`,
-                }}>
-                  <svg width={width} height={height} style={{ position: 'absolute' }}>
-                    <defs>
-                      <filter id="glow">
-                        <feGaussianBlur stdDeviation="4" result="coloredBlur" />
-                        <feMerge>
-                          <feMergeNode in="coloredBlur" />
-                          <feMergeNode in="SourceGraphic" />
-                        </feMerge>
-                      </filter>
-                      <linearGradient id="synapseGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stopColor={colors.primary} stopOpacity="0.2" />
-                        <stop offset="50%" stopColor={colors.secondary} stopOpacity="0.8" />
-                        <stop offset="100%" stopColor={colors.primary} stopOpacity="0.2" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Synapses */}
-                    {network.synapses.map((s, i) => {
-                      const from = network.neurons[s.from];
-                      const to = network.neurons[s.to];
-                      const localProgress = Math.max(0, Math.min(1, (synapseProgress - s.delay) / (1 - s.delay)));
-                      if (localProgress <= 0) return null;
-                      const drawProgress = 1 - Math.pow(1 - localProgress, 2);
-
-                      // Data flow: partikel bergerak sepanjang garis
-                      const flowT = (dataFlowProgress + s.delay * 0.5) % 1;
-                      const flowX = from.x + (to.x - from.x) * flowT;
-                      const flowY = from.y + (to.y - from.y) * flowT;
-                      const flowOpacity = dataFlowProgress > 0 && dataFlowProgress < 1 ? 0.9 : 0;
-
-                      return (
-                        <g key={`s-${i}`}>
-                          <line
-                            x1={from.x} y1={from.y}
-                            x2={from.x + (to.x - from.x) * drawProgress}
-                            y2={from.y + (to.y - from.y) * drawProgress}
-                            stroke="url(#synapseGrad)"
-                            strokeWidth={1.2 * s.strength}
-                            opacity={0.6 * localProgress}
-                          />
-                          {flowOpacity > 0 && (
-                            <circle cx={flowX} cy={flowY} r={2.5 * s.strength} fill={colors.secondary} opacity={flowOpacity} filter="url(#glow)" />
-                          )}
-                        </g>
-                      );
-                    })}
-
-                    {/* Neurons */}
-                    {network.neurons.map((n, i) => {
-                      const localProgress = Math.max(0, Math.min(1, (globalProgress - n.growthDelay) / (1 - n.growthDelay)));
-                      if (localProgress <= 0) return null;
-                      const scale = 1 - Math.pow(1 - localProgress, 3);
-                      const pulse = 0.7 + Math.sin(frame / 18 + n.pulseOffset) * 0.3;
-                      const size = n.size * scale * pulse;
-
-                      return (
-                        <g key={`n-${i}`}>
-                          {/* Outer glow */}
-                          <circle cx={n.x} cy={n.y} r={size * 4} fill={colors.primary} opacity={0.08 * localProgress} />
-                          {/* Core */}
-                          <circle cx={n.x} cy={n.y} r={size} fill={i % 3 === 0 ? colors.secondary : colors.primary} opacity={0.9 * localProgress} filter="url(#glow)" />
-                          {/* Inner bright dot */}
-                          <circle cx={n.x} cy={n.y} r={size * 0.4} fill="#ffffff" opacity={0.8 * localProgress} />
-                        </g>
-                      );
-                    })}
-                  </svg>
+              <AbsoluteFill style={{ background: bg, overflow: 'hidden', opacity: exitOp }}>
+                <AbsoluteFill style={{ background: `linear-gradient(${gradAngle}deg, ${bg} 0%, ${bg} 50%, ${primary}12 100%)` }} />
+                <AbsoluteFill style={{ background: `radial-gradient(circle at 50% 50%, ${primary}08 0%, transparent 65%)` }} />
+                <AbsoluteFill style={{ transform: `translate(${camX}px, ${camY}px) scale(${camZoom})` }}>
+                  {engine}
                 </AbsoluteFill>
-
-                {/* Layer 4: vignette */}
-                <AbsoluteFill style={{
-                  background: `radial-gradient(ellipse at center, transparent 50%, ${colors.bg} 110%)`,
-                  mixBlendMode: 'multiply',
-                  pointerEvents: 'none',
-                }} />
+                <AbsoluteFill style={{ background: `radial-gradient(ellipse at center, transparent 50%, ${bg} 110%)`, mixBlendMode: 'multiply', pointerEvents: 'none' }} />
               </AbsoluteFill>
-            );
-          };
-
-          export const RemotionRoot: React.FC = () => {
-            return (
-              <>
-                <Composition id="HorizontalStock" component={NeuralScene} durationInFrames={540} fps={30} width={1920} height={1080} defaultProps={{ width: 1920, height: 1080 }} />
-                <Composition id="VerticalStock" component={NeuralScene} durationInFrames={540} fps={30} width={1080} height={1920} defaultProps={{ width: 1080, height: 1920 }} />
-                <Composition id="SquareStock" component={NeuralScene} durationInFrames={540} fps={30} width={1080} height={1080} defaultProps={{ width: 1080, height: 1080 }} />
-              </>
             );
           };
           EOF
 
-      - name: Install dependencies
-        working-directory: remotion-project
-        run: npm install
+          cat > src/Root.tsx <<'EOF'
+          import React from 'react';
+          import { Composition } from 'remotion';
+          import { Scene } from './Scene';
+          import { IDEAS } from './ideas';
 
-      - name: Install fonts
+          // 4K resolutions accepted by Adobe Stock
+          // Horizontal: 3840x2160 (UHD)
+          // Vertical:   2160x3840 (UHD 9:16)
+          export const RemotionRoot: React.FC = () => (
+            <>
+              {IDEAS.map((idea: any) => (
+                <React.Fragment key={idea.id}>
+                  <Composition
+                    id={`${idea.id}-16x9-4k`}
+                    component={Scene}
+                    durationInFrames={Math.round(idea.duration * 30)}
+                    fps={30}
+                    width={3840}
+                    height={2160}
+                    defaultProps={{ idea }}
+                  />
+                  <Composition
+                    id={`${idea.id}-9x16-4k`}
+                    component={Scene}
+                    durationInFrames={Math.round(idea.duration * 30)}
+                    fps={30}
+                    width={2160}
+                    height={3840}
+                    defaultProps={{ idea }}
+                  />
+                </React.Fragment>
+              ))}
+            </>
+          );
+          EOF
+
+      - name: Install CJK fonts
         run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
 
-      - name: Render ${{ matrix.comp }}
-        working-directory: remotion-project
-        env:
-          REMOTION_PRIMARY_COLOR: ${{ inputs.primaryColor }}
-          REMOTION_SECONDARY_COLOR: ${{ inputs.secondaryColor }}
-          REMOTION_BG_COLOR: ${{ inputs.bgColor }}
+      # ============ RENDER 4K (concurrency=1 for memory safety) ============
+      - name: Render all ideas in 4K
         run: |
-          npx remotion render ${{ matrix.comp }} out/${{ matrix.output }} \
-            --codec=h264 \
-            --concurrency=2 \
-            --jpeg-quality=95 \
-            --crf=16
+          cd remotion-project
+          node -e "
+            const d = require('./video-ideas.json');
+            const lines = [];
+            d.videos.forEach(v => {
+              lines.push(v.id + '-16x9-4k');
+              lines.push(v.id + '-9x16-4k');
+            });
+            require('fs').writeFileSync('comps.txt', lines.join('\n'));
+          "
+          while IFS= read -r comp; do
+            echo "Rendering 4K: $comp"
+            npx remotion render "$comp" "out/$comp.mp4" \
+              --codec=h264 \
+              --concurrency=1 \
+              --jpeg-quality=92 \
+              --crf=14 \
+              --pixel-format=yuv420p
+          done < comps.txt
 
+      # ============ UPDATE HISTORY (anti-duplikat) ============
+      - name: Update history
+        if: always()
+        run: |
+          cd remotion-project
+          node -e "
+            const fs = require('fs');
+            const hist = JSON.parse(fs.readFileSync('../history.json','utf8'));
+            const ideas = JSON.parse(fs.readFileSync('video-ideas.json','utf8'));
+            const rendered = ideas.videos.map(v => ({
+              id: v.id,
+              type: v.composition.type,
+              concept: v.concept || v.title,
+              renderedAt: new Date().toISOString(),
+              run: process.env.GITHUB_RUN_NUMBER,
+            }));
+            hist.rendered = hist.rendered.concat(rendered);
+            // Keep last 500 entries
+            if (hist.rendered.length > 500) hist.rendered = hist.rendered.slice(-500);
+            fs.writeFileSync('../history.json', JSON.stringify(hist, null, 2));
+            console.log('History now has', hist.rendered.length, 'entries');
+          "
+
+      - name: Save history to cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: history.json
+          key: idea-history-${{ github.run_id }}
+
+      - name: Persist history to repo
+        if: always()
+        run: |
+          git config user.name "stock-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add history.json
+          if git diff --staged --quiet; then
+            echo "No history change"
+          else
+            git commit -m "chore: update idea history [skip ci]"
+            git push || echo "Push failed (non-fatal)"
+          fi
+
+      # ============ UPLOAD ============
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version }}
-          name: "Neural Genesis ${{ inputs.version }}"
-          files: remotion-project/out/${{ matrix.output }}
+          tag_name: batch-${{ github.run_number }}
+          name: "Stock 4K Batch ${{ github.run_number }}"
+          files: remotion-project/out/*.mp4
           draft: false
           prerelease: false
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
