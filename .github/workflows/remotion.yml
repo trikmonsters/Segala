@@ -1,0 +1,276 @@
+name: Render Adobe Stock Videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      accentColor:
+        description: 'Accent color (hex)'
+        required: false
+        default: '#3b82f6'
+      bgColor:
+        description: 'Background color (hex)'
+        required: false
+        default: '#0f172a'
+      textColor:
+        description: 'Text color (hex)'
+        required: false
+        default: '#f8fafc'
+      title:
+        description: 'Main title text'
+        required: false
+        default: 'Move Faster'
+      subtitle:
+        description: 'Subtitle text'
+        required: false
+        default: 'Design systems for modern teams'
+
+jobs:
+  setup-and-render:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - comp: 'HorizontalStock'
+            output: 'stock_horizontal.mp4'
+          - comp: 'VerticalStock'
+            output: 'stock_vertical.mp4'
+          - comp: 'SquareStock'
+            output: 'stock_square.mp4'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Scaffold Remotion project
+        run: |
+          mkdir -p remotion-project/src
+          cd remotion-project
+
+          cat > package.json <<'EOF'
+          {
+            "name": "remotion-stock",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "start": "remotion studio src/index.ts"
+            },
+            "dependencies": {
+              "@remotion/cli": "4.0.290",
+              "remotion": "4.0.290",
+              "react": "18.3.1",
+              "react-dom": "18.3.1"
+            },
+            "devDependencies": {
+              "@types/react": "18.3.12",
+              "typescript": "5.6.3"
+            }
+          }
+          EOF
+
+          cat > tsconfig.json <<'EOF'
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "ESNext",
+              "jsx": "react-jsx",
+              "strict": true,
+              "esModuleInterop": true,
+              "skipLibCheck": true,
+              "moduleResolution": "bundler",
+              "lib": ["DOM", "ES2020"]
+            }
+          }
+          EOF
+
+          cat > src/index.ts <<'EOF'
+          import { registerRoot } from 'remotion';
+          import { RemotionRoot } from './Root';
+          registerRoot(RemotionRoot);
+          EOF
+
+          cat > src/Root.tsx <<'EOF'
+          import React from 'react';
+          import {
+            Composition,
+            AbsoluteFill,
+            useCurrentFrame,
+            useVideoConfig,
+            interpolate,
+            spring,
+          } from 'remotion';
+
+          const colors = {
+            accent: process.env.REMOTION_ACCENT_COLOR || '#3b82f6',
+            bg: process.env.REMOTION_BG_COLOR || '#0f172a',
+            text: process.env.REMOTION_TEXT_COLOR || '#f8fafc',
+          };
+
+          const title = process.env.REMOTION_TITLE || 'Move Faster';
+          const subtitle = process.env.REMOTION_SUBTITLE || 'Design systems for modern teams';
+
+          const ModernMinimal: React.FC<{ width: number; height: number }> = ({ width, height }) => {
+            const frame = useCurrentFrame();
+            const { fps, durationInFrames } = useVideoConfig();
+
+            const bgAngle = interpolate(frame, [0, durationInFrames], [0, 45]);
+
+            const titleProgress = spring({
+              frame: frame - 5,
+              fps,
+              config: { damping: 20, stiffness: 80 },
+            });
+            const titleY = interpolate(titleProgress, [0, 1], [40, 0]);
+
+            const subtitleProgress = spring({
+              frame: frame - 20,
+              fps,
+              config: { damping: 20, stiffness: 80 },
+            });
+            const subtitleY = interpolate(subtitleProgress, [0, 1], [30, 0]);
+
+            const lineProgress = spring({
+              frame: frame - 15,
+              fps,
+              config: { damping: 25, stiffness: 90 },
+            });
+            const lineWidth = interpolate(lineProgress, [0, 1], [0, Math.min(width * 0.5, 400)]);
+
+            const exitOpacity = interpolate(
+              frame,
+              [durationInFrames - 30, durationInFrames - 5],
+              [1, 0],
+              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+            );
+
+            const isVertical = height > width;
+            const baseFontSize = isVertical ? width * 0.08 : height * 0.08;
+
+            return (
+              <AbsoluteFill
+                style={{
+                  background: `linear-gradient(${bgAngle}deg, ${colors.bg} 0%, ${colors.bg}dd 50%, ${colors.accent}15 100%)`,
+                  justifyContent: 'center',
+                  alignItems: isVertical ? 'flex-start' : 'center',
+                  paddingLeft: isVertical ? width * 0.12 : 0,
+                  paddingRight: isVertical ? width * 0.12 : 0,
+                  opacity: exitOpacity,
+                }}
+              >
+                <div
+                  style={{
+                    maxWidth: isVertical ? '100%' : width * 0.7,
+                    textAlign: isVertical ? 'left' : 'center',
+                  }}
+                >
+                  <h1
+                    style={{
+                      fontSize: baseFontSize,
+                      color: colors.text,
+                      fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
+                      fontWeight: 700,
+                      letterSpacing: '-0.03em',
+                      margin: 0,
+                      opacity: titleProgress,
+                      transform: `translateY(${titleY}px)`,
+                    }}
+                  >
+                    {title}
+                  </h1>
+                  <div
+                    style={{
+                      height: isVertical ? 4 : 3,
+                      width: lineWidth,
+                      background: colors.accent,
+                      marginTop: isVertical ? 20 : 16,
+                      marginBottom: isVertical ? 24 : 20,
+                      borderRadius: 2,
+                      marginLeft: isVertical ? 0 : 'auto',
+                      marginRight: isVertical ? 0 : 'auto',
+                    }}
+                  />
+                  <p
+                    style={{
+                      fontSize: baseFontSize * 0.35,
+                      color: `${colors.text}aa`,
+                      fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
+                      fontWeight: 400,
+                      letterSpacing: '0.02em',
+                      margin: 0,
+                      opacity: subtitleProgress,
+                      transform: `translateY(${subtitleY}px)`,
+                    }}
+                  >
+                    {subtitle}
+                  </p>
+                </div>
+              </AbsoluteFill>
+            );
+          };
+
+          export const RemotionRoot: React.FC = () => {
+            return (
+              <>
+                <Composition
+                  id="HorizontalStock"
+                  component={ModernMinimal}
+                  durationInFrames={450}
+                  fps={30}
+                  width={1920}
+                  height={1080}
+                  defaultProps={{ width: 1920, height: 1080 }}
+                />
+                <Composition
+                  id="VerticalStock"
+                  component={ModernMinimal}
+                  durationInFrames={450}
+                  fps={30}
+                  width={1080}
+                  height={1920}
+                  defaultProps={{ width: 1080, height: 1920 }}
+                />
+                <Composition
+                  id="SquareStock"
+                  component={ModernMinimal}
+                  durationInFrames={450}
+                  fps={30}
+                  width={1080}
+                  height={1080}
+                  defaultProps={{ width: 1080, height: 1080 }}
+                />
+              </>
+            );
+          };
+          EOF
+
+      - name: Install dependencies
+        working-directory: remotion-project
+        run: npm install
+
+      - name: Install CJK font
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
+      - name: Render ${{ matrix.comp }}
+        working-directory: remotion-project
+        env:
+          REMOTION_ACCENT_COLOR: ${{ inputs.accentColor }}
+          REMOTION_BG_COLOR: ${{ inputs.bgColor }}
+          REMOTION_TEXT_COLOR: ${{ inputs.textColor }}
+          REMOTION_TITLE: ${{ inputs.title }}
+          REMOTION_SUBTITLE: ${{ inputs.subtitle }}
+        run: |
+          npx remotion render ${{ matrix.comp }} out/${{ matrix.output }} \
+            --codec=h264 \
+            --concurrency=2 \
+            --jpeg-quality=95
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.comp }}
+          path: remotion-project/out/${{ matrix.output }}
+          retention-days: 7
