@@ -12,9 +12,14 @@ concurrency:
   group: stock-render
   cancel-in-progress: false
 
+env:
+  # Daftar model Gemini (dicoba berurutan, pisahkan dengan koma).
+  # Bisa di-override lewat repo Variables: Settings > Secrets and variables > Actions > Variables
+  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite' }}
+
 jobs:
   # ══════════════════════════════════════════════════════════
-  # JOB 1 — PREPARE: Generate ide via Gemini (retry 3, 5 model)
+  # JOB 1 — PREPARE: generate ide via Gemini + scaffold Remotion
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
@@ -22,21 +27,12 @@ jobs:
     outputs:
       comps: ${{ steps.comps.outputs.list }}
     steps:
+      # history.json disimpan di repo (sumber kebenaran tunggal, tidak bergantung cache)
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Restore idea history
-        uses: actions/cache/restore@v4
-        with:
-          path: history.json
-          key: idea-history-${{ github.run_id }}
-          restore-keys: |
-            idea-history-
 
       - name: Init history if missing
         run: |
@@ -51,7 +47,7 @@ jobs:
           cd remotion-project
           npm init -y
           npm install remotion@4.0.290 @remotion/cli@4.0.290 \
-            react@18.3.1 react-dom@18.3.1 @google/genai
+            react@18.3.1 react-dom@18.3.1
           npm install -D typescript@5.6.3 @types/react@18.3.12
 
           cat > tsconfig.json <<'EOF'
@@ -64,20 +60,34 @@ jobs:
           }
           EOF
 
-      - name: Generate ideas with Gemini
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Generator dipisah dari project Remotion agar @google/genai tidak ikut ke job render
+      - name: Install generator dependencies
         run: |
-          cd remotion-project
-          cp ../history.json .
+          mkdir -p generator
+          cd generator
+          npm init -y
+          npm install @google/genai
 
-          cat > gen.mjs <<'GENEOF'
+      - name: Write generator script
+        run: |
+          cat > generator/gen.mjs <<'GENEOF'
           import { GoogleGenAI } from "@google/genai";
           import fs from "fs";
 
-          const history = JSON.parse(fs.readFileSync("history.json", "utf8"));
+          const HISTORY_PATH = "../history.json";
+          const OUTPUT_PATH = "../remotion-project/video-ideas.json";
+          const RUN = process.env.GITHUB_RUN_NUMBER || String(Date.now());
+          const ATTEMPTS_PER_MODEL = 3;
+          const TYPES = ["neural-network", "particle-morph", "data-flow", "organic-growth", "geometric-transform"];
+          const HEX = /^#[0-9a-fA-F]{6}$/;
+
+          const MODELS = (process.env.GEMINI_MODELS || "")
+            .split(",").map(s => s.trim()).filter(Boolean);
+
+          const history = JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8"));
           const previousIds = history.rendered.map(r => r.id);
-          const previousConcepts = history.rendered.map(r => `${r.type}:${r.concept}`);
+          // Hanya 100 konsep terakhir agar prompt tidak membengkak
+          const previousConcepts = history.rendered.slice(-100).map(r => `${r.type}:${r.concept}`);
 
           const PROMPT = `You are an elite motion-design director for Adobe Stock,
           specialized in Abstract & Conceptual Motion — a category with HIGH demand
@@ -112,7 +122,7 @@ jobs:
           ${previousConcepts.length ? previousConcepts.map(c => "  - " + c).join("\n") : "  (none yet — first batch)"}
 
           ALL PREVIOUS IDs (must not collide):
-          ${previousIds.length ? previousIds.join(", ") : "(none)"}
+          ${previousIds.length ? previousIds.slice(-200).join(", ") : "(none)"}
 
           ═══════════════════════════════════════════════
           HARD CONSTRAINTS
@@ -134,6 +144,8 @@ jobs:
           6. Keywords: 18–24 terms. Include "abstract", "motion", "background",
              "conceptual", "4K", and (for 9:16) "vertical". No brand names.
           7. description: 1–2 sentences, commercial, no first-person.
+          8. id: lowercase kebab-case, letters/digits/hyphens only.
+          9. Colors: 6-digit hex like "#5367b8".
 
           Output ONLY valid JSON matching this schema:
           {"videos":[{"id":"kebab-case-unique","title":"max 60 chars",
@@ -144,87 +156,141 @@ jobs:
           "animationStyle":"","durationSeconds":15,
           "elements":[{"name":"","behavior":"","timing":{"start":0,"end":5}}]}}]}`;
 
-          const ai = new GoogleGenAI({
-            apiKey: process.env.GEMINI_API_KEY,
-            httpOptions: {
-              retryOptions: { attempts: 3, initialDelay: 1000 }
-            }
-          });
-
-          const FALLBACK = { videos: [
+          // ── Fallback statis (id diberi suffix run number agar tidak pernah bentrok / kosong) ──
+          const FALLBACK = [
             { id:"neural-bloom", title:"Neural Bloom", concept:"GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
               description:"Abstract neural network unfurling organically like bioluminescent roots.",
-              keywords:["neural","network","ai","abstract","particle","growth","digital","technology","brain","connection","synapse","data","future","innovation","conceptual","motion","background","4K","organic","science"],
+              keywords:["neural","network","ai","abstract","particle","growth","digital","technology","brain","connection","synapse","data","future","innovation","conceptual","motion","background","4K","organic","science","vertical"],
               composition:{ type:"neural-network", primaryColor:"#6366f1", secondaryColor:"#22d3ee", bgColor:"#020617", animationStyle:"organic", durationSeconds:15,
                 elements:[{name:"neurons",behavior:"grow outward from center",timing:{start:0,end:5}},{name:"synapses",behavior:"connect nearest neighbors",timing:{start:4,end:9}},{name:"data-pulses",behavior:"travel along synapses",timing:{start:8,end:15}}] } },
             { id:"tidal-fragments", title:"Tidal Fragments", concept:"ORDER vs CHAOS — particles snap into a perfect ring then dissolve",
               description:"Particles converge into a luminous ring before dissolving into chaos.",
-              keywords:["particle","morph","ring","abstract","motion","technology","transformation","innovation","digital","future","conceptual","glow","dynamic","background","4K","fluid","energy","orbit","cinematic","science"],
+              keywords:["particle","morph","ring","abstract","motion","technology","transformation","innovation","digital","future","conceptual","glow","dynamic","background","4K","fluid","energy","orbit","cinematic","science","vertical"],
               composition:{ type:"particle-morph", primaryColor:"#f59e0b", secondaryColor:"#ec4899", bgColor:"#0a0a0a", animationStyle:"fluid", durationSeconds:15,
                 elements:[{name:"scatter",behavior:"particles drift randomly",timing:{start:0,end:3}},{name:"converge",behavior:"form ring",timing:{start:3,end:9}},{name:"dissolve",behavior:"ring breaks apart",timing:{start:12,end:15}}] } },
             { id:"data-river", title:"Data River", concept:"SPEED vs STILLNESS — packets rush while the background holds perfectly still",
               description:"Streaming data packets with luminous trails across a calm field.",
-              keywords:["data","flow","stream","network","abstract","technology","speed","digital","information","motion","future","connection","cyber","background","conceptual","4K","bandwidth","packet","signal","transmission"],
+              keywords:["data","flow","stream","network","abstract","technology","speed","digital","information","motion","future","connection","cyber","background","conceptual","4K","bandwidth","packet","signal","transmission","vertical"],
               composition:{ type:"data-flow", primaryColor:"#10b981", secondaryColor:"#3b82f6", bgColor:"#030712", animationStyle:"mechanical", durationSeconds:15,
                 elements:[{name:"lanes",behavior:"faint horizontal guides appear",timing:{start:0,end:3}},{name:"packets",behavior:"travel with trails",timing:{start:2,end:13}},{name:"burst",behavior:"surge of packets",timing:{start:11,end:15}}] } },
             { id:"root-memory", title:"Root Memory", concept:"FRAGILITY vs STRENGTH — thin branches thicken into a resilient root system",
               description:"Fractal branches growing and thickening like an ancient root system.",
-              keywords:["organic","growth","branch","root","fractal","nature","abstract","motion","life","green","evolution","conceptual","background","4K","botanical","tree","structure","biology","cinematic","macrophotography"],
+              keywords:["organic","growth","branch","root","fractal","nature","abstract","motion","life","green","evolution","conceptual","background","4K","botanical","tree","structure","biology","cinematic","macro","vertical"],
               composition:{ type:"organic-growth", primaryColor:"#22c55e", secondaryColor:"#a3e635", bgColor:"#0c1510", animationStyle:"organic", durationSeconds:15,
                 elements:[{name:"trunk",behavior:"single line grows upward",timing:{start:0,end:3}},{name:"branches",behavior:"recursive splitting",timing:{start:2,end:11}},{name:"thickening",behavior:"lines gain weight",timing:{start:10,end:15}}] } },
             { id:"prism-fold", title:"Prism Fold", concept:"ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
               description:"Nested polygons rotating and folding inward until their edges intersect.",
-              keywords:["geometric","polygon","abstract","motion","shape","geometry","structure","business","strategy","minimal","modern","background","conceptual","digital","design","4K","sacred","symmetry","kaleidoscope","mathematics"],
+              keywords:["geometric","polygon","abstract","motion","shape","geometry","structure","business","strategy","minimal","modern","background","conceptual","digital","design","4K","sacred","symmetry","kaleidoscope","mathematics","vertical"],
               composition:{ type:"geometric-transform", primaryColor:"#a855f7", secondaryColor:"#f472b6", bgColor:"#0b0614", animationStyle:"mechanical", durationSeconds:15,
                 elements:[{name:"nesting",behavior:"polygons scale outward",timing:{start:0,end:4}},{name:"rotation",behavior:"counter-rotating layers",timing:{start:3,end:12}},{name:"intersect",behavior:"vertices connect across layers",timing:{start:10,end:15}}] } },
-          ]};
-
-          const MODELS_TO_TRY = [
-            "gemini-3.8-flash",
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite"
           ];
 
-          async function generateWithFallback() {
-            for (const modelName of MODELS_TO_TRY) {
+          // ── Helpers ──
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+          const sanitizeId = s => String(s || "").toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+
+          function uniqueId(base, seen) {
+            let id = base, n = 2;
+            while (seen.has(id)) id = `${base}-${n++}`;
+            return id;
+          }
+
+          function validate(data) {
+            if (!data || !Array.isArray(data.videos) || data.videos.length !== 5)
+              throw new Error("expected exactly 5 videos");
+
+            const seen = new Set(previousIds);
+            for (const v of data.videos) {
+              const c = v.composition;
+              if (!c || !TYPES.includes(c.type)) throw new Error("invalid composition.type");
+              for (const k of ["primaryColor", "secondaryColor", "bgColor"])
+                if (!HEX.test(c[k] || "")) throw new Error(`invalid ${k}: ${c[k]}`);
+
+              const base = sanitizeId(v.id || v.title);
+              if (!base) throw new Error("empty id");
+              v.id = uniqueId(base, seen);
+              seen.add(v.id);
+
+              c.durationSeconds = Math.min(18, Math.max(12, Math.round(Number(c.durationSeconds) || 15)));
+              if (!Array.isArray(v.keywords)) v.keywords = [];
+              if (!v.concept) v.concept = v.title || v.id;
+            }
+
+            const types = data.videos.map(v => v.composition.type);
+            if (!TYPES.every(t => types.filter(x => x === t).length === 1))
+              throw new Error("type distribution invalid (each type must appear exactly once)");
+
+            return data;
+          }
+
+          async function tryModel(ai, model) {
+            for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
               try {
-                console.log(`[INFO] Mencoba model: ${modelName}...`);
+                console.log(`[INFO] ${model} — percobaan ${attempt}/${ATTEMPTS_PER_MODEL}`);
                 const res = await ai.models.generateContent({
-                  model: modelName,
+                  model,
                   contents: PROMPT,
-                  config: { responseMimeType: "application/json", temperature: 1.15, topP: 0.95 },
+                  config: { responseMimeType: "application/json", temperature: 1.0, topP: 0.95 },
                 });
-
-                const data = JSON.parse(res.text);
-                if (!data.videos || data.videos.length !== 5) throw new Error("bad count");
-
-                const types = data.videos.map(v => v.composition.type);
-                const required = ["neural-network","particle-morph","data-flow","organic-growth","geometric-transform"];
-                const ok = required.every(t => types.filter(x => x === t).length === 1);
-                if (!ok) throw new Error("type distribution invalid");
-
-                const newIds = data.videos.map(v => v.id);
-                const collision = newIds.filter(id => previousIds.includes(id));
-                if (collision.length) throw new Error("id collision: " + collision.join(","));
-
-                console.log(`[SUCCESS] Model ${modelName} berhasil.`);
-                fs.writeFileSync("video-ideas.json", JSON.stringify(data, null, 2));
-                return;
+                const text = (res.text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+                return validate(JSON.parse(text));
               } catch (e) {
-                console.warn(`[FAILED] ${modelName}: ${e.message}`);
+                const msg = String(e?.message || e);
+                console.warn(`[FAILED] ${model} #${attempt}: ${msg.slice(0, 300)}`);
+                // Error permanen: jangan di-retry, lanjut ke model berikutnya
+                if (/404|NOT_FOUND|not found|401|403|API key|PERMISSION_DENIED/i.test(msg)) return null;
+                if (attempt < ATTEMPTS_PER_MODEL) await sleep(2000 * 2 ** (attempt - 1));
+              }
+            }
+            return null;
+          }
+
+          function buildFallback() {
+            const seen = new Set(previousIds);
+            const videos = FALLBACK.map(v => {
+              const copy = JSON.parse(JSON.stringify(v));
+              copy.id = uniqueId(`${v.id}-${RUN}`, seen);
+              seen.add(copy.id);
+              return copy;
+            });
+            return { videos };
+          }
+
+          async function main() {
+            let result = null;
+
+            if (!process.env.GEMINI_API_KEY) {
+              console.warn("[WARN] GEMINI_API_KEY tidak diset — memakai fallback statis.");
+            } else {
+              const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+              for (const model of MODELS) {
+                result = await tryModel(ai, model);
+                if (result) {
+                  console.log(`[SUCCESS] Model ${model} berhasil.`);
+                  break;
+                }
               }
             }
 
-            console.error("Semua model gagal. Pakai fallback statis.");
-            const filtered = FALLBACK.videos.filter(v => !previousIds.includes(v.id));
-            fs.writeFileSync("video-ideas.json", JSON.stringify({ videos: filtered }, null, 2));
+            if (!result) {
+              console.error("[FALLBACK] Semua model gagal — memakai ide statis.");
+              result = buildFallback();
+            }
+
+            fs.writeFileSync(OUTPUT_PATH, JSON.stringify(result, null, 2));
+            console.log(`Ide tersimpan: ${result.videos.map(v => v.id).join(", ")}`);
           }
 
-          await generateWithFallback();
+          await main();
           GENEOF
 
+      - name: Generate ideas with Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd generator
           node gen.mjs
 
       - name: Generate ideas.ts
@@ -459,10 +525,14 @@ jobs:
                   const rot = s.rotation + frame * s.speed;
                   const r = s.radius * (0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4);
                   const col = s.hue > 0.5 ? c.primary : c.secondary;
-                  return Array.from({ length: s.sides }).map((_, k) => {
-                    const a = rot + (k / s.sides) * Math.PI * 2;
-                    return <circle key={`${i}-${k}`} cx={w / 2 + Math.cos(a) * r} cy={h / 2 + Math.sin(a) * r} r={3} fill={col} opacity={0.9} />;
-                  });
+                  return (
+                    <g key={`v${i}`}>
+                      {Array.from({ length: s.sides }).map((_, k) => {
+                        const a = rot + (k / s.sides) * Math.PI * 2;
+                        return <circle key={k} cx={w / 2 + Math.cos(a) * r} cy={h / 2 + Math.sin(a) * r} r={3} fill={col} opacity={0.9} />;
+                      })}
+                    </g>
+                  );
                 })}
               </svg>
             );
@@ -545,21 +615,32 @@ jobs:
               list.push(v.id + '-16x9-4k');
               list.push(v.id + '-9x16-4k');
             });
+            if (list.length === 0) { console.error('Daftar komposisi kosong'); process.exit(1); }
             require('fs').writeFileSync('comps.json', JSON.stringify(list));
           "
           echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
 
-      - name: Upload project artifacts
+      # Artifact tidak menyimpan permission file (+x), jadi node_modules TIDAK boleh ikut.
+      # Kirim source + package-lock.json saja; dependency di-install bersih di job render.
+      - name: Pack project (tanpa node_modules)
+        run: tar --exclude='node_modules' -czf project.tgz remotion-project
+
+      - name: Upload project artifact
         uses: actions/upload-artifact@v4
         with:
           name: remotion-project
-          path: |
-            remotion-project/
-            history.json
+          path: project.tgz
+          retention-days: 1
+
+      - name: Upload ideas metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ideas-meta
+          path: remotion-project/video-ideas.json
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 2 — RENDER PARALEL (max-parallel: 5) — FIXED
+  # JOB 2 — RENDER PARALEL (max-parallel: 5)
   # ══════════════════════════════════════════════════════════
   render:
     needs: prepare
@@ -576,18 +657,27 @@ jobs:
         with:
           name: remotion-project
 
+      - name: Extract project
+        run: tar -xzf project.tgz
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: remotion-project/package-lock.json
 
-      # ✅ FIX: Install dependencies di setiap runner paralel
       - name: Install dependencies
         run: |
           cd remotion-project
-          npm install
+          npm ci
 
-      - name: Install CJK fonts
-        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - name: Install system dependencies (Chrome + fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libnss3 libdbus-1-3 libatk1.0-0 \
+            libgbm-dev libasound2t64 libxrandr2 libxkbcommon-dev libxfixes3 \
+            libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 \
+            libcairo2 libcups2
 
       - name: Render ${{ matrix.comp }}
         run: |
@@ -607,42 +697,70 @@ jobs:
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 3 — RELEASE (setelah semua render selesai)
+  # JOB 3 — RELEASE (tetap jalan walau sebagian render gagal)
   # ══════════════════════════════════════════════════════════
   release:
-    needs: render
+    needs: [prepare, render]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          node-version: '22'
 
       - name: Download all rendered videos
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: video-*
           merge-multiple: true
           path: final-output
 
-      - name: Download project (untuk history & ideas)
+      - name: Download ideas metadata
         uses: actions/download-artifact@v4
         with:
-          name: remotion-project
-          path: project-restore
+          name: ideas-meta
+          path: ideas-meta
 
-      - name: Restore history
+      - name: Verify output
         run: |
-          cp project-restore/history.json ./history.json
-          echo "Restored history with $(node -e "console.log(require('./history.json').rendered.length)") entries"
+          mkdir -p final-output
+          if ! ls final-output/*.mp4 >/dev/null 2>&1; then
+            echo "::error::Tidak ada video yang berhasil dirender"
+            exit 1
+          fi
+          ls -lh final-output/
+          # Metadata (judul, deskripsi, keywords) ikut di release untuk keperluan upload stock
+          cp ideas-meta/video-ideas.json final-output/batch-metadata.json
 
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: batch-${{ github.run_number }}
+          name: "Stock 4K Batch ${{ github.run_number }}"
+          files: |
+            final-output/*.mp4
+            final-output/batch-metadata.json
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # History hanya dicatat untuk ide yang videonya benar-benar berhasil dirender & dirilis
       - name: Update history
         run: |
+          [ -f history.json ] || echo '{"rendered":[],"version":1}' > history.json
           node -e "
             const fs = require('fs');
             const hist = JSON.parse(fs.readFileSync('./history.json','utf8'));
-            const ideas = JSON.parse(fs.readFileSync('./project-restore/remotion-project/video-ideas.json','utf8'));
-            const rendered = ideas.videos.map(v => ({
+            const ideas = JSON.parse(fs.readFileSync('./ideas-meta/video-ideas.json','utf8'));
+            const files = fs.readdirSync('./final-output');
+            const done = ideas.videos.filter(v => files.some(f => f.startsWith(v.id + '-')));
+            const rendered = done.map(v => ({
               id: v.id,
               type: v.composition.type,
               concept: v.concept || v.title,
@@ -652,41 +770,17 @@ jobs:
             hist.rendered = hist.rendered.concat(rendered);
             if (hist.rendered.length > 500) hist.rendered = hist.rendered.slice(-500);
             fs.writeFileSync('./history.json', JSON.stringify(hist, null, 2));
-            console.log('History now has', hist.rendered.length, 'entries');
+            console.log('Ditambahkan', rendered.length, 'ide. Total history:', hist.rendered.length);
           "
 
-      - name: Save history to cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: history.json
-          key: idea-history-${{ github.run_id }}
-
-      - name: Persist history to repo
-        if: always()
+      - name: Commit history to repo
         run: |
-          git config user.name "stock-bot"
-          git config user.email "bot@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add history.json
           if git diff --staged --quiet; then
             echo "No history change"
           else
             git commit -m "chore: update idea history [skip ci]"
-            git push || echo "Push failed (non-fatal)"
+            git push
           fi
-
-      - name: Show output files
-        run: |
-          ls -lh final-output/
-
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: batch-${{ github.run_number }}
-          name: "Stock 4K Batch ${{ github.run_number }}"
-          files: final-output/*.mp4
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
