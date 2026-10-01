@@ -69,6 +69,61 @@
       "concept": "FRAGILITY vs STRENGTH — A monolithic, solid obsidian block shatters into thousands of microscopic, paper-thin floating violet glass panes.",
       "renderedAt": "2026-10-01T04:11:42.896Z",
       "run": "7"
+    },
+    {
+      "id": "serene-glass-harmonograph-loop",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — paper-thin etched glass panes resiliently anchor complex, looping light pendulums.",
+      "technique": "harmonograph / Lissajous multi-pendulum light trails",
+      "material": "frosted glass layers",
+      "stockTitle": "calm gradient motion background for presentation featuring frosted glass layers and ink indigo coral light trails seamless loop 4K",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-01T11:20:34.200Z",
+      "run": "5"
+    },
+    {
+      "id": "minimalist-tech-brushed-metal-emerald-loop",
+      "type": "geometric-transform",
+      "concept": "ORDER vs CHAOS — Structured anodized metal tiles are disrupted and illuminated by a fluid, domain-warped digital light field that warps along their brushed grain.",
+      "technique": "domain-warped fbm light field rendered on a low-res buffer and upscaled",
+      "material": "brushed anodized metal with a light sweep",
+      "stockTitle": "Minimalist Technology Background Loop with Brushed Metal Grid and Abstract Emerald Light Sweeps 4K",
+      "codeMode": "builtin",
+      "renderedAt": "2026-10-01T11:20:34.200Z",
+      "run": "5"
+    },
+    {
+      "id": "quasicrystal-ink-lattice-loop",
+      "type": "geometric-transform",
+      "concept": "ORGANIC vs MECHANICAL — chaotic fluid ink finds order when caught in a mathematical, ten-fold quasicrystal electromagnetic trap.",
+      "technique": "quasicrystal / Penrose-like interference lattice",
+      "material": "ink and smoke",
+      "stockTitle": "Abstract Technology Background Loop with Golden Quasicrystal Lattice and Fluid Teal Smoke in 4K",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-01T11:20:34.200Z",
+      "run": "5"
+    },
+    {
+      "id": "caustic-starlight-dust-growth-decay",
+      "type": "organic-growth",
+      "concept": "GROWTH vs DECAY — pulsing starlight dust builds intricate caustic light webs that slowly dissolve back into deep graphite shadows.",
+      "technique": "caustic light-web from summed waves",
+      "material": "starlight dust",
+      "stockTitle": "abstract technology background loop dark graphite starlight dust caustic light web 4K seamless loop",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-01T11:20:34.200Z",
+      "run": "5"
+    },
+    {
+      "id": "halftone-paper-matrix-isolation-connection",
+      "type": "data-flow",
+      "concept": "ISOLATION vs CONNECTION — Isolated dark paper cutouts are unified as travelling wave fronts ignite connected dot-matrix topographies across depths.",
+      "technique": "halftone / dot-matrix field modulated by travelling waves",
+      "material": "layered paper-cut depth",
+      "stockTitle": "Abstract Technology Background Loop with Glowing Dot Matrix Waves and Layered Paper Cutout Depth in 4K",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-01T11:20:34.200Z",
+      "run": "5"
     }
   ],
   "version": 1
