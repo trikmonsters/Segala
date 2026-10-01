@@ -124,6 +124,41 @@
       "codeMode": "custom",
       "renderedAt": "2026-10-01T11:20:34.200Z",
       "run": "5"
+    },
+    {
+      "id": "neural-tapestry-pulse",
+      "type": "neural-network",
+      "concept": "ISOLATION vs CONNECTION — Isolated nodes of indigo light reach across a void, spinning an intricate web of luminous communication.",
+      "renderedAt": "2026-10-01T15:23:27.116Z",
+      "run": "8"
+    },
+    {
+      "id": "amber-dust-storm",
+      "type": "particle-morph",
+      "concept": "ORDER vs CHAOS — Wild, unpredictable particulate chaos abruptly locks into a pristine mathematical arrangement.",
+      "renderedAt": "2026-10-01T15:23:27.116Z",
+      "run": "8"
+    },
+    {
+      "id": "emerald-data-stream",
+      "type": "data-flow",
+      "concept": "SPEED vs STILLNESS — Blistering digital velocity cuts through immobile, eternal geological structures.",
+      "renderedAt": "2026-10-01T15:23:27.116Z",
+      "run": "8"
+    },
+    {
+      "id": "forest-spore-reclamation",
+      "type": "organic-growth",
+      "concept": "GROWTH vs DECAY — Decaying organic matter is completely overtaken by a surge of aggressive, glowing flora.",
+      "renderedAt": "2026-10-01T15:23:27.116Z",
+      "run": "8"
+    },
+    {
+      "id": "violet-prism-lattice",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — Impossibly thin, paper-like translucent planes withstand extreme folding dynamics without breaking.",
+      "renderedAt": "2026-10-01T15:23:27.116Z",
+      "run": "8"
     }
   ],
   "version": 1
