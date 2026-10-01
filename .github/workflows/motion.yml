@@ -1,0 +1,530 @@
+name: Render Custom Stock Batch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ══════════════════════════════════════════════════════════
+  # JOB 1 — PREPARE: Tulis ide manual + scaffold project
+  # ══════════════════════════════════════════════════════════
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      comps: ${{ steps.comps.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Scaffold Remotion project
+        run: |
+          mkdir -p remotion-project/src
+          cd remotion-project
+          npm init -y
+          npm install remotion@4.0.290 @remotion/cli@4.0.290 \
+            react@18.3.1 react-dom@18.3.1
+          npm install -D typescript@5.6.3 @types/react@18.3.12
+
+          cat > tsconfig.json <<'EOF'
+          {
+            "compilerOptions": {
+              "target": "ES2020", "module": "ESNext", "jsx": "react-jsx",
+              "strict": true, "esModuleInterop": true, "skipLibCheck": true,
+              "moduleResolution": "bundler", "lib": ["DOM", "ES2020"]
+            }
+          }
+          EOF
+
+      - name: Write video-ideas.json (custom)
+        run: |
+          cd remotion-project
+          cat > video-ideas.json <<'IDEAS_EOF'
+          {
+            "videos": [
+              {
+                "id": "pruned-memory-lattice",
+                "title": "Pruned Memory Lattice",
+                "description": "A living neural lattice continuously grows connections while selectively pruning its own history, creating a sophisticated metaphor for adaptation and forgotten knowledge.",
+                "concept": "GROWTH vs DECAY — a neural lattice cultivates new pathways while older memories quietly fossilize and disappear.",
+                "keywords": ["abstract","motion","background","conceptual","4K","neural","network","memory","growth","decay","adaptation","learning","knowledge","technology","innovation","connections","pruning","futuristic","dark","cinematic","B-roll"],
+                "composition": {
+                  "type": "neural-network",
+                  "primaryColor": "#5367B8",
+                  "secondaryColor": "#5BC7D9",
+                  "bgColor": "#0B1024",
+                  "animationStyle": "organic synaptic motion with restrained cinematic depth",
+                  "durationSeconds": 15,
+                  "elements": [
+                    {"name":"living lattice","behavior":"branching neural structure extending","timing":{"start":0,"end":7}},
+                    {"name":"memory fossils","behavior":"nodes dim and dissolve","timing":{"start":4,"end":11}},
+                    {"name":"adaptive bridge","behavior":"new pathway reroutes","timing":{"start":8,"end":15}}
+                  ]
+                }
+              },
+              {
+                "id": "ember-to-petal-collapse",
+                "title": "Ember to Petal Collapse",
+                "description": "A dense field of warm particles repeatedly gathers into a delicate flower-like structure before collapsing back into drifting fragments.",
+                "concept": "FRAGILITY vs STRENGTH — fragile particles become a resilient temporary structure before surrendering to gravity.",
+                "keywords": ["abstract","motion","background","conceptual","4K","particles","transformation","fragility","strength","flower","formation","collapse","impermanence","creativity","emotion","metamorphosis","amber","pink","cinematic","dark","B-roll"],
+                "composition": {
+                  "type": "particle-morph",
+                  "primaryColor": "#D49A5B",
+                  "secondaryColor": "#B96F86",
+                  "bgColor": "#0B090D",
+                  "animationStyle": "fluid particle choreography with tactile clustering",
+                  "durationSeconds": 15,
+                  "elements": [
+                    {"name":"ember field","behavior":"particles sweep laterally","timing":{"start":0,"end":5}},
+                    {"name":"petal architecture","behavior":"particles spiral into petals","timing":{"start":3,"end":10}},
+                    {"name":"structural collapse","behavior":"petals fracture and disperse","timing":{"start":9,"end":15}}
+                  ]
+                }
+              },
+              {
+                "id": "river-of-contradicting-signals",
+                "title": "River of Contradicting Signals",
+                "description": "Two disciplined streams of information travel through a dark environment, gradually crossing, exchanging direction, and emerging as a single coherent current.",
+                "concept": "ORDER vs CHAOS — two organized information currents collide and reorganize into a new pattern.",
+                "keywords": ["abstract","motion","background","conceptual","4K","data","flow","signals","order","chaos","information","communication","convergence","systems","technology","decision","streams","emerald","blue","midnight","B-roll"],
+                "composition": {
+                  "type": "data-flow",
+                  "primaryColor": "#43B88A",
+                  "secondaryColor": "#4D88B8",
+                  "bgColor": "#07121B",
+                  "animationStyle": "precise ribbon-flow with controlled turbulence",
+                  "durationSeconds": 15,
+                  "elements": [
+                    {"name":"parallel currents","behavior":"two channels move rapidly","timing":{"start":0,"end":6}},
+                    {"name":"signal exchange","behavior":"ribbons intersect and switch","timing":{"start":5,"end":10}},
+                    {"name":"coherent river","behavior":"signals settle into one current","timing":{"start":9,"end":15}}
+                  ]
+                }
+              },
+              {
+                "id": "rooted-forest-circuit",
+                "title": "Rooted Forest Circuit",
+                "description": "Fine roots spread through a dark forest floor while luminous nutrients travel between neighboring growths, turning an underground ecosystem into a living communication system.",
+                "concept": "ORGANIC vs MECHANICAL — a biological root system behaves like a self-organizing circuit.",
+                "keywords": ["abstract","motion","background","conceptual","4K","organic","growth","roots","forest","biology","ecosystem","connection","sustainability","resilience","communication","nature","network","green","lime","dark","B-roll"],
+                "composition": {
+                  "type": "organic-growth",
+                  "primaryColor": "#6FAF52",
+                  "secondaryColor": "#A2C85B",
+                  "bgColor": "#07150D",
+                  "animationStyle": "macro organic time-lapse with bioluminescent pulses",
+                  "durationSeconds": 15,
+                  "elements": [
+                    {"name":"root expansion","behavior":"roots creep through soil","timing":{"start":0,"end":8}},
+                    {"name":"nutrient pulses","behavior":"particles travel through roots","timing":{"start":4,"end":12}},
+                    {"name":"forest exchange","behavior":"roots synchronize pulses","timing":{"start":9,"end":15}}
+                  ]
+                }
+              },
+              {
+                "id": "folded-rose-topology",
+                "title": "Folded Rose Topology",
+                "description": "A continuous surface folds through itself, changing from an orderly planar structure into an intricate rose-like topology before unfolding into a new configuration.",
+                "concept": "SPEED vs STILLNESS — a static surface undergoes rapid topological change before arriving at calmer geometry.",
+                "keywords": ["abstract","motion","background","conceptual","4K","geometry","transformation","topology","folding","architecture","complexity","change","mathematics","design","structure","rose","violet","plum","cinematic","B-roll"],
+                "composition": {
+                  "type": "geometric-transform",
+                  "primaryColor": "#8C6BC2",
+                  "secondaryColor": "#B9789A",
+                  "bgColor": "#160C20",
+                  "animationStyle": "precision morphing with elastic surface deformation",
+                  "durationSeconds": 15,
+                  "elements": [
+                    {"name":"ordered plane","behavior":"tiled surface slides laterally","timing":{"start":0,"end":5}},
+                    {"name":"topological bloom","behavior":"surface folds into rose","timing":{"start":4,"end":11}},
+                    {"name":"quiet reconfiguration","behavior":"rose unfolds into calm geometry","timing":{"start":10,"end":15}}
+                  ]
+                }
+              }
+            ]
+          }
+          IDEAS_EOF
+
+      - name: Generate ideas.ts
+        run: |
+          cd remotion-project
+          cat > gen-ideas.mjs <<'EOF'
+          import fs from "fs";
+          const data = JSON.parse(fs.readFileSync("video-ideas.json","utf8"));
+          const ideas = data.videos.map(v => ({
+            id: v.id,
+            type: v.composition.type,
+            colors: {
+              primary: v.composition.primaryColor,
+              secondary: v.composition.secondaryColor,
+              bg: v.composition.bgColor,
+            },
+            duration: v.composition.durationSeconds || 15,
+          }));
+          fs.writeFileSync("src/ideas.ts",
+            "export const IDEAS = " + JSON.stringify(ideas, null, 2) + ";\n");
+          EOF
+          node gen-ideas.mjs
+
+      - name: Write Remotion code
+        run: |
+          cd remotion-project
+
+          cat > src/index.ts <<'EOF'
+          import { registerRoot } from 'remotion';
+          import { RemotionRoot } from './Root';
+          registerRoot(RemotionRoot);
+          EOF
+
+          cat > src/Scene.tsx <<'EOF'
+          import React, { useMemo } from 'react';
+          import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
+
+          const seeded = (i: number, s: number) => {
+            const x = Math.sin(i * 12.9898 + s * 78.233) * 43758.5453;
+            return x - Math.floor(x);
+          };
+
+          type Idea = { id: string; type: string; colors: { primary: string; secondary: string; bg: string }; duration: number };
+          type C = { primary: string; secondary: string };
+
+          const Defs: React.FC = () => (
+            <defs>
+              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3" result="b" />
+                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            </defs>
+          );
+
+          const NeuralNetwork: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const nodes = useMemo(() => Array.from({ length: 70 }, (_, i) => {
+              const a = seeded(i, 1) * Math.PI * 2;
+              const r = Math.sqrt(seeded(i, 2)) * Math.min(w, h) * 0.38;
+              return { x: w / 2 + Math.cos(a) * r, y: h / 2 + Math.sin(a) * r * 0.85,
+                size: 2 + seeded(i, 3) * 4, delay: seeded(i, 4) * 0.5, pulse: seeded(i, 5) * 6.28 };
+            }), [w, h]);
+            const links = useMemo(() => {
+              const out: any[] = [];
+              for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+                const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+                const d = Math.sqrt(dx * dx + dy * dy);
+                if (d < Math.min(w, h) * 0.2 && seeded(i * 100 + j, 20) > 0.65)
+                  out.push({ from: i, to: j, delay: seeded(i * 100 + j, 21) * 0.4 });
+              }
+              return out;
+            }, [nodes, w, h]);
+            const prog = interpolate(frame, [0, fps * 5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
+            return (
+              <svg width={w} height={h} style={{ position: 'absolute' }}>
+                <Defs />
+                {links.map((l, i) => {
+                  const f = nodes[l.from], t = nodes[l.to];
+                  const p = Math.max(0, Math.min(1, (prog - 0.35 - l.delay) / 0.4));
+                  if (p <= 0) return null;
+                  return <line key={i} x1={f.x} y1={f.y} x2={f.x + (t.x - f.x) * p} y2={f.y + (t.y - f.y) * p} stroke={c.secondary} strokeWidth={1.2} opacity={0.5 * p} />;
+                })}
+                {nodes.map((n, i) => {
+                  const p = Math.max(0, Math.min(1, (prog - n.delay) / 0.5));
+                  if (p <= 0) return null;
+                  const pulse = 0.7 + Math.sin(frame / 18 + n.pulse) * 0.3;
+                  return (
+                    <g key={i}>
+                      <circle cx={n.x} cy={n.y} r={n.size * 4 * p} fill={c.primary} opacity={0.08 * p} />
+                      <circle cx={n.x} cy={n.y} r={n.size * p * pulse} fill={i % 3 === 0 ? c.secondary : c.primary} opacity={0.9 * p} filter="url(#glow)" />
+                      <circle cx={n.x} cy={n.y} r={n.size * 0.35 * p} fill="#fff" opacity={0.85 * p} />
+                    </g>
+                  );
+                })}
+              </svg>
+            );
+          };
+
+          const ParticleMorph: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { fps, durationInFrames } = useVideoConfig();
+            const particles = useMemo(() => Array.from({ length: 200 }, (_, i) => {
+              const sx = seeded(i, 1) * w, sy = seeded(i, 2) * h;
+              const a = seeded(i, 3) * Math.PI * 2;
+              const r = Math.min(w, h) * 0.28;
+              return { sx, sy, tx: w / 2 + Math.cos(a) * r, ty: h / 2 + Math.sin(a) * r,
+                size: 1.5 + seeded(i, 4) * 2.5, delay: seeded(i, 5) * 0.5, hue: seeded(i, 6) };
+            }), [w, h]);
+            const inP = interpolate(frame, [0, fps * 3.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) });
+            const outP = interpolate(frame, [durationInFrames - fps * 2, durationInFrames], [0, 1], { extrapolateLeft: 'clamp' });
+            return (
+              <>
+                {particles.map((p, i) => {
+                  const local = Math.max(0, Math.min(1, (inP - p.delay) / (1 - p.delay)));
+                  const e = 1 - Math.pow(1 - local, 3);
+                  const orbit = Math.sin(frame / 30 + p.delay * 10) * 8;
+                  const x = p.sx + (p.tx - p.sx) * e + Math.cos(orbit) * orbit;
+                  const y = p.sy + (p.ty - p.sy) * e + Math.sin(orbit) * orbit;
+                  const col = p.hue > 0.5 ? c.primary : c.secondary;
+                  return <div key={i} style={{
+                    position: 'absolute', left: x, top: y, width: p.size, height: p.size,
+                    borderRadius: '50%', background: col,
+                    opacity: Math.min(1, local * 2) * (1 - outP * 0.5) }} />;
+                })}
+              </>
+            );
+          };
+
+          const DataFlow: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const streams = useMemo(() => Array.from({ length: 18 }, (_, i) => ({
+              y: (i + 0.5) * (h / 18), speed: 0.3 + seeded(i, 1) * 0.9,
+              offset: seeded(i, 2) * w, thickness: 1 + seeded(i, 3) * 2, hue: seeded(i, 4),
+            })), [h]);
+            return (
+              <>
+                {streams.map((s, i) => (
+                  <div key={`l${i}`} style={{ position: 'absolute', left: 0, top: s.y, width: w, height: s.thickness,
+                    background: `linear-gradient(90deg, transparent, ${s.hue > 0.5 ? c.primary : c.secondary}22, transparent)` }} />
+                ))}
+                {streams.map((s, i) => {
+                  const x = (s.offset + frame * s.speed * 6) % (w + 200) - 100;
+                  const col = s.hue > 0.5 ? c.primary : c.secondary;
+                  return (
+                    <div key={`d${i}`}>
+                      {[0,1,2,3,4].map(k => {
+                        const size = 6 - k * 0.9;
+                        return <div key={k} style={{ position: 'absolute', left: x - k * 12, top: s.y - size / 2,
+                          width: size, height: size, borderRadius: '50%', background: col,
+                          opacity: (1 - k / 5) * 0.9 }} />;
+                      })}
+                    </div>
+                  );
+                })}
+              </>
+            );
+          };
+
+          const OrganicGrowth: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const branches = useMemo(() => {
+              const out: any[] = [];
+              const grow = (x: number, y: number, a: number, len: number, d: number, id: number, delay: number) => {
+                const ex = x + Math.cos(a) * len, ey = y + Math.sin(a) * len;
+                out.push({ x1: x, y1: y, x2: ex, y2: ey, d, delay });
+                if (d < 5) {
+                  const nl = len * 0.72;
+                  grow(ex, ey, a - 0.4 - seeded(id, 1) * 0.3, nl, d + 1, id * 2, delay + 0.05);
+                  grow(ex, ey, a + 0.4 + seeded(id, 2) * 0.3, nl, d + 1, id * 2 + 1, delay + 0.05);
+                }
+              };
+              grow(w / 2, h * 0.9, -Math.PI / 2, Math.min(w, h) * 0.14, 0, 1, 0);
+              return out;
+            }, [w, h]);
+            const prog = interpolate(frame, [0, fps * 5.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) });
+            return (
+              <svg width={w} height={h} style={{ position: 'absolute' }}>
+                {branches.map((b, i) => {
+                  const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
+                  if (p <= 0) return null;
+                  return <line key={i} x1={b.x1} y1={b.y1} x2={b.x1 + (b.x2 - b.x1) * p} y2={b.y1 + (b.y2 - b.y1) * p}
+                    stroke={b.d % 2 === 0 ? c.primary : c.secondary} strokeWidth={3 - b.d * 0.4} opacity={0.7 - b.d * 0.1} strokeLinecap="round" />;
+                })}
+                {branches.filter(b => b.d === 5).map((b, i) => {
+                  const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
+                  if (p <= 0) return null;
+                  return <circle key={`t${i}`} cx={b.x2} cy={b.y2} r={3 + Math.sin(frame / 15 + i) * 0.8} fill={c.secondary} opacity={0.7 * p} />;
+                })}
+              </svg>
+            );
+          };
+
+          const GeometricTransform: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
+            const frame = useCurrentFrame();
+            const { durationInFrames } = useVideoConfig();
+            const shapes = useMemo(() => Array.from({ length: 5 }, (_, i) => ({
+              sides: 3 + i, radius: Math.min(w, h) * (0.12 + i * 0.06),
+              rotation: seeded(i, 1) * Math.PI, speed: (seeded(i, 2) - 0.5) * 0.02, hue: seeded(i, 3),
+            })), [w, h]);
+            const prog = interpolate(frame, [0, durationInFrames], [0, 1]);
+            const poly = (cx: number, cy: number, r: number, sides: number, rot: number) => {
+              const pts: string[] = [];
+              for (let k = 0; k < sides; k++) {
+                const a = rot + (k / sides) * Math.PI * 2;
+                pts.push(`${cx + Math.cos(a) * r},${cy + Math.sin(a) * r}`);
+              }
+              return pts.join(' ');
+            };
+            return (
+              <svg width={w} height={h} style={{ position: 'absolute' }}>
+                <Defs />
+                {shapes.map((s, i) => {
+                  const rot = s.rotation + frame * s.speed;
+                  const scale = 0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4;
+                  const r = s.radius * scale;
+                  const col = s.hue > 0.5 ? c.primary : c.secondary;
+                  return (
+                    <g key={i} filter="url(#glow)">
+                      <polygon points={poly(w / 2, h / 2, r, s.sides, rot)} fill="none" stroke={col} strokeWidth={2} opacity={0.7} />
+                      <polygon points={poly(w / 2, h / 2, r * 0.96, s.sides, rot + 0.1)} fill="none" stroke={col} strokeWidth={1} opacity={0.3} />
+                    </g>
+                  );
+                })}
+              </svg>
+            );
+          };
+
+          export const Scene: React.FC<{ idea: Idea }> = ({ idea }) => {
+            const frame = useCurrentFrame();
+            const { fps, durationInFrames, width, height } = useVideoConfig();
+            const { primary, secondary, bg } = idea.colors;
+            const camX = Math.sin(frame / 100) * width * 0.008;
+            const camY = Math.cos(frame / 120) * height * 0.006;
+            const camZoom = 1 + Math.sin(frame / 160) * 0.006;
+            const gradAngle = interpolate(frame, [0, durationInFrames], [135, 225]);
+            const exitOp = interpolate(frame, [durationInFrames - fps * 1.5, durationInFrames - fps * 0.3], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+            const c = { primary, secondary };
+            const engine = (() => {
+              switch (idea.type) {
+                case 'particle-morph': return <ParticleMorph w={width} h={height} c={c} />;
+                case 'data-flow': return <DataFlow w={width} h={height} c={c} />;
+                case 'organic-growth': return <OrganicGrowth w={width} h={height} c={c} />;
+                case 'geometric-transform': return <GeometricTransform w={width} h={height} c={c} />;
+                default: return <NeuralNetwork w={width} h={height} c={c} />;
+              }
+            })();
+            return (
+              <AbsoluteFill style={{ background: bg, overflow: 'hidden', opacity: exitOp }}>
+                <AbsoluteFill style={{ background: `linear-gradient(${gradAngle}deg, ${bg} 0%, ${bg} 50%, ${primary}12 100%)` }} />
+                <AbsoluteFill style={{ background: `radial-gradient(circle at 50% 50%, ${primary}08 0%, transparent 65%)` }} />
+                <AbsoluteFill style={{ transform: `translate(${camX}px, ${camY}px) scale(${camZoom})` }}>
+                  {engine}
+                </AbsoluteFill>
+                <AbsoluteFill style={{ background: `radial-gradient(ellipse at center, transparent 50%, ${bg} 110%)`, mixBlendMode: 'multiply', pointerEvents: 'none' }} />
+              </AbsoluteFill>
+            );
+          };
+          EOF
+
+          cat > src/Root.tsx <<'EOF'
+          import React from 'react';
+          import { Composition } from 'remotion';
+          import { Scene } from './Scene';
+          import { IDEAS } from './ideas';
+
+          export const RemotionRoot: React.FC = () => (
+            <>
+              {IDEAS.map((idea: any) => (
+                <React.Fragment key={idea.id}>
+                  <Composition id={`${idea.id}-16x9-4k`} component={Scene}
+                    durationInFrames={Math.round(idea.duration * 30)} fps={30}
+                    width={3840} height={2160} defaultProps={{ idea }} />
+                  <Composition id={`${idea.id}-9x16-4k`} component={Scene}
+                    durationInFrames={Math.round(idea.duration * 30)} fps={30}
+                    width={2160} height={3840} defaultProps={{ idea }} />
+                </React.Fragment>
+              ))}
+            </>
+          );
+          EOF
+
+      - name: Build composition list
+        id: comps
+        run: |
+          cd remotion-project
+          node -e "
+            const d = require('./video-ideas.json');
+            const list = [];
+            d.videos.forEach(v => {
+              list.push(v.id + '-16x9-4k');
+              list.push(v.id + '-9x16-4k');
+            });
+            require('fs').writeFileSync('comps.json', JSON.stringify(list));
+          "
+          echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
+
+      - name: Upload project artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: remotion-project
+          path: remotion-project/
+          retention-days: 1
+
+  # ══════════════════════════════════════════════════════════
+  # JOB 2 — RENDER PARALEL (max-parallel: 5)
+  # ══════════════════════════════════════════════════════════
+  render:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        comp: ${{ fromJSON(needs.prepare.outputs.comps) }}
+    steps:
+      - name: Download project
+        uses: actions/download-artifact@v4
+        with:
+          name: remotion-project
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          cd remotion-project
+          npm install
+
+      - name: Install CJK fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
+      - name: Render ${{ matrix.comp }}
+        run: |
+          cd remotion-project
+          npx remotion render "${{ matrix.comp }}" "out/${{ matrix.comp }}.mp4" \
+            --codec=h264 --concurrency=2 --jpeg-quality=92 --crf=14 --pixel-format=yuv420p
+
+      - name: Upload rendered video
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ matrix.comp }}
+          path: remotion-project/out/${{ matrix.comp }}.mp4
+          retention-days: 1
+
+  # ══════════════════════════════════════════════════════════
+  # JOB 3 — RELEASE
+  # ══════════════════════════════════════════════════════════
+  release:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all rendered videos
+        uses: actions/download-artifact@v4
+        with:
+          pattern: video-*
+          merge-multiple: true
+          path: final-output
+
+      - name: Show output files
+        run: ls -lh final-output/
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: batch-${{ github.run_number }}
+          name: "Stock 4K Batch ${{ github.run_number }}"
+          files: final-output/*.mp4
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
