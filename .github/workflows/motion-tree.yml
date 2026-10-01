@@ -455,6 +455,15 @@ jobs:
           # =============================================================================
           # BLENDER: CLOTH SIM
           # =============================================================================
+          def set_attrs(target, label, **kw):
+              """Set properti RNA; yang tidak ada di versi Blender ini di-log (non-fatal)."""
+              for k, v in kw.items():
+                  try:
+                      setattr(target, k, v)
+                  except (AttributeError, TypeError) as exc:
+                      log(f"WARN: {label}.{k} tidak tersedia di Blender {bpy.app.version_string} ({exc})")
+
+
           def simulate(obj, frames):
               sc = bpy.context.scene
               sc.frame_start, sc.frame_end = 1, frames
@@ -466,23 +475,17 @@ jobs:
 
               cl = obj.modifiers.new("Cloth", "CLOTH")
               s, c = cl.settings, cl.collision_settings
-              s.quality = 10
-              s.mass = 0.30
-              s.air_damping = 1.5
-              s.bending_model = "ANGULAR"
-              s.tension_stiffness = s.compression_stiffness = s.shear_stiffness = 25.0
-              s.tension_damping = s.compression_damping = s.shear_damping = 25.0
-              s.bending_stiffness = 1.5
-              s.bending_damping = 0.5
-              s.use_pin_cloth = True
+              set_attrs(s, "cloth.settings",
+                        quality=10, mass=0.30, air_damping=1.5, bending_model="ANGULAR",
+                        tension_stiffness=25.0, compression_stiffness=25.0, shear_stiffness=25.0,
+                        tension_damping=25.0, compression_damping=25.0, shear_damping=25.0,
+                        bending_stiffness=1.5, bending_damping=0.5, pin_stiffness=1.0)
+              # Blender 4.x: pin aktif otomatis lewat vertex group ini (use_pin_cloth sudah dihapus)
               s.vertex_group_mass = "Pin"
-              s.pin_stiffness = 1.0
-              c.use_collision = True
-              c.distance_min = 0.012
-              c.collision_quality = 4
-              c.use_self_collision = True
-              c.self_distance_min = 0.006
-              c.self_friction = 5.0
+              assert s.vertex_group_mass == "Pin", "Pin group gagal terpasang"
+              set_attrs(c, "cloth.collision",
+                        use_collision=True, distance_min=0.012, collision_quality=4,
+                        use_self_collision=True, self_distance_min=0.006, self_friction=5.0)
               cl.point_cache.frame_start, cl.point_cache.frame_end = 1, frames
 
               sc.frame_set(1)
