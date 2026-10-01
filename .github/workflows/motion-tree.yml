@@ -806,11 +806,18 @@ jobs:
           bpy.ops.import_scene.gltf(filepath=os.path.abspath(a.glb))
           sc = bpy.context.scene
 
-          meshes = [o for o in sc.objects if o.type == "MESH"]
-          assert meshes, "GLB tidak berisi mesh"
+          # Importer glTF membuat mesh bantu (mis. "Icosphere") sebagai bentuk tampilan bone -> bukan bagian aset.
+          all_meshes = [o for o in sc.objects if o.type == "MESH"]
+          meshes = [o for o in all_meshes if o.name.startswith("Cloak_")]
+          for o in all_meshes:
+              if o not in meshes:
+                  o.hide_render = True
+                  o.hide_viewport = True
+          assert meshes, f"Tidak ada mesh Cloak_* di GLB. Ditemukan: {[o.name for o in all_meshes]}"
           for o in meshes:
               assert o.data.materials and o.data.materials[0], f"{o.name} tanpa material"
-          print("Mesh terimpor:", [(o.name, len(o.data.polygons)) for o in meshes])
+              assert o.find_armature() is not None, f"{o.name} tidak ter-skin ke armature"
+          print("Mesh terimpor:", [(o.name, len(o.data.polygons), o.data.materials[0].name) for o in meshes])
 
           sc.render.engine = "CYCLES"
           cy = sc.cycles
