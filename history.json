@@ -34,6 +34,41 @@
       "concept": "ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
       "renderedAt": "2026-09-30T22:12:55.484Z",
       "run": "3"
+    },
+    {
+      "id": "glass-monoliths-connect",
+      "type": "neural-network",
+      "concept": "ISOLATION vs CONNECTION — A desolate expanse of dark glass pillars slowly bridges together through hyper-detailed filaments of glowing light.",
+      "renderedAt": "2026-10-01T04:11:42.896Z",
+      "run": "7"
+    },
+    {
+      "id": "magnetic-sand-disruption",
+      "type": "particle-morph",
+      "concept": "ORDER vs CHAOS — A flat, perfectly ordered plain of amber dust explodes into a chaotic pink magnetic swirl before freezing in gravity-defying stasis.",
+      "renderedAt": "2026-10-01T04:11:42.896Z",
+      "run": "7"
+    },
+    {
+      "id": "dormant-riverbed-pulse",
+      "type": "data-flow",
+      "concept": "SPEED vs STILLNESS — Heavy basalt stone plates remain stubbornly still while liquid light data surges through the cracks at warp speed.",
+      "renderedAt": "2026-10-01T04:11:42.896Z",
+      "run": "7"
+    },
+    {
+      "id": "timber-decay-reclamation",
+      "type": "organic-growth",
+      "concept": "GROWTH vs DECAY — Dead, flaking wooden textures are gradually consumed and reclaimed by hyper-vibrant, bioluminescent flora.",
+      "renderedAt": "2026-10-01T04:11:42.896Z",
+      "run": "7"
+    },
+    {
+      "id": "obsidian-shatter-equilibrium",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — A monolithic, solid obsidian block shatters into thousands of microscopic, paper-thin floating violet glass panes.",
+      "renderedAt": "2026-10-01T04:11:42.896Z",
+      "run": "7"
     }
   ],
   "version": 1
