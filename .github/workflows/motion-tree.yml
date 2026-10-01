@@ -1,8 +1,7 @@
 # =============================================================================
-#  CHRONO-SHINOBI — 3D NINJA CLOAK RENDER PIPELINE
-#  Satu file YAML ini membangun proyek Remotion 3D dari nol,
-#  lalu merender video menggunakan software renderer (swangle)
-#  yang berjalan di GitHub Actions tanpa GPU fisik.
+#  CHRONO-SHINOBI v2 — Hooded Ninja Silhouette
+#  Perbaikan dari v1: figur humanoid dengan LatheGeometry, visor,
+#  partikel di dalam volume jubah, framing kamera yang benar.
 # =============================================================================
 
 name: Render Chrono-Shinobi 3D
@@ -31,30 +30,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # FIX: hapus 'cache: npm' karena lock file belum ada saat step ini berjalan
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # -----------------------------------------------------------------------
-      # LANGKAH 1: Tulis semua file proyek ke dalam workspace runner
-      # -----------------------------------------------------------------------
       - name: Create project files
         run: |
           mkdir -p src
 
-          # -------------------------------------------------------------------
-          # package.json
-          # -------------------------------------------------------------------
           cat <<'EOF' > package.json
           {
             "name": "chrono-shinobi",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "private": true,
-            "scripts": {
-              "render": "remotion render ChronoShinobi out/chrono-shinobi.mp4 --gl=swangle"
-            },
             "dependencies": {
               "@remotion/cli": "4.0.230",
               "@remotion/three": "4.0.230",
@@ -72,9 +61,6 @@ jobs:
           }
           EOF
 
-          # -------------------------------------------------------------------
-          # tsconfig.json
-          # -------------------------------------------------------------------
           cat <<'EOF' > tsconfig.json
           {
             "compilerOptions": {
@@ -85,65 +71,50 @@ jobs:
               "esModuleInterop": true,
               "skipLibCheck": true,
               "moduleResolution": "node",
-              "allowSyntheticDefaultImports": true,
-              "forceConsistentCasingInFileNames": true
+              "allowSyntheticDefaultImports": true
             },
             "include": ["src"]
           }
           EOF
 
-          # -------------------------------------------------------------------
-          # remotion.config.ts
-          # -------------------------------------------------------------------
           cat <<'EOF' > remotion.config.ts
           import { Config } from '@remotion/cli/config';
-
           Config.setVideoImageFormat('jpeg');
           Config.setOverwriteOutput(true);
           EOF
 
-          # -------------------------------------------------------------------
-          # src/index.ts
-          # -------------------------------------------------------------------
           cat <<'EOF' > src/index.ts
           import { registerRoot } from 'remotion';
           import { RemotionRoot } from './Root';
-
           registerRoot(RemotionRoot);
           EOF
 
-          # -------------------------------------------------------------------
-          # src/Root.tsx
-          # -------------------------------------------------------------------
           cat <<'EOF' > src/Root.tsx
           import React from 'react';
           import { Composition } from 'remotion';
           import { ChronoShinobi } from './ChronoShinobi';
 
-          export const RemotionRoot: React.FC = () => {
-            return (
-              <Composition
-                id="ChronoShinobi"
-                component={ChronoShinobi}
-                durationInFrames={300}
-                fps={30}
-                width={1920}
-                height={1080}
-              />
-            );
-          };
+          export const RemotionRoot: React.FC = () => (
+            <Composition
+              id="ChronoShinobi"
+              component={ChronoShinobi}
+              durationInFrames={300}
+              fps={30}
+              width={1920}
+              height={1080}
+            />
+          );
           EOF
 
-          # -------------------------------------------------------------------
-          # src/ChronoShinobi.tsx  —  Scene utama
-          # -------------------------------------------------------------------
           cat <<'EOF' > src/ChronoShinobi.tsx
           import React from 'react';
           import { ThreeCanvas } from '@remotion/three';
           import { useCurrentFrame } from 'remotion';
           import { CameraRig } from './CameraRig';
-          import { CloakOuter } from './CloakOuter';
-          import { CloakInner } from './CloakInner';
+          import { Cloak } from './Cloak';
+          import { Visor } from './Visor';
+          import { CircuitParticles } from './CircuitParticles';
+          import { GroundGlow } from './GroundGlow';
 
           export const ChronoShinobi: React.FC = () => {
             const frame = useCurrentFrame();
@@ -153,26 +124,24 @@ jobs:
               <ThreeCanvas
                 width={1920}
                 height={1080}
-                camera={{ fov: 45, position: [0, 2, 5] }}
+                camera={{ fov: 40, position: [0, 2, 6] }}
+                gl={{ antialias: true }}
               >
-                <color attach="background" args={['#050510']} />
+                <color attach="background" args={['#03030a']} />
+                <fog attach="fog" args={['#03030a', 8, 20]} />
                 <CameraRig time={time} />
-                <ambientLight intensity={0.3} />
-                <directionalLight
-                  position={[3, 5, 2]}
-                  intensity={0.6}
-                  color="#88ccff"
-                />
-                <CloakOuter time={time} />
-                <CloakInner time={time} />
+                <ambientLight intensity={0.25} />
+                <directionalLight position={[4, 6, 3]} intensity={0.5} color="#88bbff" />
+                <pointLight position={[0, 1.5, 2]} intensity={1.2} color="#2266ff" distance={8} />
+                <GroundGlow />
+                <CircuitParticles time={time} />
+                <Cloak time={time} />
+                <Visor time={time} />
               </ThreeCanvas>
             );
           };
           EOF
 
-          # -------------------------------------------------------------------
-          # src/CameraRig.tsx  —  Kamera orbit sinematik
-          # -------------------------------------------------------------------
           cat <<'EOF' > src/CameraRig.tsx
           import React, { useEffect } from 'react';
           import { useThree } from '@react-three/fiber';
@@ -181,144 +150,276 @@ jobs:
             const { camera } = useThree();
 
             useEffect(() => {
-              const radius = 5.5;
-              const angle = time * 0.25;
+              const radius = 5.8;
+              const angle = time * 0.22;
               camera.position.x = Math.sin(angle) * radius;
               camera.position.z = Math.cos(angle) * radius;
-              camera.position.y = 2.0 + Math.sin(time * 0.6) * 0.4;
-              camera.lookAt(0, 1.5, 0);
+              camera.position.y = 2.4 + Math.sin(time * 0.5) * 0.35;
+              camera.lookAt(0, 1.75, 0);
             }, [time, camera]);
 
             return null;
           };
           EOF
 
-          # -------------------------------------------------------------------
-          # src/CloakOuter.tsx  —  Jubah luar dengan shader Chrono-Thread
-          # -------------------------------------------------------------------
-          cat <<'EOF' > src/CloakOuter.tsx
+          cat <<'EOF' > src/Cloak.tsx
           import React, { useMemo, useEffect } from 'react';
           import * as THREE from 'three';
 
+          // Profil siluet dari bawah (hem lebar) -> pinggang -> bahu -> hood meruncing
+          const buildProfile = (): THREE.Vector2[] => [
+            new THREE.Vector2(0.00, 0.00),
+            new THREE.Vector2(1.15, 0.00),  // hem edge
+            new THREE.Vector2(1.18, 0.15),  // slight outward flare
+            new THREE.Vector2(1.10, 0.45),
+            new THREE.Vector2(0.98, 0.85),
+            new THREE.Vector2(0.85, 1.25),
+            new THREE.Vector2(0.75, 1.65),
+            new THREE.Vector2(0.70, 2.00),
+            new THREE.Vector2(0.72, 2.25),  // shoulders
+            new THREE.Vector2(0.70, 2.45),  // neck
+            new THREE.Vector2(0.73, 2.65),  // hood start
+            new THREE.Vector2(0.76, 2.90),  // hood widest
+            new THREE.Vector2(0.72, 3.15),
+            new THREE.Vector2(0.55, 3.40),
+            new THREE.Vector2(0.28, 3.58),
+            new THREE.Vector2(0.00, 3.65),  // hood tip
+          ];
+
           const vertexShader = `
             uniform float uTime;
-            varying vec3 vPosition;
-            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+            varying float vWorldY;
+            varying float vAngleU;
+
             void main() {
-              vUv = uv;
+              vAngleU = uv.x;
               vec3 pos = position;
-              float wave = sin(pos.y * 3.0 + uTime * 2.0) * 0.08
-                         + cos(pos.x * 4.0 + uTime * 1.5) * 0.04;
-              pos += normal * wave;
-              vPosition = pos;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+              float angle = atan(pos.z, pos.x);
+              // Fabric wave: more at the bottom, less at the top
+              float bottomMask = smoothstep(3.5, 0.0, pos.y);
+              float wave = sin(angle * 6.0 + uTime * 1.8) * 0.05
+                         + cos(pos.y * 3.0 + uTime * 1.2) * 0.03;
+              pos += normal * wave * bottomMask;
+
+              vNormal = normalize(normalMatrix * normal);
+              vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+              vViewPosition = -mv.xyz;
+              vWorldY = (modelMatrix * vec4(pos, 1.0)).y;
+              gl_Position = projectionMatrix * mv;
             }
           `;
 
           const fragmentShader = `
             uniform float uTime;
-            varying vec3 vPosition;
-            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+            varying float vWorldY;
+            varying float vAngleU;
+
             void main() {
-              vec3 color = vec3(0.01, 0.01, 0.03);
-              float glow = sin(vPosition.y * 2.0 - uTime * 3.0) * 0.5 + 0.5;
-              glow = pow(glow, 3.0);
-              color += vec3(0.0, 0.4, 1.0) * glow * 0.6;
-              float alpha = 0.8 - abs(vUv.y - 0.5) * 0.6;
-              alpha *= 0.8 + 0.2 * sin(uTime * 2.0);
+              vec3 viewDir = normalize(vViewPosition);
+              float fresnel = 1.0 - abs(dot(vNormal, viewDir));
+              fresnel = pow(fresnel, 2.5);
+
+              vec3 base = vec3(0.015, 0.015, 0.045);
+
+              // Vertical energy veins wrapping around the cloak
+              float veins = sin(vAngleU * 45.0 + uTime * 0.6) * 0.5 + 0.5;
+              veins = smoothstep(0.88, 1.0, veins);
+              float veinFade = smoothstep(3.5, 1.5, vWorldY);
+
+              // Bottom hem glow (the "tail" of temporal energy)
+              float bottomGlow = smoothstep(1.0, 0.0, vWorldY) * 0.7;
+
+              // Hood crest accent
+              float hoodAccent = smoothstep(3.0, 3.5, vWorldY) * 0.6;
+
+              vec3 color = base;
+              color += vec3(0.0, 0.55, 1.0) * veins * 0.5 * veinFade;
+              color += vec3(0.0, 0.35, 0.9) * bottomGlow;
+              color += vec3(0.2, 0.6, 1.0) * hoodAccent;
+              color += vec3(0.3, 0.65, 1.0) * fresnel * 0.7;
+
+              // Transparency: more transparent in the middle so particles show through
+              float alpha = mix(0.55, 0.95, fresnel);
+              alpha = clamp(alpha, 0.45, 0.98);
+
               gl_FragColor = vec4(color, alpha);
             }
           `;
 
-          export const CloakOuter: React.FC<{ time: number }> = ({ time }) => {
+          export const Cloak: React.FC<{ time: number }> = ({ time }) => {
             const geometry = useMemo(() => {
-              const geo = new THREE.CylinderGeometry(1.0, 1.2, 3.0, 64, 32, true);
+              const geo = new THREE.LatheGeometry(buildProfile(), 96);
               geo.computeVertexNormals();
               return geo;
             }, []);
 
-            const material = useMemo(() => {
-              return new THREE.ShaderMaterial({
-                uniforms: { uTime: { value: 0 } },
-                vertexShader,
-                fragmentShader,
-                transparent: true,
-                side: THREE.DoubleSide,
-                depthWrite: false,
-              });
-            }, []);
+            const material = useMemo(() => new THREE.ShaderMaterial({
+              uniforms: { uTime: { value: 0 } },
+              vertexShader,
+              fragmentShader,
+              transparent: true,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+            }), []);
 
             useEffect(() => {
               material.uniforms.uTime.value = time;
             }, [time, material]);
 
-            return (
-              <mesh
-                geometry={geometry}
-                material={material}
-                position={[0, 1.5, 0]}
-              />
-            );
+            return <mesh geometry={geometry} material={material} renderOrder={2} />;
           };
           EOF
 
-          # -------------------------------------------------------------------
-          # src/CloakInner.tsx  —  Partikel sirkuit temporal di dalam jubah
-          # -------------------------------------------------------------------
-          cat <<'EOF' > src/CloakInner.tsx
-          import React, { useMemo, useEffect, useRef } from 'react';
+          cat <<'EOF' > src/Visor.tsx
+          import React, { useRef, useEffect } from 'react';
           import * as THREE from 'three';
 
-          export const CloakInner: React.FC<{ time: number }> = ({ time }) => {
-            const pointsRef = useRef<THREE.Points>(null);
-
-            const geometry = useMemo(() => {
-              const count = 1500;
-              const positions = new Float32Array(count * 3);
-              for (let i = 0; i < count; i++) {
-                const r = Math.random() * 0.8;
-                const angle = Math.random() * Math.PI * 2;
-                const y = Math.random() * 3.0;
-                positions[i * 3] = Math.cos(angle) * r;
-                positions[i * 3 + 1] = y;
-                positions[i * 3 + 2] = Math.sin(angle) * r;
-              }
-              const geo = new THREE.BufferGeometry();
-              geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-              return geo;
-            }, []);
-
+          export const Visor: React.FC<{ time: number }> = ({ time }) => {
+            const ref = useRef<THREE.Mesh>(null);
             useEffect(() => {
-              if (pointsRef.current) {
-                pointsRef.current.rotation.y = time * 0.5;
+              if (ref.current) {
+                const mat = ref.current.material as THREE.MeshBasicMaterial;
+                const pulse = 0.85 + 0.15 * Math.sin(time * 4.0);
+                mat.opacity = pulse;
               }
             }, [time]);
 
             return (
-              <points ref={pointsRef} geometry={geometry} position={[0, 1.5, 0]}>
-                <pointsMaterial
-                  color="#44aaff"
-                  size={0.06}
-                  transparent
-                  opacity={0.7}
-                  blending={THREE.AdditiveBlending}
-                  depthWrite={false}
-                  sizeAttenuation
-                />
-              </points>
+              <group position={[0, 2.9, 0.68]}>
+                {/* Outer glow halo */}
+                <mesh position={[0, 0, -0.02]}>
+                  <boxGeometry args={[0.62, 0.10, 0.02]} />
+                  <meshBasicMaterial
+                    color="#2266ff"
+                    transparent
+                    opacity={0.25}
+                    blending={THREE.AdditiveBlending}
+                    depthWrite={false}
+                    toneMapped={false}
+                  />
+                </mesh>
+                {/* Core visor bar */}
+                <mesh ref={ref}>
+                  <boxGeometry args={[0.52, 0.035, 0.04]} />
+                  <meshBasicMaterial
+                    color="#88ddff"
+                    transparent
+                    opacity={0.9}
+                    toneMapped={false}
+                  />
+                </mesh>
+              </group>
             );
           };
           EOF
 
-      # -----------------------------------------------------------------------
-      # LANGKAH 2: Install dependencies
-      # -----------------------------------------------------------------------
+          cat <<'EOF' > src/CircuitParticles.tsx
+          import React, { useMemo, useEffect, useRef } from 'react';
+          import * as THREE from 'three';
+
+          // Approximate radius of cloak silhouette at height y
+          const radiusAtY = (y: number): number => {
+            const profile: Array<[number, number]> = [
+              [0.00, 1.15], [0.45, 1.10], [0.85, 0.98], [1.25, 0.85],
+              [1.65, 0.75], [2.00, 0.70], [2.25, 0.72], [2.45, 0.70],
+              [2.65, 0.73], [2.90, 0.76], [3.15, 0.72], [3.40, 0.55],
+            ];
+            for (let i = 0; i < profile.length - 1; i++) {
+              if (y >= profile[i][0] && y <= profile[i + 1][0]) {
+                const t = (y - profile[i][0]) / (profile[i + 1][0] - profile[i][0]);
+                return profile[i][1] + (profile[i + 1][1] - profile[i][1]) * t;
+              }
+            }
+            return 0.6;
+          };
+
+          export const CircuitParticles: React.FC<{ time: number }> = ({ time }) => {
+            const ref = useRef<THREE.Points>(null);
+
+            const geometry = useMemo(() => {
+              const count = 2200;
+              const positions = new Float32Array(count * 3);
+              const colors = new Float32Array(count * 3);
+
+              for (let i = 0; i < count; i++) {
+                const y = 0.10 + Math.random() * 3.20;
+                const maxR = radiusAtY(y) * 0.85;
+                const r = Math.sqrt(Math.random()) * maxR;
+                const angle = Math.random() * Math.PI * 2;
+
+                positions[i * 3]     = Math.cos(angle) * r;
+                positions[i * 3 + 1] = y;
+                positions[i * 3 + 2] = Math.sin(angle) * r;
+
+                // Colour gradient: warmer blue at bottom, cooler cyan at top
+                const t = y / 3.4;
+                colors[i * 3]     = 0.20 + t * 0.30;
+                colors[i * 3 + 1] = 0.55 + t * 0.35;
+                colors[i * 3 + 2] = 1.00;
+              }
+
+              const geo = new THREE.BufferGeometry();
+              geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+              geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+              return geo;
+            }, []);
+
+            const material = useMemo(() => new THREE.PointsMaterial({
+              size: 0.045,
+              vertexColors: true,
+              transparent: true,
+              opacity: 0.85,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+              sizeAttenuation: true,
+            }), []);
+
+            useEffect(() => {
+              if (ref.current) ref.current.rotation.y = time * 0.25;
+            }, [time]);
+
+            return <points ref={ref} geometry={geometry} material={material} renderOrder={1} />;
+          };
+          EOF
+
+          cat <<'EOF' > src/GroundGlow.tsx
+          import React from 'react';
+          import * as THREE from 'three';
+
+          export const GroundGlow: React.FC = () => (
+            <group position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+              <mesh>
+                <ringGeometry args={[0.0, 2.6, 64]} />
+                <meshBasicMaterial
+                  color="#0a1a55"
+                  transparent
+                  opacity={0.35}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                />
+              </mesh>
+              <mesh position={[0, 0, 0.001]}>
+                <ringGeometry args={[0.9, 1.05, 64]} />
+                <meshBasicMaterial
+                  color="#2266ff"
+                  transparent
+                  opacity={0.5}
+                  side={THREE.DoubleSide}
+                  depthWrite={false}
+                  toneMapped={false}
+                />
+              </mesh>
+            </group>
+          );
+          EOF
+
       - name: Install dependencies
         run: npm install
 
-      # -----------------------------------------------------------------------
-      # LANGKAH 3: Render video 3D dengan software renderer (swangle)
-      # -----------------------------------------------------------------------
       - name: Render 3D video with swangle
         run: |
           npx remotion render ${{ github.event.inputs.composition_id }} \
@@ -330,9 +431,6 @@ jobs:
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
-      # -----------------------------------------------------------------------
-      # LANGKAH 4: Upload hasil render sebagai artifact
-      # -----------------------------------------------------------------------
       - name: Upload video artifact
         uses: actions/upload-artifact@v4
         with:
