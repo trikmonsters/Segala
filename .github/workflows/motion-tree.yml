@@ -31,11 +31,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # FIX: hapus 'cache: npm' karena lock file belum ada saat step ini berjalan
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       # -----------------------------------------------------------------------
       # LANGKAH 1: Tulis semua file proyek ke dalam workspace runner
