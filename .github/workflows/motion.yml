@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   # ══════════════════════════════════════════════════════════
-  # JOB 1 — PREPARE: Tulis ide manual + scaffold project
+  # JOB 1 — PREPARE
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
@@ -41,7 +41,7 @@ jobs:
           }
           EOF
 
-      - name: Write video-ideas.json (custom)
+      - name: Write video-ideas.json
         run: |
           cd remotion-project
           cat > video-ideas.json <<'IDEAS_EOF'
@@ -50,15 +50,15 @@ jobs:
               {
                 "id": "pruned-memory-lattice",
                 "title": "Pruned Memory Lattice",
-                "description": "A living neural lattice continuously grows connections while selectively pruning its own history, creating a sophisticated metaphor for adaptation and forgotten knowledge.",
-                "concept": "GROWTH vs DECAY — a neural lattice cultivates new pathways while older memories quietly fossilize and disappear.",
+                "description": "A living neural lattice continuously grows connections while selectively pruning its own history.",
+                "concept": "GROWTH vs DECAY — a neural lattice cultivates new pathways while older memories quietly fossilize.",
                 "keywords": ["abstract","motion","background","conceptual","4K","neural","network","memory","growth","decay","adaptation","learning","knowledge","technology","innovation","connections","pruning","futuristic","dark","cinematic","B-roll"],
                 "composition": {
                   "type": "neural-network",
                   "primaryColor": "#5367B8",
                   "secondaryColor": "#5BC7D9",
                   "bgColor": "#0B1024",
-                  "animationStyle": "organic synaptic motion with restrained cinematic depth",
+                  "animationStyle": "organic synaptic motion",
                   "durationSeconds": 15,
                   "elements": [
                     {"name":"living lattice","behavior":"branching neural structure extending","timing":{"start":0,"end":7}},
@@ -70,15 +70,15 @@ jobs:
               {
                 "id": "ember-to-petal-collapse",
                 "title": "Ember to Petal Collapse",
-                "description": "A dense field of warm particles repeatedly gathers into a delicate flower-like structure before collapsing back into drifting fragments.",
-                "concept": "FRAGILITY vs STRENGTH — fragile particles become a resilient temporary structure before surrendering to gravity.",
+                "description": "A dense field of warm particles gathers into a flower-like structure before collapsing.",
+                "concept": "FRAGILITY vs STRENGTH — fragile particles become a resilient structure before surrendering to gravity.",
                 "keywords": ["abstract","motion","background","conceptual","4K","particles","transformation","fragility","strength","flower","formation","collapse","impermanence","creativity","emotion","metamorphosis","amber","pink","cinematic","dark","B-roll"],
                 "composition": {
                   "type": "particle-morph",
                   "primaryColor": "#D49A5B",
                   "secondaryColor": "#B96F86",
                   "bgColor": "#0B090D",
-                  "animationStyle": "fluid particle choreography with tactile clustering",
+                  "animationStyle": "fluid particle choreography",
                   "durationSeconds": 15,
                   "elements": [
                     {"name":"ember field","behavior":"particles sweep laterally","timing":{"start":0,"end":5}},
@@ -90,15 +90,15 @@ jobs:
               {
                 "id": "river-of-contradicting-signals",
                 "title": "River of Contradicting Signals",
-                "description": "Two disciplined streams of information travel through a dark environment, gradually crossing, exchanging direction, and emerging as a single coherent current.",
-                "concept": "ORDER vs CHAOS — two organized information currents collide and reorganize into a new pattern.",
+                "description": "Two disciplined streams of information travel through a dark environment, crossing and emerging as one coherent current.",
+                "concept": "ORDER vs CHAOS — two organized information currents collide and reorganize.",
                 "keywords": ["abstract","motion","background","conceptual","4K","data","flow","signals","order","chaos","information","communication","convergence","systems","technology","decision","streams","emerald","blue","midnight","B-roll"],
                 "composition": {
                   "type": "data-flow",
                   "primaryColor": "#43B88A",
                   "secondaryColor": "#4D88B8",
                   "bgColor": "#07121B",
-                  "animationStyle": "precise ribbon-flow with controlled turbulence",
+                  "animationStyle": "precise ribbon-flow",
                   "durationSeconds": 15,
                   "elements": [
                     {"name":"parallel currents","behavior":"two channels move rapidly","timing":{"start":0,"end":6}},
@@ -110,7 +110,7 @@ jobs:
               {
                 "id": "rooted-forest-circuit",
                 "title": "Rooted Forest Circuit",
-                "description": "Fine roots spread through a dark forest floor while luminous nutrients travel between neighboring growths, turning an underground ecosystem into a living communication system.",
+                "description": "Fine roots spread through a dark forest floor while luminous nutrients travel between neighboring growths.",
                 "concept": "ORGANIC vs MECHANICAL — a biological root system behaves like a self-organizing circuit.",
                 "keywords": ["abstract","motion","background","conceptual","4K","organic","growth","roots","forest","biology","ecosystem","connection","sustainability","resilience","communication","nature","network","green","lime","dark","B-roll"],
                 "composition": {
@@ -118,7 +118,7 @@ jobs:
                   "primaryColor": "#6FAF52",
                   "secondaryColor": "#A2C85B",
                   "bgColor": "#07150D",
-                  "animationStyle": "macro organic time-lapse with bioluminescent pulses",
+                  "animationStyle": "macro organic time-lapse",
                   "durationSeconds": 15,
                   "elements": [
                     {"name":"root expansion","behavior":"roots creep through soil","timing":{"start":0,"end":8}},
@@ -130,15 +130,15 @@ jobs:
               {
                 "id": "folded-rose-topology",
                 "title": "Folded Rose Topology",
-                "description": "A continuous surface folds through itself, changing from an orderly planar structure into an intricate rose-like topology before unfolding into a new configuration.",
-                "concept": "SPEED vs STILLNESS — a static surface undergoes rapid topological change before arriving at calmer geometry.",
+                "description": "A continuous surface folds through itself, changing from an orderly planar structure into an intricate rose-like topology.",
+                "concept": "SPEED vs STILLNESS — a static surface undergoes rapid topological change.",
                 "keywords": ["abstract","motion","background","conceptual","4K","geometry","transformation","topology","folding","architecture","complexity","change","mathematics","design","structure","rose","violet","plum","cinematic","B-roll"],
                 "composition": {
                   "type": "geometric-transform",
                   "primaryColor": "#8C6BC2",
                   "secondaryColor": "#B9789A",
                   "bgColor": "#160C20",
-                  "animationStyle": "precision morphing with elastic surface deformation",
+                  "animationStyle": "precision morphing",
                   "durationSeconds": 15,
                   "elements": [
                     {"name":"ordered plane","behavior":"tiled surface slides laterally","timing":{"start":0,"end":5}},
@@ -455,7 +455,7 @@ jobs:
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 2 — RENDER PARALEL (max-parallel: 5)
+  # JOB 2 — RENDER PARALEL (max-parallel: 5) — FIXED
   # ══════════════════════════════════════════════════════════
   render:
     needs: prepare
@@ -467,10 +467,12 @@ jobs:
       matrix:
         comp: ${{ fromJSON(needs.prepare.outputs.comps) }}
     steps:
+      # ✅ FIX: download ke folder remotion-project secara eksplisit
       - name: Download project
         uses: actions/download-artifact@v4
         with:
           name: remotion-project
+          path: remotion-project
 
       - uses: actions/setup-node@v4
         with:
@@ -498,7 +500,7 @@ jobs:
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 3 — RELEASE
+  # JOB 3 — RELEASE — FIXED path
   # ══════════════════════════════════════════════════════════
   release:
     needs: render
