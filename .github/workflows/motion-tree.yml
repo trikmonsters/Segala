@@ -1,676 +1,999 @@
-#!/usr/bin/env python3
-"""
-CHRONO-SHINOBI — Game-Ready Cloak Generator  (Blender 4.2 LTS+)
-===============================================================
-Output (semua dalam skala meter, origin di lantai, karakter menghadap -Y Blender / +Z glTF):
-
-  <name>.glb         LOD0 (hero, ~25k tris) + rig 64 bone + material PBR
-  <name>_LODs.glb    LOD0 / LOD1 / LOD2 dalam satu file, material & texture dipakai bersama
-  textures/*.png     BaseColor (sRGB), Normal (OpenGL), ORM (R=AO G=Rough B=Metal), Emissive
-  source/<name>.blend  file sumber untuk artist
-  <name>_manifest.json statistik (tris, bone, texel density, status bake)
-
-Pipeline:
-  1. Rest-grid jubah (topologi quad terstruktur, bukaan depan, lubang leher)
-  2. Cloth sim di atas body proxy (collision + self-collision), top ring di-pin
-  3. Grid hasil sim = LOD0; LOD1/LOD2 = sub-sampling grid (UV identik -> texture dipakai bersama)
-  4. High-poly (Subsurf 3 + displace kerutan) -> BAKE Normal & AO ke LOD0 (Cycles)
-  5. Texture PBR prosedural (twill weave, trim, rune emisif) dibuat dengan numpy, digabung dengan hasil bake
-  6. Rig cloth-bone 9 chain x 7 joint, skin weight analitik (bilinear, max 4 influence)
-  7. Export GLB (tanpa Draco supaya kompatibel dengan Unreal/Unity/Godot)
-
-Jalankan:
-  blender -b --factory-startup --python-exit-code 1 --python build_aaa_cloak.py -- \
-      --out public/models --name ninja_cloak_aaa --res 4096
-"""
-import argparse
-import json
-import math
-import os
-import struct
-import sys
-import time
-import zlib
-
-import numpy as np
-
-try:
-    import bpy
-    from mathutils import Vector
-except ImportError:          # memungkinkan unit-test fungsi numpy di luar Blender
-    bpy = None
-    Vector = None
-
 # =============================================================================
-# KONFIGURASI
+#  CHRONO-SHINOBI — Game-Ready Cloak Pipeline (Blender -> GLB -> Remotion)
+#  SATU FILE: semua skrip Blender ditanam di workflow ini. Cukup commit file ini ke
+#  .github/workflows/ lalu jalankan via "Run workflow".
+#
+#  Output artifact (nama: <asset_name>-game-ready):
+#    <asset>.glb          LOD0 hero (~24.6k tris) + rig 64 bone + material PBR
+#    <asset>_LODs.glb     LOD0/LOD1/LOD2 dalam satu file (texture dipakai bersama)
+#    <asset>_web.glb      varian ringan untuk Remotion/three.js (WebP 2K + meshopt)
+#    textures/*.png       BaseColor, Normal (OpenGL), ORM (R=AO G=Rough B=Metal), Emissive
+#    source/<asset>.blend file sumber untuk artist
+#    previews/*.png       render QA dari GLB yang di-import ulang
 # =============================================================================
-SEG, RINGS = 128, 96                       # quad grid: keliling x tinggi  (LOD0 = 128*96 quad ≈ 24.6k tris)
-NC, NB = 9, 6                              # rig: jumlah chain & segmen per chain  (SEG % (NC-1) == 0, RINGS % NB == 0)
-LOD_STRIDES = {"LOD0": 1, "LOD1": 2, "LOD2": 4}
-
-FRONT_GAP_DEG = 56.0                       # bukaan depan jubah
-ARC = math.radians(360.0 - FRONT_GAP_DEG)
-A0 = math.radians(-90.0 + FRONT_GAP_DEG / 2.0)
-
-# Profil jubah (meter) — z menurun dari kerah ke hem
-PROFILE_Z = np.array([1.52, 1.46, 1.38, 1.20, 0.90, 0.60, 0.30, 0.10])
-PROFILE_RX = np.array([0.16, 0.29, 0.34, 0.38, 0.46, 0.56, 0.66, 0.74])
-PROFILE_RY = np.array([0.14, 0.19, 0.22, 0.24, 0.28, 0.34, 0.42, 0.50])
-
-HIGH_SUBDIV = 3                            # level subsurf untuk high-poly bake
-WRINKLE_AMPLITUDE = 0.006                  # meter
-AO_DISTANCE = 0.45                         # meter
-
-# Parameter texture (meter)
-THREAD = 0.008                             # pitch benang
-HEM_W, EDGE_W = 0.20, 0.10                 # lebar trim hem & tepi depan
-CELL, RUNE_V0, RUNE_H = 0.05, 0.035, 0.125 # grid rune
-WEAVE_STRENGTH = 2.5
-
-BONES = [f"cloak_c{c:02d}_r{r:02d}" for c in range(NC) for r in range(NB + 1)]
-
-assert SEG % (NC - 1) == 0 and RINGS % NB == 0
-assert all(SEG % s == 0 and RINGS % s == 0 for s in LOD_STRIDES.values())
-
-
-def log(msg):
-    print(f"[cloak {time.strftime('%H:%M:%S')}] {msg}", flush=True)
-
-
-# =============================================================================
-# UTIL NUMPY (tanpa dependensi Blender -> bisa di-test terpisah)
-# =============================================================================
-def smoothstep(e0, e1, x):
-    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
-def to_u8(x):
-    return (np.clip(x, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
-
-
-def write_png(path, img):
-    """PNG 8-bit RGB/RGBA murni (zlib), baris 0 = atas. Tidak bergantung color management Blender."""
-    assert img.dtype == np.uint8 and img.ndim == 3 and img.shape[2] in (3, 4)
-    h, w, c = img.shape
-    raw = np.ascontiguousarray(img).reshape(h, w * c)
-    filt = raw.copy()
-    filt[:, c:] = np.subtract(raw[:, c:], raw[:, :-c], dtype=np.uint8)      # filter "Sub" -> kompresi lebih baik
-    scan = np.empty((h, w * c + 1), np.uint8)
-    scan[:, 0] = 1
-    scan[:, 1:] = filt
-
-    def chunk(tag, data):
-        return (struct.pack(">I", len(data)) + tag + data
-                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
-
-    png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2 if c == 3 else 6, 0, 0, 0))
-           + chunk(b"IDAT", zlib.compress(scan.tobytes(), 6))
-           + chunk(b"IEND", b""))
-    with open(path, "wb") as f:
-        f.write(png)
-
-
-def build_rest_grid():
-    """Grid (RINGS+1, SEG+1, 3). Ring 0 = kerah (atas), ring RINGS = hem. j naik = berlawanan arah jarum jam."""
-    z = np.linspace(1.52, 0.10, RINGS + 1)
-    rx = np.interp(z, PROFILE_Z[::-1], PROFILE_RX[::-1])
-    ry = np.interp(z, PROFILE_Z[::-1], PROFILE_RY[::-1])
-    a = A0 + ARC * np.linspace(0.0, 1.0, SEG + 1)
-    seed_fold = 1.0 + 0.04 * np.sin(7.0 * a)[None, :] * (1.0 - (z - 0.10) / 1.42)[:, None]   # pemecah simetri
-    P = np.empty((RINGS + 1, SEG + 1, 3), np.float32)
-    P[..., 0] = rx[:, None] * np.cos(a)[None, :] * seed_fold
-    P[..., 1] = ry[:, None] * np.sin(a)[None, :] * seed_fold
-    P[..., 2] = z[:, None]
-    return P
-
-
-def smooth_grid(P, iters=2, lam=0.35, hold_rows=2):
-    """Laplacian ringan untuk membuang jitter collision; baris pin tidak disentuh."""
-    P = P.astype(np.float32).copy()
-    for _ in range(iters):
-        avg = 0.25 * (P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:])
-        new = P.copy()
-        new[1:-1, 1:-1] = P[1:-1, 1:-1] + lam * (avg - P[1:-1, 1:-1])
-        new[:hold_rows] = P[:hold_rows]
-        P = new
-    return P
-
-
-def physical_size(P):
-    Lu = float(np.linalg.norm(np.diff(P, axis=1), axis=2).sum(axis=1).mean())
-    Lv = float(np.linalg.norm(np.diff(P, axis=0), axis=2).sum(axis=0).mean())
-    return Lu, Lv
-
-
-def skin_weights(nv, nu):
-    """Bobot bilinear 4 joint per vertex. Return ids (4,N) index ke BONES & w (4,N). Vertex idx = i*nu + j."""
-    fr = np.broadcast_to(np.arange(nv, dtype=np.float32)[:, None] * (NB / (nv - 1)), (nv, nu)).reshape(-1)
-    fc = np.broadcast_to(np.arange(nu, dtype=np.float32)[None, :] * ((NC - 1) / (nu - 1)), (nv, nu)).reshape(-1)
-    r0 = np.minimum(np.floor(fr + 1e-5).astype(np.int32), NB - 1)
-    c0 = np.minimum(np.floor(fc + 1e-5).astype(np.int32), NC - 2)
-    wr = np.clip(fr - r0, 0.0, 1.0)
-    wc = np.clip(fc - c0, 0.0, 1.0)
-    base = c0 * (NB + 1) + r0
-    ids = np.stack([base, base + (NB + 1), base + 1, base + (NB + 1) + 1])
-    w = np.stack([(1 - wc) * (1 - wr), wc * (1 - wr), (1 - wc) * wr, wc * wr])
-    return ids, w
-
-
-def make_textures(W, H, Lu, Lv, ao_px, nrm_px, seed=7):
-    """
-    Semua map dibuat dari (u,v) -> meter, jadi texel density seragam walau UV anisotropik.
-    ao_px / nrm_px: hasil bake (H,W,4) float, baris 0 = atas; None bila bake gagal.
-    Return dict uint8 (H,W,3): basecolor, normal, orm, emissive
-    """
-    rng = np.random.default_rng(seed)
-    u = ((np.arange(W, dtype=np.float32) + 0.5) / W)[None, :]
-    v = (1.0 - (np.arange(H, dtype=np.float32) + 0.5) / H)[:, None]
-    um, vm = u * Lu, v * Lv                                    # meter dari tepi kiri / dari hem
-
-    # ---- twill weave 2/2 -----------------------------------------------------
-    fu, fv = um / THREAD, vm / THREAD
-    tu, tv = np.floor(fu).astype(np.int32), np.floor(fv).astype(np.int32)
-    cu, cv = fu - tu, fv - tv
-    jit = rng.random((int(tv.max()) + 2, int(tu.max()) + 2)).astype(np.float32)
-    over = ((tu + tv) % 4) < 2
-    height = np.where(over, 0.55 + 0.45 * np.sin(np.pi * cu), 0.55 + 0.45 * np.sin(np.pi * cv)).astype(np.float32)
-    tj = jit[tv, tu]                                           # variasi per benang (H,W)
-    height += 0.10 * (tj - 0.5)
-    del over
-
-    # Normal tangent-space: +X = +U, +Y = +V (OpenGL, sesuai glTF). Baris naik = V turun.
-    wx = -WEAVE_STRENGTH * np.gradient(height, axis=1)
-    wy = WEAVE_STRENGTH * np.gradient(height, axis=0)
-
-    # ---- zona trim / garis / rune -------------------------------------------
-    def band(d, a, b):
-        return (d >= a) & (d <= b)
-
-    d_hem = vm
-    d_edge = np.minimum(um, Lu - um)
-    trim = (d_hem < HEM_W) | (d_edge < EDGE_W)
-    lines = (band(d_hem, 0.012, 0.018) | band(d_hem, HEM_W - 0.012, HEM_W - 0.006)
-             | band(d_edge, 0.012, 0.018) | band(d_edge, EDGE_W - 0.012, EDGE_W - 0.006))
-    ticks = (band(d_edge, 0.035, 0.060) & (np.floor(vm / 0.02).astype(np.int32) % 2 == 0)
-             & (d_hem > HEM_W + 0.01))
-    zone = band(d_hem, 0.035, 0.16) & (d_edge > EDGE_W + 0.01)
-
-    cell = np.floor(um / CELL).astype(np.int32)
-    rr = rng.random((int(cell.max()) + 2, 6))
-    lu = um / CELL - cell
-    lv = (vm - RUNE_V0) / RUNE_H
-    rune = (np.clip((0.07 - np.abs(lu - 0.5)) / 0.03, 0, 1)
-            * np.clip((0.46 - np.abs(lv - 0.5)) / 0.03, 0, 1))
-    for k, y in enumerate((0.2, 0.5, 0.8)):
-        bv = np.clip((0.028 - np.abs(lv - y)) / 0.012, 0, 1)
-        bl = np.clip((0.2 - np.abs(lu - 0.3)) / 0.03, 0, 1) * (rr[cell, k] > 0.45)
-        br = np.clip((0.2 - np.abs(lu - 0.7)) / 0.03, 0, 1) * (rr[cell, k + 3] > 0.45)
-        rune = np.maximum(rune, bv * np.maximum(bl, br))
-    rune = (rune * zone).astype(np.float32)
-    thread_lines = lines | ticks
-    emit = np.maximum(rune, 0.8 * thread_lines.astype(np.float32))
-    rune_m = rune > 0.3
-
-    # ---- emissive ------------------------------------------------------------
-    glow = np.array([0.10, 0.65, 1.00], np.float32)
-    emissive = to_u8(emit[..., None] * glow * (0.85 + 0.30 * tj[..., None]))
-
-    # ---- base color ----------------------------------------------------------
-    cloth = np.array([0.085, 0.092, 0.170], np.float32)
-    trimc = np.array([0.050, 0.056, 0.105], np.float32)
-    metal_thread = np.array([0.36, 0.42, 0.58], np.float32)
-    rune_base = np.array([0.04, 0.22, 0.36], np.float32)
-    tone = (0.80 + 0.30 * height) * (0.92 + 0.16 * tj)
-    dirt = 0.78 + 0.22 * smoothstep(0.0, 0.7, vm)              # sedikit lebih gelap di dekat hem
-    base = np.where(trim[..., None], trimc, cloth)
-    base = np.where(thread_lines[..., None], metal_thread, base)
-    base = base * (tone * dirt)[..., None]
-    base = np.where(rune_m[..., None], rune_base, base)
-    basecolor = to_u8(base)
-    del base
-
-    # ---- ORM -----------------------------------------------------------------
-    rough = (0.90 - 0.12 * height + 0.06 * tj).astype(np.float32)
-    rough = np.where(thread_lines, 0.32, rough)
-    rough = np.where(rune_m, 0.45, rough)
-    metal = np.where(thread_lines, 0.85, 0.0).astype(np.float32)
-    ao = np.ones((H, W), np.float32) if ao_px is None else ao_px[..., 0].astype(np.float32)
-    ao = np.clip(ao * (0.80 + 0.20 * height), 0, 1)
-    orm = to_u8(np.stack([ao, rough, metal], axis=-1))
-
-    # ---- normal: UDN blend (bake geometri + weave) -------------------------------
-    n = np.empty((H, W, 3), np.float32)
-    if nrm_px is None:
-        n[..., 0], n[..., 1], n[..., 2] = wx, wy, 1.0
-    else:
-        nb = nrm_px[..., :3] * 2.0 - 1.0
-        n[..., 0], n[..., 1], n[..., 2] = nb[..., 0] + wx, nb[..., 1] + wy, nb[..., 2]
-    n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
-    normal = to_u8(n * 0.5 + 0.5)
-
-    return {"basecolor": basecolor, "normal": normal, "orm": orm, "emissive": emissive}
-
-
-# =============================================================================
-# BLENDER: SCENE & MESH
-# =============================================================================
-def reset_scene():
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    sc = bpy.context.scene
-    sc.unit_settings.system = "METRIC"
-    sc.unit_settings.scale_length = 1.0
-    sc.render.fps = 24
-    world = bpy.data.worlds.new("BakeWorld")
-    sc.world = world
-    try:
-        world.light_settings.distance = AO_DISTANCE
-    except Exception as exc:  # noqa
-        log(f"WARN: world AO distance tidak bisa diset ({exc})")
-
-
-def remove_object(obj):
-    me = obj.data if obj.type == "MESH" else None
-    bpy.data.objects.remove(obj, do_unlink=True)
-    if me is not None and me.users == 0:
-        bpy.data.meshes.remove(me)
-
-
-def make_grid_object(name, P):
-    """Mesh quad dari grid (nv,nu,3) + UV grid (u = j/(nu-1), v = 1 - i/(nv-1)). Normal menghadap keluar."""
-    nv, nu, _ = P.shape
-    idx = np.arange(nv * nu).reshape(nv, nu)
-    quads = np.stack([idx[:-1, :-1], idx[1:, :-1], idx[1:, 1:], idx[:-1, 1:]], axis=-1).reshape(-1, 4)
-    me = bpy.data.meshes.new(name)
-    me.from_pydata(P.reshape(-1, 3).tolist(), [], quads.tolist())
-    me.update()
-
-    uu = np.tile(np.linspace(0.0, 1.0, nu, dtype=np.float32), nv)
-    vv = np.repeat(1.0 - np.linspace(0.0, 1.0, nv, dtype=np.float32), nu)
-    loop_v = np.empty(len(me.loops), np.int32)
-    me.loops.foreach_get("vertex_index", loop_v)
-    uv = np.stack([uu[loop_v], vv[loop_v]], axis=-1).astype(np.float32)
-    layer = me.uv_layers.new(name="UVMap")
-    layer.data.foreach_set("uv", uv.reshape(-1))
-    me.polygons.foreach_set("use_smooth", np.ones(len(me.polygons), dtype=bool))
-    me.update()
-
-    obj = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(obj)
-    return obj
-
-
-def read_eval_positions(obj):
-    dg = bpy.context.evaluated_depsgraph_get()
-    ev = obj.evaluated_get(dg)
-    me = ev.to_mesh()
-    a = np.empty(len(me.vertices) * 3, np.float32)
-    me.vertices.foreach_get("co", a)
-    ev.to_mesh_clear()
-    return a.reshape(-1, 3)
-
-
-def build_body_collider():
-    """Mannequin A-pose 1.8 m (hanya untuk collision, tidak diexport)."""
-    parts = []
-
-    def sphere(p, r, s=(1, 1, 1)):
-        bpy.ops.mesh.primitive_uv_sphere_add(segments=24, ring_count=12, radius=r, location=p, scale=s)
-        parts.append(bpy.context.active_object)
-
-    def limb(p0, p1, r0, r1):
-        p0, p1 = Vector(p0), Vector(p1)
-        d = p1 - p0
-        rot = Vector((0, 0, 1)).rotation_difference(d.normalized()).to_euler()
-        bpy.ops.mesh.primitive_cone_add(vertices=20, radius1=r0, radius2=r1, depth=d.length,
-                                        location=(p0 + p1) / 2, rotation=rot)
-        parts.append(bpy.context.active_object)
-
-    sphere((0, 0.01, 1.72), 0.105)                              # kepala
-    limb((0, 0, 1.42), (0, 0.005, 1.64), 0.055, 0.050)          # leher
-    sphere((0, 0, 1.18), 1.0, (0.18, 0.11, 0.30))               # torso
-    sphere((0, 0, 0.95), 1.0, (0.17, 0.11, 0.13))               # pelvis
-    for sx in (-1, 1):
-        limb((0, 0, 1.46), (sx * 0.21, 0, 1.42), 0.05, 0.05)    # trapezius
-        sphere((sx * 0.21, 0, 1.42), 0.05)                      # bahu
-        limb((sx * 0.21, 0, 1.42), (sx * 0.39, 0, 0.76), 0.048, 0.038)   # lengan (A-pose ±15°)
-        sphere((sx * 0.395, 0, 0.72), 0.05)                     # tangan
-        limb((sx * 0.10, 0, 0.95), (sx * 0.10, 0, 0.06), 0.09, 0.055)     # kaki
-
-    bpy.ops.object.select_all(action="DESELECT")
-    for o in parts:
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = parts[0]
-    bpy.ops.object.join()
-    body = bpy.context.active_object
-    body.name = "BodyProxy"
-    body.modifiers.new("Collision", "COLLISION")
-    body.collision.thickness_outer = 0.01
-    body.collision.cloth_friction = 8.0
-    return body
-
-
-# =============================================================================
-# BLENDER: CLOTH SIM
-# =============================================================================
-def simulate(obj, frames):
-    sc = bpy.context.scene
-    sc.frame_start, sc.frame_end = 1, frames
-    sc.frame_set(1)
-
-    pin = obj.vertex_groups.new(name="Pin")
-    nu = SEG + 1
-    pin.add(list(range(0, 2 * nu)), 1.0, "REPLACE")             # 2 ring teratas (kerah) di-pin
-
-    cl = obj.modifiers.new("Cloth", "CLOTH")
-    s, c = cl.settings, cl.collision_settings
-    s.quality = 10
-    s.mass = 0.30
-    s.air_damping = 1.5
-    s.bending_model = "ANGULAR"
-    s.tension_stiffness = s.compression_stiffness = s.shear_stiffness = 25.0
-    s.tension_damping = s.compression_damping = s.shear_damping = 25.0
-    s.bending_stiffness = 1.5
-    s.bending_damping = 0.5
-    s.use_pin_cloth = True
-    s.vertex_group_mass = "Pin"
-    s.pin_stiffness = 1.0
-    c.use_collision = True
-    c.distance_min = 0.012
-    c.collision_quality = 4
-    c.use_self_collision = True
-    c.self_distance_min = 0.006
-    c.self_friction = 5.0
-    cl.point_cache.frame_start, cl.point_cache.frame_end = 1, frames
-
-    sc.frame_set(1)
-    t0, prev = time.time(), None
-    for f in range(2, frames + 1):
-        sc.frame_set(f)                                         # step berurutan -> cache terisi
-        if f == frames - 1:
-            prev = read_eval_positions(obj)
-        if f % 10 == 0:
-            log(f"  sim frame {f}/{frames} ({time.time() - t0:.0f}s)")
-    last = read_eval_positions(obj)
-    vmax = float(np.abs(last - prev).max()) if prev is not None else 0.0
-    log(f"Sim selesai. Gerak maks frame terakhir = {vmax * 1000:.2f} mm/frame "
-        f"({'settled' if vmax < 0.002 else 'MASIH BERGERAK - naikkan --sim-frames'})")
-    return last.reshape(RINGS + 1, SEG + 1, 3)
-
-
-# =============================================================================
-# BLENDER: BAKE HIGH -> LOW
-# =============================================================================
-def make_high_poly(P):
-    src = make_grid_object("HIGH_SRC", P)
-    sub = src.modifiers.new("Subsurf", "SUBSURF")
-    sub.subdivision_type = "CATMULL_CLARK"
-    sub.levels = sub.render_levels = HIGH_SUBDIV
-    sub.boundary_smooth = "PRESERVE_CORNERS"
-    tex = bpy.data.textures.new("WrinkleTex", "CLOUDS")
-    tex.noise_scale, tex.noise_depth = 0.035, 2
-    disp = src.modifiers.new("Wrinkle", "DISPLACE")
-    disp.texture, disp.strength, disp.mid_level = tex, WRINKLE_AMPLITUDE, 0.5
-    dg = bpy.context.evaluated_depsgraph_get()
-    me = bpy.data.meshes.new_from_object(src.evaluated_get(dg), preserve_all_data_layers=False, depsgraph=dg)
-    high = bpy.data.objects.new("HIGH", me)
-    bpy.context.scene.collection.objects.link(high)
-    remove_object(src)
-    return high
-
-
-def bake_detail_maps(P, W, H, samples):
-    """Return (ao_px, nrm_px, ok). Array (H,W,4) float32, baris 0 = atas. Gagal -> None (pipeline tetap jalan)."""
-    sc = bpy.context.scene
-    sc.render.engine = "CYCLES"
-    cy = sc.cycles
-    cy.device, cy.samples, cy.use_adaptive_sampling, cy.use_denoising = "CPU", samples, False, False
-
-    high = make_high_poly(P)
-    low = make_grid_object("BAKE_LOW", P)
-    log(f"High-poly: {len(high.data.polygons):,} faces")
-
-    tmp = bpy.data.materials.new("BAKE_TMP")
-    tmp.use_nodes = True
-    nt = tmp.node_tree
-    tex = nt.nodes.new("ShaderNodeTexImage")
-    low.data.materials.append(tmp)
-
-    results = {}
-    for kind, btype in (("normal", "NORMAL"), ("ao", "AO")):
-        img = bpy.data.images.new(f"bake_{kind}", W, H, alpha=False, float_buffer=True)
-        img.colorspace_settings.name = "Non-Color"
-        tex.image = img
-        nt.nodes.active = tex
-        tex.select = True
-        bpy.ops.object.select_all(action="DESELECT")
-        high.select_set(True)
-        low.select_set(True)
-        bpy.context.view_layer.objects.active = low
-        t0 = time.time()
-        try:
-            bpy.ops.object.bake(type=btype, use_selected_to_active=True, cage_extrusion=0.03,
-                                max_ray_distance=0.06, margin=4, use_clear=True, normal_space="TANGENT")
-            buf = np.empty(W * H * 4, np.float32)
-            img.pixels.foreach_get(buf)
-            results[kind] = buf.reshape(H, W, 4)[::-1].copy()          # flip -> baris 0 = atas
-            log(f"Bake {btype} OK ({time.time() - t0:.0f}s)")
-        except Exception as exc:  # noqa
-            results[kind] = None
-            log(f"WARN: bake {btype} GAGAL ({exc}) -> fallback flat")
-        bpy.data.images.remove(img)
-
-    remove_object(high)
-    remove_object(low)
-    bpy.data.materials.remove(tmp)
-    ok = results["normal"] is not None and results["ao"] is not None
-    return results["ao"], results["normal"], ok
-
-
-# =============================================================================
-# BLENDER: MATERIAL, RIG, EXPORT
-# =============================================================================
-def set_input(node, names, value):
-    for n in names:
-        if n in node.inputs:
-            node.inputs[n].default_value = value
-            return True
-    return False
-
-
-def gltf_output_group():
-    name = "glTF Material Output" if bpy.app.version >= (4, 2, 0) else "glTF Settings"
-    ng = bpy.data.node_groups.get(name)
-    if ng is None:
-        ng = bpy.data.node_groups.new(name, "ShaderNodeTree")
-        ng.interface.new_socket("Occlusion", in_out="INPUT", socket_type="NodeSocketFloat")
-    return ng
-
-
-def build_material(paths):
-    mat = bpy.data.materials.new("M_ChronoCloak")
-    mat.use_nodes = True
-    mat.use_backface_culling = False                              # glTF doubleSided = true (kain tipis)
-    nt = mat.node_tree
-    nodes, links = nt.nodes, nt.links
-    nodes.clear()
-    out = nodes.new("ShaderNodeOutputMaterial")
-    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-
-    def image_node(path, srgb):
-        n = nodes.new("ShaderNodeTexImage")
-        n.image = bpy.data.images.load(path, check_existing=True)
-        n.image.colorspace_settings.name = "sRGB" if srgb else "Non-Color"
-        n.interpolation, n.extension = "Linear", "EXTEND"
-        return n
-
-    base = image_node(paths["basecolor"], True)
-    links.new(base.outputs["Color"], bsdf.inputs["Base Color"])
-
-    nrm = image_node(paths["normal"], False)
-    nmap = nodes.new("ShaderNodeNormalMap")
-    nmap.space, nmap.uv_map = "TANGENT", "UVMap"
-    links.new(nrm.outputs["Color"], nmap.inputs["Color"])
-    links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-
-    orm = image_node(paths["orm"], False)
-    sep = nodes.new("ShaderNodeSeparateColor")
-    links.new(orm.outputs["Color"], sep.inputs["Color"])
-    links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
-    links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
-    occ = nodes.new("ShaderNodeGroup")
-    occ.node_tree = gltf_output_group()
-    links.new(sep.outputs["Red"], occ.inputs["Occlusion"])
-
-    emi = image_node(paths["emissive"], True)
-    links.new(emi.outputs["Color"], bsdf.inputs["Emission Color"])
-    set_input(bsdf, ["Emission Strength"], 2.0)
-
-    set_input(bsdf, ["Sheen Weight"], 0.35)                      # fuzz kain
-    set_input(bsdf, ["Sheen Roughness"], 0.5)
-    set_input(bsdf, ["Sheen Tint"], (0.45, 0.55, 0.85, 1.0))
-    return mat
-
-
-def build_rig(P):
-    sc = bpy.context.scene
-    arm = bpy.data.armatures.new("CloakRig")
-    rig = bpy.data.objects.new("CloakRig", arm)
-    sc.collection.objects.link(rig)
-    bpy.context.view_layer.objects.active = rig
-    rig.select_set(True)
-    bpy.ops.object.mode_set(mode="EDIT")
-    eb = arm.edit_bones
-    root = eb.new("cloak_root")
-    root.head, root.tail = Vector((0, 0, 1.50)), Vector((0, 0, 1.58))
-    for c in range(NC):
-        parent = root
-        for r in range(NB + 1):
-            j = c * SEG // (NC - 1)
-            head = Vector(P[r * RINGS // NB, j].tolist())
-            tail = (Vector(P[(r + 1) * RINGS // NB, j].tolist()) if r < NB
-                    else head + Vector((0, 0, -0.06)))
-            b = eb.new(f"cloak_c{c:02d}_r{r:02d}")
-            b.head, b.tail, b.parent, b.use_connect = head, tail, parent, False
-            parent = b
-    bpy.ops.object.mode_set(mode="OBJECT")
-    return rig
-
-
-def apply_skin(obj, rig, nv, nu):
-    groups = [obj.vertex_groups.new(name=n) for n in BONES]
-    ids, w = skin_weights(nv, nu)
-    for k in range(4):
-        for vi in np.nonzero(w[k] > 1e-4)[0]:
-            groups[int(ids[k, vi])].add([int(vi)], float(w[k, vi]), "REPLACE")
-    obj.parent = rig
-    obj.modifiers.new("Armature", "ARMATURE").object = rig
-
-
-def gltf_export(path, objs, **kw):
-    props = set(bpy.ops.export_scene.gltf.get_rna_type().properties.keys())
-    opts = dict(export_format="GLB", use_selection=True, export_apply=False, export_materials="EXPORT",
-                export_image_format="AUTO", export_yup=True, export_normals=True, export_tangents=True,
-                export_texcoords=True, export_skins=True, export_animations=False, export_cameras=False,
-                export_lights=False)
-    opts.update(kw)
-    opts = {k: v for k, v in opts.items() if k in props}      # aman terhadap perbedaan versi exporter
-    bpy.ops.object.select_all(action="DESELECT")
-    for o in objs:
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = objs[0]
-    bpy.ops.export_scene.gltf(filepath=path, **opts)
-    log(f"Export: {path} ({os.path.getsize(path) / 1e6:.1f} MB)")
-
-
-# =============================================================================
-# MAIN
-# =============================================================================
-def parse_args():
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    p = argparse.ArgumentParser()
-    p.add_argument("--out", default="public/models")
-    p.add_argument("--name", default="ninja_cloak_aaa")
-    p.add_argument("--res", type=int, default=4096, help="lebar texture; tinggi = res/2")
-    p.add_argument("--sim-frames", type=int, default=150)
-    p.add_argument("--bake-samples", type=int, default=48)
-    p.add_argument("--seed", type=int, default=7)
-    return p.parse_args(argv)
-
-
-def main():
-    a = parse_args()
-    T0 = time.time()
-    out = os.path.abspath(a.out)
-    tex_dir, src_dir = os.path.join(out, "textures"), os.path.join(out, "source")
-    os.makedirs(tex_dir, exist_ok=True)
-    os.makedirs(src_dir, exist_ok=True)
-    W, H = a.res, a.res // 2
-    log(f"Blender {bpy.app.version_string} | texture {W}x{H} | sim {a.sim_frames} frame")
-
-    # 1. Simulasi
-    reset_scene()
-    body = build_body_collider()
-    sim = make_grid_object("CloakSim", build_rest_grid())
-    P = simulate(sim, a.sim_frames)
-    remove_object(sim)
-    remove_object(body)
-    if not np.isfinite(P).all():
-        raise RuntimeError("Hasil simulasi mengandung NaN/Inf")
-    P = smooth_grid(P)
-    Lu, Lv = physical_size(P)
-    log(f"Ukuran fisik: keliling ≈ {Lu:.2f} m, panjang ≈ {Lv:.2f} m | z hem min = {P[..., 2].min():.3f} m")
-
-    # 2. Bake detail
-    ao_px, nrm_px, bake_ok = bake_detail_maps(P, W, H, a.bake_samples)
-
-    # 3. Texture PBR
-    maps = make_textures(W, H, Lu, Lv, ao_px, nrm_px, a.seed)
-    del ao_px, nrm_px
-    paths = {k: os.path.join(tex_dir, f"{a.name}_{n}.png")
-             for k, n in (("basecolor", "BaseColor"), ("normal", "Normal"), ("orm", "ORM"), ("emissive", "Emissive"))}
-    for k, arr in maps.items():
-        write_png(paths[k], arr)
-        log(f"Texture: {paths[k]}")
-    del maps
-
-    # 4. Aset final: rig + LOD + material
-    mat = build_material(paths)
-    rig = build_rig(P)
-    lods, tris = {}, {}
-    for name, s in LOD_STRIDES.items():
-        Pl = np.ascontiguousarray(P[::s, ::s])
-        o = make_grid_object(f"Cloak_{name}", Pl)
-        o.data.materials.append(mat)
-        apply_skin(o, rig, Pl.shape[0], Pl.shape[1])
-        lods[name] = o
-        tris[name] = len(o.data.polygons) * 2
-        log(f"{name}: {tris[name]:,} tris, {len(o.data.vertices):,} verts")
-
-    # 5. Export
-    glb0 = os.path.join(out, f"{a.name}.glb")
-    glb_all = os.path.join(out, f"{a.name}_LODs.glb")
-    gltf_export(glb0, [rig, lods["LOD0"]])
-    gltf_export(glb_all, [rig] + list(lods.values()))
-    blend = os.path.join(src_dir, f"{a.name}.blend")
-    bpy.ops.wm.save_as_mainfile(filepath=blend, compress=True)
-
-    manifest = {
-        "asset": a.name, "blender": bpy.app.version_string, "units": "meter",
-        "forward": "-Y (Blender) / +Z (glTF)", "pose": "A-pose 1.8m body proxy",
-        "triangles": tris, "bones": len(BONES) + 1, "root_bone": "cloak_root",
-        "attach_hint": "Parent cloak_root ke bone leher/spine_03 karakter; cloak_cXX_rYY = chain untuk physics (Chaos/Dynamic Bone/Jolt)",
-        "texture": {"width": W, "height": H, "channels": "BaseColor sRGB | Normal OpenGL | ORM (R=AO,G=Rough,B=Metal) | Emissive sRGB",
-                    "texel_per_meter_u": round(W / Lu), "texel_per_meter_v": round(H / Lv)},
-        "bake_ok": bake_ok, "double_sided": True,
-        "build_seconds": round(time.time() - T0),
-    }
-    with open(os.path.join(out, f"{a.name}_manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=2)
-    log(f"SELESAI dalam {time.time() - T0:.0f}s  (bake_ok={bake_ok})")
-
-
-if __name__ == "__main__":
-    main()
+name: Render Chrono-Shinobi AAA Cloak
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_name:
+        description: 'Nama file video output'
+        required: true
+        default: 'chrono-shinobi-aaa'
+        type: string
+      asset_name:
+        description: 'Nama dasar asset GLB'
+        required: true
+        default: 'ninja_cloak_aaa'
+        type: string
+      texture_width:
+        description: 'Lebar texture (tinggi = setengahnya)'
+        required: true
+        default: '4096'
+        type: choice
+        options: ['2048', '4096', '8192']
+      sim_frames:
+        description: 'Jumlah frame simulasi kain'
+        required: true
+        default: '150'
+        type: string
+      render_video:
+        description: 'Render video Remotion setelah asset jadi'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chrono-shinobi-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BLENDER_VERSION: '4.2.3'            # pin! paket apt "blender" = versi lama & API berbeda
+  ASSET_NAME: ${{ inputs.asset_name }}
+  OUTPUT_NAME: ${{ inputs.output_name }}
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # -----------------------------------------------------------------------
+      # 1. Blender resmi (di-cache)
+      # -----------------------------------------------------------------------
+      - name: Cache Blender
+        uses: actions/cache@v4
+        with:
+          path: ~/blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+
+      - name: Install Blender
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libsm6 libxkbcommon0 libegl1
+          if [ ! -x "$HOME/blender/blender" ]; then
+            SERIES="${BLENDER_VERSION%.*}"
+            mkdir -p "$HOME/blender"
+            curl -fsSL "https://download.blender.org/release/Blender${SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
+              | tar -xJ -C "$HOME/blender" --strip-components=1
+          fi
+          echo "$HOME/blender" >> "$GITHUB_PATH"
+          "$HOME/blender/blender" --version
+
+      # -----------------------------------------------------------------------
+      # 2. Tulis skrip Blender (ditanam di workflow ini)
+      # -----------------------------------------------------------------------
+      - name: Write Blender scripts
+        run: |
+          set -euo pipefail
+          mkdir -p blender_scripts
+
+          cat <<'BUILD_PY_EOF' > blender_scripts/build_aaa_cloak.py
+          #!/usr/bin/env python3
+          """
+          CHRONO-SHINOBI — Game-Ready Cloak Generator  (Blender 4.2 LTS+)
+          ===============================================================
+          Output (semua dalam skala meter, origin di lantai, karakter menghadap -Y Blender / +Z glTF):
+
+            <name>.glb         LOD0 (hero, ~25k tris) + rig 64 bone + material PBR
+            <name>_LODs.glb    LOD0 / LOD1 / LOD2 dalam satu file, material & texture dipakai bersama
+            textures/*.png     BaseColor (sRGB), Normal (OpenGL), ORM (R=AO G=Rough B=Metal), Emissive
+            source/<name>.blend  file sumber untuk artist
+            <name>_manifest.json statistik (tris, bone, texel density, status bake)
+
+          Pipeline:
+            1. Rest-grid jubah (topologi quad terstruktur, bukaan depan, lubang leher)
+            2. Cloth sim di atas body proxy (collision + self-collision), top ring di-pin
+            3. Grid hasil sim = LOD0; LOD1/LOD2 = sub-sampling grid (UV identik -> texture dipakai bersama)
+            4. High-poly (Subsurf 3 + displace kerutan) -> BAKE Normal & AO ke LOD0 (Cycles)
+            5. Texture PBR prosedural (twill weave, trim, rune emisif) dibuat dengan numpy, digabung dengan hasil bake
+            6. Rig cloth-bone 9 chain x 7 joint, skin weight analitik (bilinear, max 4 influence)
+            7. Export GLB (tanpa Draco supaya kompatibel dengan Unreal/Unity/Godot)
+
+          Jalankan:
+            blender -b --factory-startup --python-exit-code 1 --python build_aaa_cloak.py -- \
+                --out public/models --name ninja_cloak_aaa --res 4096
+          """
+          import argparse
+          import json
+          import math
+          import os
+          import struct
+          import sys
+          import time
+          import zlib
+
+          import numpy as np
+
+          try:
+              import bpy
+              from mathutils import Vector
+          except ImportError:          # memungkinkan unit-test fungsi numpy di luar Blender
+              bpy = None
+              Vector = None
+
+          # =============================================================================
+          # KONFIGURASI
+          # =============================================================================
+          SEG, RINGS = 128, 96                       # quad grid: keliling x tinggi  (LOD0 = 128*96 quad ≈ 24.6k tris)
+          NC, NB = 9, 6                              # rig: jumlah chain & segmen per chain  (SEG % (NC-1) == 0, RINGS % NB == 0)
+          LOD_STRIDES = {"LOD0": 1, "LOD1": 2, "LOD2": 4}
+
+          FRONT_GAP_DEG = 56.0                       # bukaan depan jubah
+          ARC = math.radians(360.0 - FRONT_GAP_DEG)
+          A0 = math.radians(-90.0 + FRONT_GAP_DEG / 2.0)
+
+          # Profil jubah (meter) — z menurun dari kerah ke hem
+          PROFILE_Z = np.array([1.52, 1.46, 1.38, 1.20, 0.90, 0.60, 0.30, 0.10])
+          PROFILE_RX = np.array([0.16, 0.29, 0.34, 0.38, 0.46, 0.56, 0.66, 0.74])
+          PROFILE_RY = np.array([0.14, 0.19, 0.22, 0.24, 0.28, 0.34, 0.42, 0.50])
+
+          HIGH_SUBDIV = 3                            # level subsurf untuk high-poly bake
+          WRINKLE_AMPLITUDE = 0.006                  # meter
+          AO_DISTANCE = 0.45                         # meter
+
+          # Parameter texture (meter)
+          THREAD = 0.008                             # pitch benang
+          HEM_W, EDGE_W = 0.20, 0.10                 # lebar trim hem & tepi depan
+          CELL, RUNE_V0, RUNE_H = 0.05, 0.035, 0.125 # grid rune
+          WEAVE_STRENGTH = 2.5
+
+          BONES = [f"cloak_c{c:02d}_r{r:02d}" for c in range(NC) for r in range(NB + 1)]
+
+          assert SEG % (NC - 1) == 0 and RINGS % NB == 0
+          assert all(SEG % s == 0 and RINGS % s == 0 for s in LOD_STRIDES.values())
+
+
+          def log(msg):
+              print(f"[cloak {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+          # =============================================================================
+          # UTIL NUMPY (tanpa dependensi Blender -> bisa di-test terpisah)
+          # =============================================================================
+          def smoothstep(e0, e1, x):
+              t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+              return t * t * (3.0 - 2.0 * t)
+
+
+          def to_u8(x):
+              return (np.clip(x, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+
+
+          def write_png(path, img):
+              """PNG 8-bit RGB/RGBA murni (zlib), baris 0 = atas. Tidak bergantung color management Blender."""
+              assert img.dtype == np.uint8 and img.ndim == 3 and img.shape[2] in (3, 4)
+              h, w, c = img.shape
+              raw = np.ascontiguousarray(img).reshape(h, w * c)
+              filt = raw.copy()
+              filt[:, c:] = np.subtract(raw[:, c:], raw[:, :-c], dtype=np.uint8)      # filter "Sub" -> kompresi lebih baik
+              scan = np.empty((h, w * c + 1), np.uint8)
+              scan[:, 0] = 1
+              scan[:, 1:] = filt
+
+              def chunk(tag, data):
+                  return (struct.pack(">I", len(data)) + tag + data
+                          + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+              png = (b"\x89PNG\r\n\x1a\n"
+                     + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2 if c == 3 else 6, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(scan.tobytes(), 6))
+                     + chunk(b"IEND", b""))
+              with open(path, "wb") as f:
+                  f.write(png)
+
+
+          def build_rest_grid():
+              """Grid (RINGS+1, SEG+1, 3). Ring 0 = kerah (atas), ring RINGS = hem. j naik = berlawanan arah jarum jam."""
+              z = np.linspace(1.52, 0.10, RINGS + 1)
+              rx = np.interp(z, PROFILE_Z[::-1], PROFILE_RX[::-1])
+              ry = np.interp(z, PROFILE_Z[::-1], PROFILE_RY[::-1])
+              a = A0 + ARC * np.linspace(0.0, 1.0, SEG + 1)
+              seed_fold = 1.0 + 0.04 * np.sin(7.0 * a)[None, :] * (1.0 - (z - 0.10) / 1.42)[:, None]   # pemecah simetri
+              P = np.empty((RINGS + 1, SEG + 1, 3), np.float32)
+              P[..., 0] = rx[:, None] * np.cos(a)[None, :] * seed_fold
+              P[..., 1] = ry[:, None] * np.sin(a)[None, :] * seed_fold
+              P[..., 2] = z[:, None]
+              return P
+
+
+          def smooth_grid(P, iters=2, lam=0.35, hold_rows=2):
+              """Laplacian ringan untuk membuang jitter collision; baris pin tidak disentuh."""
+              P = P.astype(np.float32).copy()
+              for _ in range(iters):
+                  avg = 0.25 * (P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:])
+                  new = P.copy()
+                  new[1:-1, 1:-1] = P[1:-1, 1:-1] + lam * (avg - P[1:-1, 1:-1])
+                  new[:hold_rows] = P[:hold_rows]
+                  P = new
+              return P
+
+
+          def physical_size(P):
+              Lu = float(np.linalg.norm(np.diff(P, axis=1), axis=2).sum(axis=1).mean())
+              Lv = float(np.linalg.norm(np.diff(P, axis=0), axis=2).sum(axis=0).mean())
+              return Lu, Lv
+
+
+          def skin_weights(nv, nu):
+              """Bobot bilinear 4 joint per vertex. Return ids (4,N) index ke BONES & w (4,N). Vertex idx = i*nu + j."""
+              fr = np.broadcast_to(np.arange(nv, dtype=np.float32)[:, None] * (NB / (nv - 1)), (nv, nu)).reshape(-1)
+              fc = np.broadcast_to(np.arange(nu, dtype=np.float32)[None, :] * ((NC - 1) / (nu - 1)), (nv, nu)).reshape(-1)
+              r0 = np.minimum(np.floor(fr + 1e-5).astype(np.int32), NB - 1)
+              c0 = np.minimum(np.floor(fc + 1e-5).astype(np.int32), NC - 2)
+              wr = np.clip(fr - r0, 0.0, 1.0)
+              wc = np.clip(fc - c0, 0.0, 1.0)
+              base = c0 * (NB + 1) + r0
+              ids = np.stack([base, base + (NB + 1), base + 1, base + (NB + 1) + 1])
+              w = np.stack([(1 - wc) * (1 - wr), wc * (1 - wr), (1 - wc) * wr, wc * wr])
+              return ids, w
+
+
+          def make_textures(W, H, Lu, Lv, ao_px, nrm_px, seed=7):
+              """
+              Semua map dibuat dari (u,v) -> meter, jadi texel density seragam walau UV anisotropik.
+              ao_px / nrm_px: hasil bake (H,W,4) float, baris 0 = atas; None bila bake gagal.
+              Return dict uint8 (H,W,3): basecolor, normal, orm, emissive
+              """
+              rng = np.random.default_rng(seed)
+              u = ((np.arange(W, dtype=np.float32) + 0.5) / W)[None, :]
+              v = (1.0 - (np.arange(H, dtype=np.float32) + 0.5) / H)[:, None]
+              um, vm = u * Lu, v * Lv                                    # meter dari tepi kiri / dari hem
+
+              # ---- twill weave 2/2 -----------------------------------------------------
+              fu, fv = um / THREAD, vm / THREAD
+              tu, tv = np.floor(fu).astype(np.int32), np.floor(fv).astype(np.int32)
+              cu, cv = fu - tu, fv - tv
+              jit = rng.random((int(tv.max()) + 2, int(tu.max()) + 2)).astype(np.float32)
+              over = ((tu + tv) % 4) < 2
+              height = np.where(over, 0.55 + 0.45 * np.sin(np.pi * cu), 0.55 + 0.45 * np.sin(np.pi * cv)).astype(np.float32)
+              tj = jit[tv, tu]                                           # variasi per benang (H,W)
+              height += 0.10 * (tj - 0.5)
+              del over
+
+              # Normal tangent-space: +X = +U, +Y = +V (OpenGL, sesuai glTF). Baris naik = V turun.
+              wx = -WEAVE_STRENGTH * np.gradient(height, axis=1)
+              wy = WEAVE_STRENGTH * np.gradient(height, axis=0)
+
+              # ---- zona trim / garis / rune -------------------------------------------
+              def band(d, a, b):
+                  return (d >= a) & (d <= b)
+
+              d_hem = vm
+              d_edge = np.minimum(um, Lu - um)
+              trim = (d_hem < HEM_W) | (d_edge < EDGE_W)
+              lines = (band(d_hem, 0.012, 0.018) | band(d_hem, HEM_W - 0.012, HEM_W - 0.006)
+                       | band(d_edge, 0.012, 0.018) | band(d_edge, EDGE_W - 0.012, EDGE_W - 0.006))
+              ticks = (band(d_edge, 0.035, 0.060) & (np.floor(vm / 0.02).astype(np.int32) % 2 == 0)
+                       & (d_hem > HEM_W + 0.01))
+              zone = band(d_hem, 0.035, 0.16) & (d_edge > EDGE_W + 0.01)
+
+              cell = np.floor(um / CELL).astype(np.int32)
+              rr = rng.random((int(cell.max()) + 2, 6))
+              lu = um / CELL - cell
+              lv = (vm - RUNE_V0) / RUNE_H
+              rune = (np.clip((0.07 - np.abs(lu - 0.5)) / 0.03, 0, 1)
+                      * np.clip((0.46 - np.abs(lv - 0.5)) / 0.03, 0, 1))
+              for k, y in enumerate((0.2, 0.5, 0.8)):
+                  bv = np.clip((0.028 - np.abs(lv - y)) / 0.012, 0, 1)
+                  bl = np.clip((0.2 - np.abs(lu - 0.3)) / 0.03, 0, 1) * (rr[cell, k] > 0.45)
+                  br = np.clip((0.2 - np.abs(lu - 0.7)) / 0.03, 0, 1) * (rr[cell, k + 3] > 0.45)
+                  rune = np.maximum(rune, bv * np.maximum(bl, br))
+              rune = (rune * zone).astype(np.float32)
+              thread_lines = lines | ticks
+              emit = np.maximum(rune, 0.8 * thread_lines.astype(np.float32))
+              rune_m = rune > 0.3
+
+              # ---- emissive ------------------------------------------------------------
+              glow = np.array([0.10, 0.65, 1.00], np.float32)
+              emissive = to_u8(emit[..., None] * glow * (0.85 + 0.30 * tj[..., None]))
+
+              # ---- base color ----------------------------------------------------------
+              cloth = np.array([0.085, 0.092, 0.170], np.float32)
+              trimc = np.array([0.050, 0.056, 0.105], np.float32)
+              metal_thread = np.array([0.36, 0.42, 0.58], np.float32)
+              rune_base = np.array([0.04, 0.22, 0.36], np.float32)
+              tone = (0.80 + 0.30 * height) * (0.92 + 0.16 * tj)
+              dirt = 0.78 + 0.22 * smoothstep(0.0, 0.7, vm)              # sedikit lebih gelap di dekat hem
+              base = np.where(trim[..., None], trimc, cloth)
+              base = np.where(thread_lines[..., None], metal_thread, base)
+              base = base * (tone * dirt)[..., None]
+              base = np.where(rune_m[..., None], rune_base, base)
+              basecolor = to_u8(base)
+              del base
+
+              # ---- ORM -----------------------------------------------------------------
+              rough = (0.90 - 0.12 * height + 0.06 * tj).astype(np.float32)
+              rough = np.where(thread_lines, 0.32, rough)
+              rough = np.where(rune_m, 0.45, rough)
+              metal = np.where(thread_lines, 0.85, 0.0).astype(np.float32)
+              ao = np.ones((H, W), np.float32) if ao_px is None else ao_px[..., 0].astype(np.float32)
+              ao = np.clip(ao * (0.80 + 0.20 * height), 0, 1)
+              orm = to_u8(np.stack([ao, rough, metal], axis=-1))
+
+              # ---- normal: UDN blend (bake geometri + weave) -------------------------------
+              n = np.empty((H, W, 3), np.float32)
+              if nrm_px is None:
+                  n[..., 0], n[..., 1], n[..., 2] = wx, wy, 1.0
+              else:
+                  nb = nrm_px[..., :3] * 2.0 - 1.0
+                  n[..., 0], n[..., 1], n[..., 2] = nb[..., 0] + wx, nb[..., 1] + wy, nb[..., 2]
+              n /= np.maximum(np.linalg.norm(n, axis=2, keepdims=True), 1e-6)
+              normal = to_u8(n * 0.5 + 0.5)
+
+              return {"basecolor": basecolor, "normal": normal, "orm": orm, "emissive": emissive}
+
+
+          # =============================================================================
+          # BLENDER: SCENE & MESH
+          # =============================================================================
+          def reset_scene():
+              bpy.ops.wm.read_factory_settings(use_empty=True)
+              sc = bpy.context.scene
+              sc.unit_settings.system = "METRIC"
+              sc.unit_settings.scale_length = 1.0
+              sc.render.fps = 24
+              world = bpy.data.worlds.new("BakeWorld")
+              sc.world = world
+              try:
+                  world.light_settings.distance = AO_DISTANCE
+              except Exception as exc:  # noqa
+                  log(f"WARN: world AO distance tidak bisa diset ({exc})")
+
+
+          def remove_object(obj):
+              me = obj.data if obj.type == "MESH" else None
+              bpy.data.objects.remove(obj, do_unlink=True)
+              if me is not None and me.users == 0:
+                  bpy.data.meshes.remove(me)
+
+
+          def make_grid_object(name, P):
+              """Mesh quad dari grid (nv,nu,3) + UV grid (u = j/(nu-1), v = 1 - i/(nv-1)). Normal menghadap keluar."""
+              nv, nu, _ = P.shape
+              idx = np.arange(nv * nu).reshape(nv, nu)
+              quads = np.stack([idx[:-1, :-1], idx[1:, :-1], idx[1:, 1:], idx[:-1, 1:]], axis=-1).reshape(-1, 4)
+              me = bpy.data.meshes.new(name)
+              me.from_pydata(P.reshape(-1, 3).tolist(), [], quads.tolist())
+              me.update()
+
+              uu = np.tile(np.linspace(0.0, 1.0, nu, dtype=np.float32), nv)
+              vv = np.repeat(1.0 - np.linspace(0.0, 1.0, nv, dtype=np.float32), nu)
+              loop_v = np.empty(len(me.loops), np.int32)
+              me.loops.foreach_get("vertex_index", loop_v)
+              uv = np.stack([uu[loop_v], vv[loop_v]], axis=-1).astype(np.float32)
+              layer = me.uv_layers.new(name="UVMap")
+              layer.data.foreach_set("uv", uv.reshape(-1))
+              me.polygons.foreach_set("use_smooth", np.ones(len(me.polygons), dtype=bool))
+              me.update()
+
+              obj = bpy.data.objects.new(name, me)
+              bpy.context.scene.collection.objects.link(obj)
+              return obj
+
+
+          def read_eval_positions(obj):
+              dg = bpy.context.evaluated_depsgraph_get()
+              ev = obj.evaluated_get(dg)
+              me = ev.to_mesh()
+              a = np.empty(len(me.vertices) * 3, np.float32)
+              me.vertices.foreach_get("co", a)
+              ev.to_mesh_clear()
+              return a.reshape(-1, 3)
+
+
+          def build_body_collider():
+              """Mannequin A-pose 1.8 m (hanya untuk collision, tidak diexport)."""
+              parts = []
+
+              def sphere(p, r, s=(1, 1, 1)):
+                  bpy.ops.mesh.primitive_uv_sphere_add(segments=24, ring_count=12, radius=r, location=p, scale=s)
+                  parts.append(bpy.context.active_object)
+
+              def limb(p0, p1, r0, r1):
+                  p0, p1 = Vector(p0), Vector(p1)
+                  d = p1 - p0
+                  rot = Vector((0, 0, 1)).rotation_difference(d.normalized()).to_euler()
+                  bpy.ops.mesh.primitive_cone_add(vertices=20, radius1=r0, radius2=r1, depth=d.length,
+                                                  location=(p0 + p1) / 2, rotation=rot)
+                  parts.append(bpy.context.active_object)
+
+              sphere((0, 0.01, 1.72), 0.105)                              # kepala
+              limb((0, 0, 1.42), (0, 0.005, 1.64), 0.055, 0.050)          # leher
+              sphere((0, 0, 1.18), 1.0, (0.18, 0.11, 0.30))               # torso
+              sphere((0, 0, 0.95), 1.0, (0.17, 0.11, 0.13))               # pelvis
+              for sx in (-1, 1):
+                  limb((0, 0, 1.46), (sx * 0.21, 0, 1.42), 0.05, 0.05)    # trapezius
+                  sphere((sx * 0.21, 0, 1.42), 0.05)                      # bahu
+                  limb((sx * 0.21, 0, 1.42), (sx * 0.39, 0, 0.76), 0.048, 0.038)   # lengan (A-pose ±15°)
+                  sphere((sx * 0.395, 0, 0.72), 0.05)                     # tangan
+                  limb((sx * 0.10, 0, 0.95), (sx * 0.10, 0, 0.06), 0.09, 0.055)     # kaki
+
+              bpy.ops.object.select_all(action="DESELECT")
+              for o in parts:
+                  o.select_set(True)
+              bpy.context.view_layer.objects.active = parts[0]
+              bpy.ops.object.join()
+              body = bpy.context.active_object
+              body.name = "BodyProxy"
+              body.modifiers.new("Collision", "COLLISION")
+              body.collision.thickness_outer = 0.01
+              body.collision.cloth_friction = 8.0
+              return body
+
+
+          # =============================================================================
+          # BLENDER: CLOTH SIM
+          # =============================================================================
+          def simulate(obj, frames):
+              sc = bpy.context.scene
+              sc.frame_start, sc.frame_end = 1, frames
+              sc.frame_set(1)
+
+              pin = obj.vertex_groups.new(name="Pin")
+              nu = SEG + 1
+              pin.add(list(range(0, 2 * nu)), 1.0, "REPLACE")             # 2 ring teratas (kerah) di-pin
+
+              cl = obj.modifiers.new("Cloth", "CLOTH")
+              s, c = cl.settings, cl.collision_settings
+              s.quality = 10
+              s.mass = 0.30
+              s.air_damping = 1.5
+              s.bending_model = "ANGULAR"
+              s.tension_stiffness = s.compression_stiffness = s.shear_stiffness = 25.0
+              s.tension_damping = s.compression_damping = s.shear_damping = 25.0
+              s.bending_stiffness = 1.5
+              s.bending_damping = 0.5
+              s.use_pin_cloth = True
+              s.vertex_group_mass = "Pin"
+              s.pin_stiffness = 1.0
+              c.use_collision = True
+              c.distance_min = 0.012
+              c.collision_quality = 4
+              c.use_self_collision = True
+              c.self_distance_min = 0.006
+              c.self_friction = 5.0
+              cl.point_cache.frame_start, cl.point_cache.frame_end = 1, frames
+
+              sc.frame_set(1)
+              t0, prev = time.time(), None
+              for f in range(2, frames + 1):
+                  sc.frame_set(f)                                         # step berurutan -> cache terisi
+                  if f == frames - 1:
+                      prev = read_eval_positions(obj)
+                  if f % 10 == 0:
+                      log(f"  sim frame {f}/{frames} ({time.time() - t0:.0f}s)")
+              last = read_eval_positions(obj)
+              vmax = float(np.abs(last - prev).max()) if prev is not None else 0.0
+              log(f"Sim selesai. Gerak maks frame terakhir = {vmax * 1000:.2f} mm/frame "
+                  f"({'settled' if vmax < 0.002 else 'MASIH BERGERAK - naikkan --sim-frames'})")
+              return last.reshape(RINGS + 1, SEG + 1, 3)
+
+
+          # =============================================================================
+          # BLENDER: BAKE HIGH -> LOW
+          # =============================================================================
+          def make_high_poly(P):
+              src = make_grid_object("HIGH_SRC", P)
+              sub = src.modifiers.new("Subsurf", "SUBSURF")
+              sub.subdivision_type = "CATMULL_CLARK"
+              sub.levels = sub.render_levels = HIGH_SUBDIV
+              sub.boundary_smooth = "PRESERVE_CORNERS"
+              tex = bpy.data.textures.new("WrinkleTex", "CLOUDS")
+              tex.noise_scale, tex.noise_depth = 0.035, 2
+              disp = src.modifiers.new("Wrinkle", "DISPLACE")
+              disp.texture, disp.strength, disp.mid_level = tex, WRINKLE_AMPLITUDE, 0.5
+              dg = bpy.context.evaluated_depsgraph_get()
+              me = bpy.data.meshes.new_from_object(src.evaluated_get(dg), preserve_all_data_layers=False, depsgraph=dg)
+              high = bpy.data.objects.new("HIGH", me)
+              bpy.context.scene.collection.objects.link(high)
+              remove_object(src)
+              return high
+
+
+          def bake_detail_maps(P, W, H, samples):
+              """Return (ao_px, nrm_px, ok). Array (H,W,4) float32, baris 0 = atas. Gagal -> None (pipeline tetap jalan)."""
+              sc = bpy.context.scene
+              sc.render.engine = "CYCLES"
+              cy = sc.cycles
+              cy.device, cy.samples, cy.use_adaptive_sampling, cy.use_denoising = "CPU", samples, False, False
+
+              high = make_high_poly(P)
+              low = make_grid_object("BAKE_LOW", P)
+              log(f"High-poly: {len(high.data.polygons):,} faces")
+
+              tmp = bpy.data.materials.new("BAKE_TMP")
+              tmp.use_nodes = True
+              nt = tmp.node_tree
+              tex = nt.nodes.new("ShaderNodeTexImage")
+              low.data.materials.append(tmp)
+
+              results = {}
+              for kind, btype in (("normal", "NORMAL"), ("ao", "AO")):
+                  img = bpy.data.images.new(f"bake_{kind}", W, H, alpha=False, float_buffer=True)
+                  img.colorspace_settings.name = "Non-Color"
+                  tex.image = img
+                  nt.nodes.active = tex
+                  tex.select = True
+                  bpy.ops.object.select_all(action="DESELECT")
+                  high.select_set(True)
+                  low.select_set(True)
+                  bpy.context.view_layer.objects.active = low
+                  t0 = time.time()
+                  try:
+                      bpy.ops.object.bake(type=btype, use_selected_to_active=True, cage_extrusion=0.03,
+                                          max_ray_distance=0.06, margin=4, use_clear=True, normal_space="TANGENT")
+                      buf = np.empty(W * H * 4, np.float32)
+                      img.pixels.foreach_get(buf)
+                      results[kind] = buf.reshape(H, W, 4)[::-1].copy()          # flip -> baris 0 = atas
+                      log(f"Bake {btype} OK ({time.time() - t0:.0f}s)")
+                  except Exception as exc:  # noqa
+                      results[kind] = None
+                      log(f"WARN: bake {btype} GAGAL ({exc}) -> fallback flat")
+                  bpy.data.images.remove(img)
+
+              remove_object(high)
+              remove_object(low)
+              bpy.data.materials.remove(tmp)
+              ok = results["normal"] is not None and results["ao"] is not None
+              return results["ao"], results["normal"], ok
+
+
+          # =============================================================================
+          # BLENDER: MATERIAL, RIG, EXPORT
+          # =============================================================================
+          def set_input(node, names, value):
+              for n in names:
+                  if n in node.inputs:
+                      node.inputs[n].default_value = value
+                      return True
+              return False
+
+
+          def gltf_output_group():
+              name = "glTF Material Output" if bpy.app.version >= (4, 2, 0) else "glTF Settings"
+              ng = bpy.data.node_groups.get(name)
+              if ng is None:
+                  ng = bpy.data.node_groups.new(name, "ShaderNodeTree")
+                  ng.interface.new_socket("Occlusion", in_out="INPUT", socket_type="NodeSocketFloat")
+              return ng
+
+
+          def build_material(paths):
+              mat = bpy.data.materials.new("M_ChronoCloak")
+              mat.use_nodes = True
+              mat.use_backface_culling = False                              # glTF doubleSided = true (kain tipis)
+              nt = mat.node_tree
+              nodes, links = nt.nodes, nt.links
+              nodes.clear()
+              out = nodes.new("ShaderNodeOutputMaterial")
+              bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+              links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+              def image_node(path, srgb):
+                  n = nodes.new("ShaderNodeTexImage")
+                  n.image = bpy.data.images.load(path, check_existing=True)
+                  n.image.colorspace_settings.name = "sRGB" if srgb else "Non-Color"
+                  n.interpolation, n.extension = "Linear", "EXTEND"
+                  return n
+
+              base = image_node(paths["basecolor"], True)
+              links.new(base.outputs["Color"], bsdf.inputs["Base Color"])
+
+              nrm = image_node(paths["normal"], False)
+              nmap = nodes.new("ShaderNodeNormalMap")
+              nmap.space, nmap.uv_map = "TANGENT", "UVMap"
+              links.new(nrm.outputs["Color"], nmap.inputs["Color"])
+              links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+
+              orm = image_node(paths["orm"], False)
+              sep = nodes.new("ShaderNodeSeparateColor")
+              links.new(orm.outputs["Color"], sep.inputs["Color"])
+              links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
+              links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
+              occ = nodes.new("ShaderNodeGroup")
+              occ.node_tree = gltf_output_group()
+              links.new(sep.outputs["Red"], occ.inputs["Occlusion"])
+
+              emi = image_node(paths["emissive"], True)
+              links.new(emi.outputs["Color"], bsdf.inputs["Emission Color"])
+              set_input(bsdf, ["Emission Strength"], 2.0)
+
+              set_input(bsdf, ["Sheen Weight"], 0.35)                      # fuzz kain
+              set_input(bsdf, ["Sheen Roughness"], 0.5)
+              set_input(bsdf, ["Sheen Tint"], (0.45, 0.55, 0.85, 1.0))
+              return mat
+
+
+          def build_rig(P):
+              sc = bpy.context.scene
+              arm = bpy.data.armatures.new("CloakRig")
+              rig = bpy.data.objects.new("CloakRig", arm)
+              sc.collection.objects.link(rig)
+              bpy.context.view_layer.objects.active = rig
+              rig.select_set(True)
+              bpy.ops.object.mode_set(mode="EDIT")
+              eb = arm.edit_bones
+              root = eb.new("cloak_root")
+              root.head, root.tail = Vector((0, 0, 1.50)), Vector((0, 0, 1.58))
+              for c in range(NC):
+                  parent = root
+                  for r in range(NB + 1):
+                      j = c * SEG // (NC - 1)
+                      head = Vector(P[r * RINGS // NB, j].tolist())
+                      tail = (Vector(P[(r + 1) * RINGS // NB, j].tolist()) if r < NB
+                              else head + Vector((0, 0, -0.06)))
+                      b = eb.new(f"cloak_c{c:02d}_r{r:02d}")
+                      b.head, b.tail, b.parent, b.use_connect = head, tail, parent, False
+                      parent = b
+              bpy.ops.object.mode_set(mode="OBJECT")
+              return rig
+
+
+          def apply_skin(obj, rig, nv, nu):
+              groups = [obj.vertex_groups.new(name=n) for n in BONES]
+              ids, w = skin_weights(nv, nu)
+              for k in range(4):
+                  for vi in np.nonzero(w[k] > 1e-4)[0]:
+                      groups[int(ids[k, vi])].add([int(vi)], float(w[k, vi]), "REPLACE")
+              obj.parent = rig
+              obj.modifiers.new("Armature", "ARMATURE").object = rig
+
+
+          def gltf_export(path, objs, **kw):
+              props = set(bpy.ops.export_scene.gltf.get_rna_type().properties.keys())
+              opts = dict(export_format="GLB", use_selection=True, export_apply=False, export_materials="EXPORT",
+                          export_image_format="AUTO", export_yup=True, export_normals=True, export_tangents=True,
+                          export_texcoords=True, export_skins=True, export_animations=False, export_cameras=False,
+                          export_lights=False)
+              opts.update(kw)
+              opts = {k: v for k, v in opts.items() if k in props}      # aman terhadap perbedaan versi exporter
+              bpy.ops.object.select_all(action="DESELECT")
+              for o in objs:
+                  o.select_set(True)
+              bpy.context.view_layer.objects.active = objs[0]
+              bpy.ops.export_scene.gltf(filepath=path, **opts)
+              log(f"Export: {path} ({os.path.getsize(path) / 1e6:.1f} MB)")
+
+
+          # =============================================================================
+          # MAIN
+          # =============================================================================
+          def parse_args():
+              argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+              p = argparse.ArgumentParser()
+              p.add_argument("--out", default="public/models")
+              p.add_argument("--name", default="ninja_cloak_aaa")
+              p.add_argument("--res", type=int, default=4096, help="lebar texture; tinggi = res/2")
+              p.add_argument("--sim-frames", type=int, default=150)
+              p.add_argument("--bake-samples", type=int, default=48)
+              p.add_argument("--seed", type=int, default=7)
+              return p.parse_args(argv)
+
+
+          def main():
+              a = parse_args()
+              T0 = time.time()
+              out = os.path.abspath(a.out)
+              tex_dir, src_dir = os.path.join(out, "textures"), os.path.join(out, "source")
+              os.makedirs(tex_dir, exist_ok=True)
+              os.makedirs(src_dir, exist_ok=True)
+              W, H = a.res, a.res // 2
+              log(f"Blender {bpy.app.version_string} | texture {W}x{H} | sim {a.sim_frames} frame")
+
+              # 1. Simulasi
+              reset_scene()
+              body = build_body_collider()
+              sim = make_grid_object("CloakSim", build_rest_grid())
+              P = simulate(sim, a.sim_frames)
+              remove_object(sim)
+              remove_object(body)
+              if not np.isfinite(P).all():
+                  raise RuntimeError("Hasil simulasi mengandung NaN/Inf")
+              P = smooth_grid(P)
+              Lu, Lv = physical_size(P)
+              log(f"Ukuran fisik: keliling ≈ {Lu:.2f} m, panjang ≈ {Lv:.2f} m | z hem min = {P[..., 2].min():.3f} m")
+
+              # 2. Bake detail
+              ao_px, nrm_px, bake_ok = bake_detail_maps(P, W, H, a.bake_samples)
+
+              # 3. Texture PBR
+              maps = make_textures(W, H, Lu, Lv, ao_px, nrm_px, a.seed)
+              del ao_px, nrm_px
+              paths = {k: os.path.join(tex_dir, f"{a.name}_{n}.png")
+                       for k, n in (("basecolor", "BaseColor"), ("normal", "Normal"), ("orm", "ORM"), ("emissive", "Emissive"))}
+              for k, arr in maps.items():
+                  write_png(paths[k], arr)
+                  log(f"Texture: {paths[k]}")
+              del maps
+
+              # 4. Aset final: rig + LOD + material
+              mat = build_material(paths)
+              rig = build_rig(P)
+              lods, tris = {}, {}
+              for name, s in LOD_STRIDES.items():
+                  Pl = np.ascontiguousarray(P[::s, ::s])
+                  o = make_grid_object(f"Cloak_{name}", Pl)
+                  o.data.materials.append(mat)
+                  apply_skin(o, rig, Pl.shape[0], Pl.shape[1])
+                  lods[name] = o
+                  tris[name] = len(o.data.polygons) * 2
+                  log(f"{name}: {tris[name]:,} tris, {len(o.data.vertices):,} verts")
+
+              # 5. Export
+              glb0 = os.path.join(out, f"{a.name}.glb")
+              glb_all = os.path.join(out, f"{a.name}_LODs.glb")
+              gltf_export(glb0, [rig, lods["LOD0"]])
+              gltf_export(glb_all, [rig] + list(lods.values()))
+              blend = os.path.join(src_dir, f"{a.name}.blend")
+              bpy.ops.wm.save_as_mainfile(filepath=blend, compress=True)
+
+              manifest = {
+                  "asset": a.name, "blender": bpy.app.version_string, "units": "meter",
+                  "forward": "-Y (Blender) / +Z (glTF)", "pose": "A-pose 1.8m body proxy",
+                  "triangles": tris, "bones": len(BONES) + 1, "root_bone": "cloak_root",
+                  "attach_hint": "Parent cloak_root ke bone leher/spine_03 karakter; cloak_cXX_rYY = chain untuk physics (Chaos/Dynamic Bone/Jolt)",
+                  "texture": {"width": W, "height": H, "channels": "BaseColor sRGB | Normal OpenGL | ORM (R=AO,G=Rough,B=Metal) | Emissive sRGB",
+                              "texel_per_meter_u": round(W / Lu), "texel_per_meter_v": round(H / Lv)},
+                  "bake_ok": bake_ok, "double_sided": True,
+                  "build_seconds": round(time.time() - T0),
+              }
+              with open(os.path.join(out, f"{a.name}_manifest.json"), "w") as f:
+                  json.dump(manifest, f, indent=2)
+              log(f"SELESAI dalam {time.time() - T0:.0f}s  (bake_ok={bake_ok})")
+
+
+          if __name__ == "__main__":
+              main()
+          BUILD_PY_EOF
+
+          cat <<'PREVIEW_PY_EOF' > blender_scripts/preview_render.py
+          #!/usr/bin/env python3
+          """
+          QA: import ulang GLB hasil export (membuktikan file valid & material terbaca) lalu render 3 sudut dengan Cycles CPU.
+            blender -b --factory-startup --python-exit-code 1 --python preview_render.py -- --glb x.glb --out previews
+          """
+          import argparse
+          import math
+          import os
+          import sys
+
+          import bpy
+          from mathutils import Vector
+
+          argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+          p = argparse.ArgumentParser()
+          p.add_argument("--glb", required=True)
+          p.add_argument("--out", default="previews")
+          p.add_argument("--samples", type=int, default=48)
+          a = p.parse_args(argv)
+          os.makedirs(a.out, exist_ok=True)
+
+          bpy.ops.wm.read_factory_settings(use_empty=True)
+          bpy.ops.import_scene.gltf(filepath=os.path.abspath(a.glb))
+          sc = bpy.context.scene
+
+          meshes = [o for o in sc.objects if o.type == "MESH"]
+          assert meshes, "GLB tidak berisi mesh"
+          for o in meshes:
+              assert o.data.materials and o.data.materials[0], f"{o.name} tanpa material"
+          print("Mesh terimpor:", [(o.name, len(o.data.polygons)) for o in meshes])
+
+          sc.render.engine = "CYCLES"
+          cy = sc.cycles
+          cy.device, cy.samples, cy.use_denoising = "CPU", a.samples, True
+          sc.render.resolution_x, sc.render.resolution_y = 1280, 720
+
+          world = bpy.data.worlds.new("W")
+          world.use_nodes = True
+          bg = world.node_tree.nodes["Background"]
+          bg.inputs[0].default_value = (0.02, 0.03, 0.05, 1.0)
+          bg.inputs[1].default_value = 1.0
+          sc.world = world
+
+
+          def add_light(name, loc, energy, size):
+              ld = bpy.data.lights.new(name, "AREA")
+              ld.energy, ld.size = energy, size
+              o = bpy.data.objects.new(name, ld)
+              o.location = loc
+              sc.collection.objects.link(o)
+              c = o.constraints.new("TRACK_TO")
+              c.target, c.track_axis, c.up_axis = target, "TRACK_NEGATIVE_Z", "UP_Y"
+
+
+          target = bpy.data.objects.new("T", None)
+          target.location = (0, 0, 0.85)
+          sc.collection.objects.link(target)
+          add_light("key", (2.5, -3.0, 3.0), 500, 2.5)
+          add_light("rim", (-2.5, 3.0, 2.5), 700, 2.0)
+          add_light("fill", (-3.0, -2.0, 1.5), 150, 3.0)
+
+          cam_d = bpy.data.cameras.new("Cam")
+          cam_d.lens = 38
+          cam = bpy.data.objects.new("Cam", cam_d)
+          sc.collection.objects.link(cam)
+          tc = cam.constraints.new("TRACK_TO")
+          tc.target, tc.track_axis, tc.up_axis = target, "TRACK_NEGATIVE_Z", "UP_Y"
+          sc.camera = cam
+
+          for label, yaw in (("front34", -35), ("side", 90), ("back", 180)):
+              # kamera mengitari karakter; yaw 0 = di depan (-Y Blender)
+              r = math.radians(yaw - 90)
+              cam.location = (3.4 * math.cos(r), 3.4 * math.sin(r), 1.1)
+              sc.render.filepath = os.path.abspath(os.path.join(a.out, f"preview_{label}.png"))
+              bpy.ops.render.render(write_still=True)
+              print("Render:", sc.render.filepath)
+          PREVIEW_PY_EOF
+
+          python3 -m py_compile blender_scripts/build_aaa_cloak.py blender_scripts/preview_render.py
+          wc -l blender_scripts/*.py
+
+      # -----------------------------------------------------------------------
+      # 3. Build asset: sim kain -> bake -> texture PBR -> rig -> LOD -> GLB
+      #    --python-exit-code 1: tanpa ini error Python di Blender tetap exit 0 (CI hijau palsu)
+      # -----------------------------------------------------------------------
+      - name: Build cloak asset in Blender
+        env:
+          TEX_W: ${{ inputs.texture_width }}
+          SIM_FRAMES: ${{ inputs.sim_frames }}
+        run: |
+          set -euo pipefail
+          mkdir -p public/models
+          blender -b --factory-startup --python-exit-code 1 \
+            --python blender_scripts/build_aaa_cloak.py -- \
+            --out public/models --name "$ASSET_NAME" --res "$TEX_W" --sim-frames "$SIM_FRAMES"
+          ls -lh public/models public/models/textures
+          cat "public/models/${ASSET_NAME}_manifest.json"
+
+      # -----------------------------------------------------------------------
+      # 4. Validasi glTF (Khronos validator)
+      # -----------------------------------------------------------------------
+      - name: Validate GLB
+        run: |
+          set -euo pipefail
+          GT="npx --yes @gltf-transform/cli@4"
+          $GT validate "public/models/${ASSET_NAME}.glb"
+          $GT validate "public/models/${ASSET_NAME}_LODs.glb"
+          $GT inspect  "public/models/${ASSET_NAME}_LODs.glb" | tee public/models/inspect_report.txt
+
+      # -----------------------------------------------------------------------
+      # 5. Varian web untuk Remotion/three.js (master TIDAK dikompres)
+      # -----------------------------------------------------------------------
+      - name: Create web-optimized GLB
+        run: |
+          set -euo pipefail
+          GT="npx --yes @gltf-transform/cli@4"
+          T="$(mktemp -d)"
+          $GT resize  "public/models/${ASSET_NAME}.glb" "$T/a.glb" --width 2048 --height 2048
+          $GT webp    "$T/a.glb" "$T/b.glb" --quality 92
+          $GT meshopt "$T/b.glb" "public/models/${ASSET_NAME}_web.glb" --level high
+          ls -lh public/models/*.glb
+
+      # -----------------------------------------------------------------------
+      # 6. Preview render (re-import GLB = bukti file benar-benar bisa dipakai)
+      # -----------------------------------------------------------------------
+      - name: Render QA previews
+        run: |
+          set -euo pipefail
+          blender -b --factory-startup --python-exit-code 1 \
+            --python blender_scripts/preview_render.py -- \
+            --glb "public/models/${ASSET_NAME}.glb" --out previews
+          ls -lh previews
+
+      # -----------------------------------------------------------------------
+      # 7. QUALITY GATE — run gagal bila aset tidak memenuhi standar game-ready
+      # -----------------------------------------------------------------------
+      - name: Quality gate
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          name = os.environ["ASSET_NAME"]
+          d = "public/models"
+          m = json.load(open(f"{d}/{name}_manifest.json"))
+          errs = []
+          if not m["bake_ok"]:
+              errs.append("Bake normal/AO gagal (texture jatuh ke fallback flat)")
+          if m["triangles"]["LOD0"] > 30000:
+              errs.append(f"LOD0 terlalu berat: {m['triangles']['LOD0']} tris")
+          if not (m["triangles"]["LOD0"] > m["triangles"]["LOD1"] > m["triangles"]["LOD2"]):
+              errs.append("Urutan LOD tidak menurun")
+          if m["bones"] > 64:
+              errs.append(f"Bone terlalu banyak: {m['bones']}")
+          for t in ("BaseColor", "Normal", "ORM", "Emissive"):
+              p = f"{d}/textures/{name}_{t}.png"
+              if not os.path.exists(p) or os.path.getsize(p) < 50_000:
+                  errs.append(f"Texture hilang/kosong: {p}")
+          for g in (f"{name}.glb", f"{name}_LODs.glb", f"{name}_web.glb"):
+              if not os.path.exists(f"{d}/{g}"):
+                  errs.append(f"GLB hilang: {g}")
+          for p in ("front34", "side", "back"):
+              if not os.path.exists(f"previews/preview_{p}.png"):
+                  errs.append(f"Preview hilang: {p}")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## {name}\n\n```json\n{json.dumps(m, indent=2)}\n```\n")
+              s.write("\n**Pakai di engine:** import `*_LODs.glb` (atau `*.glb` untuk LOD0 saja). "
+                      "Parent `cloak_root` ke bone leher/spine_03 karakter; "
+                      "bone `cloak_cXX_rYY` = chain untuk physics (Chaos Cloth / Dynamic Bone / Jolt).\n")
+          if errs:
+              print("QUALITY GATE GAGAL:\n - " + "\n - ".join(errs))
+              sys.exit(1)
+          print("QUALITY GATE LULUS")
+          PYEOF
+
+      - name: Upload game-ready asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.asset_name }}-game-ready
+          path: |
+            public/models/
+            previews/
+          if-no-files-found: error
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # 8. Remotion (opsional)
+      # -----------------------------------------------------------------------
+      - name: Create Remotion project files
+        if: ${{ inputs.render_video }}
+        run: |
+          mkdir -p src
+          # >>> GANTI blok ini dengan pembuatan package.json, tsconfig.json, src/* milik Anda
+          # >>> (sama seperti workflow lama). Gunakan model: staticFile('models/<asset>_web.glb')
+          echo "Remotion project files: isi sendiri bila belum ada di repo"
+
+      - name: Install Remotion deps
+        if: ${{ inputs.render_video }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq libnss3 libdbus-1-3 libatk1.0-0 libasound2t64 libxrandr2 \
+            libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 libcairo2 libcups2 libgbm1
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Render 3D video with swangle
+        if: ${{ inputs.render_video }}
+        run: |
+          mkdir -p out
+          npx remotion render ChronoShinobi "out/${OUTPUT_NAME}.mp4" \
+            --gl=swangle --codec=h264 --crf=14 --concurrency=2
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+
+      - name: Upload video
+        if: ${{ inputs.render_video }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.output_name }}-video
+          path: out/*.mp4
+          if-no-files-found: error
