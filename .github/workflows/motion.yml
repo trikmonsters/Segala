@@ -1,18 +1,30 @@
-name: Render Custom Stock Batch
+name: Auto Stock 4K Generator (Premium)
 
 on:
+  schedule:
+    - cron: '0 */8 * * *'   # 3x sehari
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: stock-render
+  cancel-in-progress: false
+
+env:
+  # Daftar model Gemini (dicoba berurutan). Override lewat repo Variables: GEMINI_MODELS
+  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
+
 jobs:
   # ══════════════════════════════════════════════════════════
   # JOB 1 — PREPARE
+  #   riset tren (Google Search grounding) → ide → kode Canvas dari AI
+  #   → validasi otomatis (compile + render still + cek performa)
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     outputs:
       comps: ${{ steps.comps.outputs.list }}
     steps:
@@ -22,12 +34,20 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Init history if missing
+        run: |
+          if [ ! -f history.json ]; then
+            echo '{"rendered":[],"version":1}' > history.json
+          fi
+          echo "History entries: $(node -e "console.log(require('./history.json').rendered.length)")"
+
       - name: Scaffold Remotion project
         run: |
-          mkdir -p remotion-project/src
+          mkdir -p remotion-project/src/lib remotion-project/src/custom
           cd remotion-project
           npm init -y
           npm install remotion@4.0.290 @remotion/cli@4.0.290 \
+            @remotion/bundler@4.0.290 @remotion/renderer@4.0.290 \
             react@18.3.1 react-dom@18.3.1
           npm install -D typescript@5.6.3 @types/react@18.3.12
 
@@ -41,136 +61,873 @@ jobs:
           }
           EOF
 
-      - name: Write video-ideas.json
+      # ── Toolkit yang dipakai kode buatan AI (noise yang bisa loop, warna, grain, dll.) ──
+      - name: Write creative-coding kit
         run: |
           cd remotion-project
-          cat > video-ideas.json <<'IDEAS_EOF'
-          {
-            "videos": [
-              {
-                "id": "pruned-memory-lattice",
-                "title": "Pruned Memory Lattice",
-                "description": "A living neural lattice continuously grows connections while selectively pruning its own history.",
-                "concept": "GROWTH vs DECAY — a neural lattice cultivates new pathways while older memories quietly fossilize.",
-                "keywords": ["abstract","motion","background","conceptual","4K","neural","network","memory","growth","decay","adaptation","learning","knowledge","technology","innovation","connections","pruning","futuristic","dark","cinematic","B-roll"],
-                "composition": {
-                  "type": "neural-network",
-                  "primaryColor": "#5367B8",
-                  "secondaryColor": "#5BC7D9",
-                  "bgColor": "#0B1024",
-                  "animationStyle": "organic synaptic motion",
-                  "durationSeconds": 15,
-                  "elements": [
-                    {"name":"living lattice","behavior":"branching neural structure extending","timing":{"start":0,"end":7}},
-                    {"name":"memory fossils","behavior":"nodes dim and dissolve","timing":{"start":4,"end":11}},
-                    {"name":"adaptive bridge","behavior":"new pathway reroutes","timing":{"start":8,"end":15}}
-                  ]
-                }
-              },
-              {
-                "id": "ember-to-petal-collapse",
-                "title": "Ember to Petal Collapse",
-                "description": "A dense field of warm particles gathers into a flower-like structure before collapsing.",
-                "concept": "FRAGILITY vs STRENGTH — fragile particles become a resilient structure before surrendering to gravity.",
-                "keywords": ["abstract","motion","background","conceptual","4K","particles","transformation","fragility","strength","flower","formation","collapse","impermanence","creativity","emotion","metamorphosis","amber","pink","cinematic","dark","B-roll"],
-                "composition": {
-                  "type": "particle-morph",
-                  "primaryColor": "#D49A5B",
-                  "secondaryColor": "#B96F86",
-                  "bgColor": "#0B090D",
-                  "animationStyle": "fluid particle choreography",
-                  "durationSeconds": 15,
-                  "elements": [
-                    {"name":"ember field","behavior":"particles sweep laterally","timing":{"start":0,"end":5}},
-                    {"name":"petal architecture","behavior":"particles spiral into petals","timing":{"start":3,"end":10}},
-                    {"name":"structural collapse","behavior":"petals fracture and disperse","timing":{"start":9,"end":15}}
-                  ]
-                }
-              },
-              {
-                "id": "river-of-contradicting-signals",
-                "title": "River of Contradicting Signals",
-                "description": "Two disciplined streams of information travel through a dark environment, crossing and emerging as one coherent current.",
-                "concept": "ORDER vs CHAOS — two organized information currents collide and reorganize.",
-                "keywords": ["abstract","motion","background","conceptual","4K","data","flow","signals","order","chaos","information","communication","convergence","systems","technology","decision","streams","emerald","blue","midnight","B-roll"],
-                "composition": {
-                  "type": "data-flow",
-                  "primaryColor": "#43B88A",
-                  "secondaryColor": "#4D88B8",
-                  "bgColor": "#07121B",
-                  "animationStyle": "precise ribbon-flow",
-                  "durationSeconds": 15,
-                  "elements": [
-                    {"name":"parallel currents","behavior":"two channels move rapidly","timing":{"start":0,"end":6}},
-                    {"name":"signal exchange","behavior":"ribbons intersect and switch","timing":{"start":5,"end":10}},
-                    {"name":"coherent river","behavior":"signals settle into one current","timing":{"start":9,"end":15}}
-                  ]
-                }
-              },
-              {
-                "id": "rooted-forest-circuit",
-                "title": "Rooted Forest Circuit",
-                "description": "Fine roots spread through a dark forest floor while luminous nutrients travel between neighboring growths.",
-                "concept": "ORGANIC vs MECHANICAL — a biological root system behaves like a self-organizing circuit.",
-                "keywords": ["abstract","motion","background","conceptual","4K","organic","growth","roots","forest","biology","ecosystem","connection","sustainability","resilience","communication","nature","network","green","lime","dark","B-roll"],
-                "composition": {
-                  "type": "organic-growth",
-                  "primaryColor": "#6FAF52",
-                  "secondaryColor": "#A2C85B",
-                  "bgColor": "#07150D",
-                  "animationStyle": "macro organic time-lapse",
-                  "durationSeconds": 15,
-                  "elements": [
-                    {"name":"root expansion","behavior":"roots creep through soil","timing":{"start":0,"end":8}},
-                    {"name":"nutrient pulses","behavior":"particles travel through roots","timing":{"start":4,"end":12}},
-                    {"name":"forest exchange","behavior":"roots synchronize pulses","timing":{"start":9,"end":15}}
-                  ]
-                }
-              },
-              {
-                "id": "folded-rose-topology",
-                "title": "Folded Rose Topology",
-                "description": "A continuous surface folds through itself, changing from an orderly planar structure into an intricate rose-like topology.",
-                "concept": "SPEED vs STILLNESS — a static surface undergoes rapid topological change.",
-                "keywords": ["abstract","motion","background","conceptual","4K","geometry","transformation","topology","folding","architecture","complexity","change","mathematics","design","structure","rose","violet","plum","cinematic","B-roll"],
-                "composition": {
-                  "type": "geometric-transform",
-                  "primaryColor": "#8C6BC2",
-                  "secondaryColor": "#B9789A",
-                  "bgColor": "#160C20",
-                  "animationStyle": "precision morphing",
-                  "durationSeconds": 15,
-                  "elements": [
-                    {"name":"ordered plane","behavior":"tiled surface slides laterally","timing":{"start":0,"end":5}},
-                    {"name":"topological bloom","behavior":"surface folds into rose","timing":{"start":4,"end":11}},
-                    {"name":"quiet reconfiguration","behavior":"rose unfolds into calm geometry","timing":{"start":10,"end":15}}
-                  ]
+
+          cat > src/lib/kit.ts <<'EOF'
+          export const TAU = Math.PI * 2;
+
+          export const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+          export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+          export const smoothstep = (a: number, b: number, x: number) => {
+            const t = clamp((x - a) / (b - a || 1), 0, 1);
+            return t * t * (3 - 2 * t);
+          };
+          export const easeInOut = (t: number) =>
+            t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          // 0 → 1 → 0, sebanyak k siklus penuh per loop
+          export const breathe = (phase: number, k = 1) => 0.5 - 0.5 * Math.cos(TAU * phase * k);
+
+          export function mulberry32(seed: number) {
+            let a = seed | 0;
+            return () => {
+              a = (a + 0x6d2b79f5) | 0;
+              let t = Math.imul(a ^ (a >>> 15), 1 | a);
+              t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+              return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+          }
+
+          function hash4(x: number, y: number, z: number, w: number) {
+            let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^
+                    Math.imul(z, 1274126177) ^ Math.imul(w, 2246822519);
+            h = Math.imul(h ^ (h >>> 13), 1274126177);
+            h ^= h >>> 16;
+            return (h >>> 0) / 4294967296;
+          }
+          const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
+
+          // 4D value noise, -1..1
+          export function noise(x: number, y: number, z = 0, w = 0): number {
+            const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), wi = Math.floor(w);
+            const xf = fade(x - xi), yf = fade(y - yi), zf = fade(z - zi), wf = fade(w - wi);
+            let sum = 0;
+            for (let dw = 0; dw < 2; dw++) {
+              const ww = dw ? wf : 1 - wf;
+              for (let dz = 0; dz < 2; dz++) {
+                const wz = ww * (dz ? zf : 1 - zf);
+                for (let dy = 0; dy < 2; dy++) {
+                  const wy = wz * (dy ? yf : 1 - yf);
+                  for (let dx = 0; dx < 2; dx++) {
+                    sum += wy * (dx ? xf : 1 - xf) * hash4(xi + dx, yi + dy, zi + dz, wi + dw);
+                  }
                 }
               }
-            ]
+            }
+            return sum * 2 - 1;
           }
-          IDEAS_EOF
 
-      - name: Generate ideas.ts
+          // Noise yang berulang sempurna tiap phase = 1 (berjalan melingkar di dimensi z,w)
+          export const loopNoise = (x: number, y: number, phase: number, r = 1) =>
+            noise(x, y, Math.cos(TAU * phase) * r, Math.sin(TAU * phase) * r);
+
+          export function fbm(x: number, y: number, phase: number, octaves = 4, r = 1): number {
+            let amp = 0.5, freq = 1, sum = 0, norm = 0;
+            for (let o = 0; o < octaves; o++) {
+              sum += amp * loopNoise(x * freq + o * 17.3, y * freq - o * 9.1, phase, r);
+              norm += amp;
+              amp *= 0.5;
+              freq *= 2;
+            }
+            return sum / norm;
+          }
+
+          // Vektor aliran divergence-free (mentah, normalisasi sendiri), loop sempurna
+          export function curl(x: number, y: number, phase: number, octaves = 3, r = 1): [number, number] {
+            const e = 0.02;
+            const dy = (fbm(x, y + e, phase, octaves, r) - fbm(x, y - e, phase, octaves, r)) / (2 * e);
+            const dx = (fbm(x + e, y, phase, octaves, r) - fbm(x - e, y, phase, octaves, r)) / (2 * e);
+            return [dy, -dx];
+          }
+
+          export function hexToRgb(hex: string): [number, number, number] {
+            const h = hex.replace('#', '');
+            const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+            return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+          }
+          export const rgba = (hex: string, a: number) => {
+            const [r, g, b] = hexToRgb(hex);
+            return `rgba(${r},${g},${b},${clamp(a, 0, 1)})`;
+          };
+          export function mixHex(a: string, b: string, t: number): string {
+            const A = hexToRgb(a), B = hexToRgb(b);
+            const c = (i: number) => Math.round(lerp(A[i], B[i], clamp(t, 0, 1))).toString(16).padStart(2, '0');
+            return `#${c(0)}${c(1)}${c(2)}`;
+          }
+
+          // Canvas offscreen resolusi rendah (untuk efek field/permukaan). Tidak dibersihkan otomatis.
+          const buffers = new Map<string, { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>();
+          export function getBuffer(key: string, w: number, h: number) {
+            const id = `${key}:${w}x${h}`;
+            let b = buffers.get(id);
+            if (!b) {
+              const canvas = document.createElement('canvas');
+              canvas.width = w;
+              canvas.height = h;
+              b = { canvas, ctx: canvas.getContext('2d')! };
+              buffers.set(id, b);
+            }
+            return b;
+          }
+
+          // ── Finishing (dipanggil harness, bukan oleh kode AI) ──
+          export function drawVignette(ctx: CanvasRenderingContext2D, w: number, h: number, bg: string, strength = 0.5) {
+            const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.55);
+            g.addColorStop(0, rgba(bg, 0));
+            g.addColorStop(1, rgba(bg, strength));
+            ctx.save();
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+          }
+
+          // Grain halus = dithering untuk mencegah banding pada gradient gelap (penyebab reject umum)
+          const grainTiles = new Map<number, HTMLCanvasElement>();
+          export function drawGrain(ctx: CanvasRenderingContext2D, w: number, h: number, frame: number, amount = 0.02) {
+            const k = frame % 8;
+            let tile = grainTiles.get(k);
+            if (!tile) {
+              tile = document.createElement('canvas');
+              tile.width = tile.height = 256;
+              const g = tile.getContext('2d')!;
+              const img = g.createImageData(256, 256);
+              const rnd = mulberry32(1234 + k * 77);
+              for (let i = 0; i < img.data.length; i += 4) {
+                const v = (rnd() * 255) | 0;
+                img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+                img.data[i + 3] = 255;
+              }
+              g.putImageData(img, 0, 0);
+              grainTiles.set(k, tile);
+            }
+            const pat = ctx.createPattern(tile, 'repeat');
+            if (!pat) return;
+            ctx.save();
+            ctx.globalAlpha = amount;
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = pat;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+          }
+          EOF
+
+          cat > src/lib/CanvasScene.tsx <<'EOF'
+          import React, { useLayoutEffect, useRef } from 'react';
+          import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
+          import { drawGrain, drawVignette, mixHex } from './kit';
+
+          export type Colors = { primary: string; secondary: string; bg: string };
+
+          export type DrawState = {
+            w: number;
+            h: number;
+            cx: number;
+            cy: number;
+            u: number;          // unit scale ≈ min(w,h)/1000
+            phase: number;      // 0..1, posisi loop (satu-satunya sumber waktu)
+            seconds: number;    // durasi loop dalam detik
+            portrait: boolean;
+            colors: Colors;
+          };
+
+          export type DrawFn = (ctx: CanvasRenderingContext2D, s: DrawState) => void;
+
+          export const CanvasScene: React.FC<{ draw: DrawFn; colors: Colors }> = ({ draw, colors }) => {
+            const ref = useRef<HTMLCanvasElement>(null);
+            const frame = useCurrentFrame();
+            const { width, height, fps, durationInFrames } = useVideoConfig();
+
+            useLayoutEffect(() => {
+              const canvas = ref.current;
+              if (!canvas) return;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) return;
+
+              ctx.setTransform(1, 0, 0, 1, 0, 0);
+              ctx.globalAlpha = 1;
+              ctx.globalCompositeOperation = 'source-over';
+              ctx.fillStyle = colors.bg;
+              ctx.fillRect(0, 0, width, height);
+
+              const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
+              g.addColorStop(0, mixHex(colors.bg, colors.primary, 0.1));
+              g.addColorStop(1, colors.bg);
+              ctx.fillStyle = g;
+              ctx.fillRect(0, 0, width, height);
+
+              const s: DrawState = {
+                w: width,
+                h: height,
+                cx: width / 2,
+                cy: height / 2,
+                u: Math.min(width, height) / 1000,
+                phase: frame / durationInFrames,
+                seconds: durationInFrames / fps,
+                portrait: height > width,
+                colors,
+              };
+
+              ctx.save();
+              draw(ctx, s);
+              ctx.restore();
+
+              drawVignette(ctx, width, height, colors.bg, 0.55);
+              drawGrain(ctx, width, height, frame, 0.02);
+            }, [frame, width, height, fps, durationInFrames, colors, draw]);
+
+            return (
+              <AbsoluteFill style={{ background: colors.bg }}>
+                <canvas ref={ref} width={width} height={height} style={{ width: '100%', height: '100%' }} />
+              </AbsoluteFill>
+            );
+          };
+          EOF
+
+      # ── Validator: bundle + render still (landscape & portrait) + ukur waktu per frame 4K ──
+      - name: Write validator
         run: |
           cd remotion-project
-          cat > gen-ideas.mjs <<'EOF'
-          import fs from "fs";
-          const data = JSON.parse(fs.readFileSync("video-ideas.json","utf8"));
-          const ideas = data.videos.map(v => ({
-            id: v.id,
-            type: v.composition.type,
-            colors: {
-              primary: v.composition.primaryColor,
-              secondary: v.composition.secondaryColor,
-              bg: v.composition.bgColor,
-            },
-            duration: v.composition.durationSeconds || 15,
-          }));
-          fs.writeFileSync("src/ideas.ts",
-            "export const IDEAS = " + JSON.stringify(ideas, null, 2) + ";\n");
+          cat > validate.mjs <<'EOF'
+          import { bundle } from '@remotion/bundler';
+          import * as R from '@remotion/renderer';
+          import fs from 'fs';
+          import os from 'os';
+          import path from 'path';
+
+          const [id, colorsJson, framesStr] = process.argv.slice(2);
+          const colors = JSON.parse(colorsJson);
+          const frames = parseInt(framesStr, 10);
+          const MAX_FRAME_SECONDS = 18; // satu frame 4K; 450 frame / concurrency 2 masih muat di timeout render
+          const entryFile = path.resolve('src/_validate-entry.tsx');
+          const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'val-'));
+
+          const entry = `import React from 'react';
+          import { registerRoot, Composition } from 'remotion';
+          import { CanvasScene } from './lib/CanvasScene';
+          import { draw } from './custom/${id}';
+          const colors = ${JSON.stringify(colors)};
+          const Comp: React.FC = () => <CanvasScene draw={draw} colors={colors} />;
+          registerRoot(() => (
+            <>
+              <Composition id="t-land" component={Comp} durationInFrames={${frames}} fps={30} width={3840} height={2160} />
+              <Composition id="t-port" component={Comp} durationInFrames={${frames}} fps={30} width={2160} height={3840} />
+            </>
+          ));
+          `;
+
+          async function still(serveUrl, compId, frame, scale, name) {
+            const composition = await R.selectComposition({ serveUrl, id: compId });
+            const t0 = Date.now();
+            await R.renderStill({
+              composition, serveUrl, frame, scale,
+              output: path.join(outDir, name),
+              imageFormat: 'jpeg', jpegQuality: 70,
+            });
+            return (Date.now() - t0) / 1000;
+          }
+
+          let code = 0;
+          try {
+            fs.writeFileSync(entryFile, entry);
+            if (R.ensureBrowser) await R.ensureBrowser();
+            const serveUrl = await bundle({ entryPoint: entryFile });
+
+            for (const f of [0, Math.floor(frames / 2), frames - 1]) {
+              await still(serveUrl, 't-land', f, 0.25, `l${f}.jpg`);
+            }
+            await still(serveUrl, 't-port', Math.floor(frames / 3), 0.25, 'p.jpg');
+
+            const secs = await still(serveUrl, 't-land', Math.floor(frames / 2), 1, 'full.jpg');
+            if (secs > MAX_FRAME_SECONDS) {
+              throw new Error(
+                `Terlalu berat: 1 frame 4K butuh ${secs.toFixed(1)}s (maks ${MAX_FRAME_SECONDS}s). ` +
+                `Kurangi jumlah path/noise call, gunakan getBuffer() resolusi rendah untuk field, hindari shadowBlur.`
+              );
+            }
+            console.log(JSON.stringify({ ok: true, frameSeconds: secs }));
+          } catch (e) {
+            console.error(String(e?.stack || e).slice(0, 1800));
+            code = 1;
+          } finally {
+            fs.rmSync(entryFile, { force: true });
+            fs.rmSync(outDir, { recursive: true, force: true });
+          }
+          process.exit(code);
           EOF
-          node gen-ideas.mjs
+
+      - name: Install system dependencies (Chrome + fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libnss3 libdbus-1-3 libatk1.0-0 \
+            libgbm-dev libasound2t64 libxrandr2 libxkbcommon-dev libxfixes3 \
+            libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 \
+            libcairo2 libcups2
+
+      - name: Install generator dependencies
+        run: |
+          mkdir -p generator
+          cd generator
+          npm init -y
+          npm install @google/genai
+
+      - name: Write generator script
+        run: |
+          cat > generator/gen.mjs <<'GENEOF'
+          import { GoogleGenAI } from "@google/genai";
+          import fs from "fs";
+          import { spawnSync } from "child_process";
+
+          const ROOT = "..";
+          const HISTORY_PATH = `${ROOT}/history.json`;
+          const RP = `${ROOT}/remotion-project`;
+          const OUTPUT_PATH = `${RP}/video-ideas.json`;
+          const CUSTOM_DIR = `${RP}/src/custom`;
+          const RUN = process.env.GITHUB_RUN_NUMBER || String(Date.now());
+          const TODAY = new Date().toISOString().slice(0, 10);
+          const COUNT = 5;
+          const ATTEMPTS_PER_MODEL = 2;
+          const CODE_ATTEMPTS = 3;
+          const FENCE = "```";
+          const TYPES = ["neural-network", "particle-morph", "data-flow", "organic-growth", "geometric-transform"];
+          const HEX = /^#[0-9a-fA-F]{6}$/;
+          const ALLOWED_IMPORTS = ["../lib/kit", "../lib/CanvasScene"];
+
+          const MODELS = (process.env.GEMINI_MODELS || "").split(",").map(s => s.trim()).filter(Boolean);
+          const ai = process.env.GEMINI_API_KEY
+            ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { timeout: 240000 } })
+            : null;
+
+          const history = JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8"));
+          const previousIds = history.rendered.map(r => r.id);
+          const shipped = history.rendered.slice(-80)
+            .map(r => `  - ${r.technique ? r.technique + " | " : ""}${r.concept}`);
+
+          // ═══════════════════════════════════════════════════════════
+          // CREATIVE BANKS — dipilih oleh SCRIPT (bukan LLM) supaya hasil tiap run benar-benar beda.
+          // LLM cenderung konvergen ke ide yang sama; assignment acak memaksa variasi.
+          // ═══════════════════════════════════════════════════════════
+          const TECHNIQUES = [
+            "curl-noise flow-field ribbons",
+            "strange-attractor trails (Clifford / De Jong / Lorenz projection)",
+            "domain-warped fbm light field rendered on a low-res buffer and upscaled",
+            "Voronoi / Worley cell membranes with glowing edges",
+            "superformula (Gielis) morphing contours layered as nested outlines",
+            "phyllotaxis golden-angle spirals that breathe and counter-rotate",
+            "harmonograph / Lissajous multi-pendulum light trails",
+            "wave interference / moire from concentric ring emitters",
+            "Truchet-style arc weaving that slowly re-routes itself",
+            "kaleidoscopic mirror symmetry of a flowing luminous form",
+            "Fourier epicycle drawing machines tracing evolving curves",
+            "metaball / implicit-surface blobs (low-res field with smooth threshold)",
+            "L-system / fractal branching with growth pulses travelling along branches",
+            "magnetic dipole field lines with slowly drifting poles",
+            "Turing-pattern-like stripes (low-res approximation of reaction-diffusion)",
+            "boids-like swarm that forms and releases shapes",
+            "perspective wireframe terrain with travelling wave displacement",
+            "caustic light-web from summed waves",
+            "string-art envelopes (chord families between rotating anchor points)",
+            "halftone / dot-matrix field modulated by travelling waves",
+            "orbital ring systems with gravitational-lensing distortion",
+            "ink-in-water advection: thousands of soft translucent strokes following a curl field",
+            "stacked ridgelines (Joy-Division style) with depth and light sweep",
+            "quasicrystal / Penrose-like interference lattice",
+            "analytic echo trails: fading copies of a moving form drawn from phase offsets",
+          ];
+          const MATERIALS = [
+            "liquid chrome", "frosted glass layers", "bioluminescent deep-sea life", "aurora silk veils",
+            "ink and smoke", "molten glass", "neon gas tubes", "layered paper-cut depth",
+            "iridescent soap film", "starlight dust", "brushed anodized metal with a light sweep",
+            "watercolor bleed", "crystal prism refraction", "fiber-optic strands", "fine sand / powder",
+          ];
+          const PALETTES = [
+            "deep teal + warm gold on near-black",
+            "ink indigo + coral on midnight",
+            "emerald + champagne on charcoal",
+            "violet + ice-blue on obsidian",
+            "terracotta + sand + teal on dark umber",
+            "graphite monochrome + one electric accent",
+            "rose quartz + deep burgundy",
+            "petrol blue + lime accent on dark slate",
+          ];
+          const MOODS = [
+            "calm, meditative, premium", "confident, corporate-clean", "futuristic, cinematic, dark",
+            "warm, optimistic", "serene wellness", "high-energy but elegant", "mysterious, luxurious",
+          ];
+          const TENSIONS = [
+            "GROWTH vs DECAY", "ORDER vs CHAOS", "ORGANIC vs MECHANICAL",
+            "ISOLATION vs CONNECTION", "SPEED vs STILLNESS", "FRAGILITY vs STRENGTH",
+          ];
+
+          const shuffle = arr => {
+            const a = [...arr];
+            for (let i = a.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+          };
+          const recent = history.rendered.slice(-15);
+          const avoid = key => new Set(recent.map(r => r[key]).filter(Boolean));
+          const pool = (bank, key) => {
+            const used = avoid(key);
+            const free = bank.filter(x => !used.has(x));
+            return shuffle(free.length >= COUNT ? free : bank);
+          };
+          const techs = pool(TECHNIQUES, "technique");
+          const mats = pool(MATERIALS, "material");
+          const pals = shuffle(PALETTES);
+          const moods = shuffle(MOODS);
+          const tensions = shuffle(TENSIONS);
+          const assignments = Array.from({ length: COUNT }, (_, i) => ({
+            technique: techs[i], material: mats[i], palette: pals[i % pals.length],
+            mood: moods[i % moods.length], tension: tensions[i % tensions.length],
+          }));
+
+          // ═══════════════════════════════════════════════════════════
+          // PROMPTS
+          // ═══════════════════════════════════════════════════════════
+          const RESEARCH_PROMPT = `Today is ${TODAY}. Use Google Search.
+
+          You are a stock-footage market analyst. Research what buyers of ABSTRACT / CONCEPTUAL MOTION BACKGROUNDS
+          (4K loops, B-roll, presentation and UI backgrounds, social vertical video) are looking for RIGHT NOW and
+          over the next 90 days. Look at Adobe Stock, Shutterstock, Pond5, Envato, Freepik, Motion Array
+          (trending / popular searches, contributor blogs, "stock trends ${TODAY.slice(0, 4)}" reports) and at
+          current design / motion-design trend reports and upcoming seasonal or industry moments (product-launch
+          seasons, year-end corporate decks, wellness, AI, finance, sustainability, etc.).
+
+          Return a concise brief (max 450 words, plain text, no markdown tables):
+          1. TEN high-intent buyer search phrases, each with a one-line reason and a relative demand label
+             (high / medium) — do NOT invent numeric search volumes; say so if no numbers were found.
+          2. FIVE visual clichés that are heavily saturated and should be avoided.
+          3. THREE emerging aesthetics or techniques that buyers/designers are starting to want.
+          4. Seasonal or industry hooks for the next 90 days.
+          Name the sources you relied on.`;
+
+          function ideaPrompt(a, brief, siblings) {
+            const sib = siblings.length
+              ? siblings.map(s => `  - ${s.creative?.technique} | ${s.concept}`).join("\n")
+              : "  (none yet)";
+            return `You are the head of creative of a top-tier Adobe Stock video contributor studio: part art director,
+          part market analyst, part creative coder. Your clips must look like they belong in a premium collection that
+          agencies, SaaS brands and broadcasters license again and again — not like generic mass-produced
+          "particles on a gradient".
+
+          TODAY: ${TODAY}
+
+          ═══ 1. MARKET INTELLIGENCE ═══
+          ${brief || "(no live research available — rely on your own knowledge of what buyers search for on stock platforms)"}
+
+          ═══ 2. STRATEGY: DEMAND × NOVELTY ═══
+          Blue ocean = (a search intent buyers ALREADY have) × (a visual treatment almost nobody has shipped).
+           - Pick ONE real, high-intent buyer search phrase for this clip (e.g. "abstract technology background loop",
+             "AI data visualization", "calm gradient motion background for presentation"). It must appear in the
+             stock title and lead the keyword list. Never invent a concept nobody would type into a search box.
+           - Deliver it with a surprising visual treatment built from the creative assignment below.
+           - Honesty rule: you have NO access to real search-volume numbers. Score demand and saturation as best
+             estimates and state the evidence they are based on.
+
+          ═══ 3. CREATIVE ASSIGNMENT (mandatory) ═══
+           - Signature technique : ${a.technique}
+           - Hero material       : ${a.material}
+           - Mood                : ${a.mood}
+           - Palette family      : ${a.palette}
+           - Core tension        : ${a.tension}
+          Fuse these into ONE coherent image that makes a viewer pause. Do not list them — resolve them.
+          Push the technique beyond its textbook version (a second interacting system, a symmetry break,
+          an unexpected change of scale).
+
+          ═══ 4. PREMIUM QUALITY BAR ═══
+           - Restraint and negative space: at least 30% of the frame stays calm so an editor can place text.
+           - Depth: three layers (far = dim, slow, soft; mid = hero; near = sparse, large, soft).
+           - Refined colour: modern, muted, harmonious; max 3 hues + neutrals; no pure primaries; no clipped white.
+           - Cinematic light: emission, bloom, falloff. One focal highlight.
+           - Motion: slow, eased, elegant. 12–18 s SEAMLESS LOOP. No pops, flicker or strobing.
+           - Works as both 16:9 and 9:16. Strong from the very first frame (thumbnails).
+           - No text, logos, people, faces, trademarks.
+
+          ═══ 5. AVOID ═══
+          Generic floating particles, blue network nodes, matrix rain, plain gradient blobs, hexagon grids,
+          lens-flare spam, "glowing brain / robot head", anything that looks like a screensaver.
+
+          ═══ 6. ALREADY SHIPPED — never repeat or closely resemble ═══
+          ${shipped.length ? shipped.join("\n") : "  (none yet — first batch)"}
+          Siblings in this batch:
+          ${sib}
+
+          ═══ OUTPUT ═══
+          Output ONLY valid JSON, this exact shape:
+          {
+            "id": "lowercase-kebab-case-unique-max-50-chars",
+            "title": "evocative artistic title, max 60 chars",
+            "stockTitle": "Adobe Stock title in plain buyer language, 8–20 words, max 180 chars: main search phrase + the look + 'seamless loop' + '4K'. No brand names, no 'AI generated'.",
+            "description": "1–2 commercial sentences about the look and typical uses",
+            "concept": "core tension + visual metaphor in one line",
+            "primarySearchIntent": "the exact phrase a buyer would type",
+            "relatedSearchPhrases": ["5-8 phrases"],
+            "demand": { "score": 1-10, "evidence": "why you believe buyers want this" },
+            "saturation": { "score": 1-10, "evidence": "how crowded this look already is" },
+            "noveltyHook": "what the viewer has never seen before",
+            "keywords": ["30-49 terms, MOST important first; first 10 = strongest buyer search terms; include abstract, motion, background, loop, 4K; no brand names"],
+            "composition": {
+              "type": "closest of: neural-network | particle-morph | data-flow | organic-growth | geometric-transform",
+              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "bgColor": "#rrggbb",
+              "animationStyle": "", "durationSeconds": 15,
+              "elements": [{ "name": "", "behavior": "", "timing": { "start": 0, "end": 5 } }]
+            },
+            "visualSpec": {
+              "layers": ["far: ...", "mid: ...", "near: ..."],
+              "motionArc": "how the loop evolves and returns to its start",
+              "copySpace": "where the calm area is, for landscape AND portrait",
+              "lightingNotes": ""
+            }
+          }
+          Rules: demand.score MUST be >= 6 (otherwise choose a stronger search intent). Colours are 6-digit hex.`;
+          }
+
+          const KIT_DOC = `TAU
+          mulberry32(seed:number): () => number              // seeded random 0..1
+          noise(x,y,z=0,w=0): number                         // 4D value noise, -1..1
+          loopNoise(x,y,phase,r=1): number                   // -1..1, periodic in phase (period 1)
+          fbm(x,y,phase,octaves=4,r=1): number               // ~ -1..1, periodic in phase
+          curl(x,y,phase,octaves=3,r=1): [number, number]    // divergence-free flow vector (raw, normalise yourself), periodic
+          clamp(v,a,b)  lerp(a,b,t)  smoothstep(a,b,x)  easeInOut(t)
+          breathe(phase,k=1): number                         // 0..1..0, k whole cycles per loop
+          hexToRgb(hex): [r,g,b]   rgba(hex,alpha): string   mixHex(hexA,hexB,t): hex string
+          getBuffer(key,w,h): { canvas, ctx }                // cached offscreen canvas for low-res fields; NOT cleared automatically`;
+
+          const EXAMPLE = `import { mulberry32, curl, rgba, mixHex, breathe } from '../lib/kit';
+          import type { DrawFn } from '../lib/CanvasScene';
+
+          // EXAMPLE ONLY — shows structure, API use and loop discipline. Do NOT imitate its look.
+          export const draw: DrawFn = (ctx, s) => {
+            const { w, h, u, phase, colors } = s;
+            const rnd = mulberry32(1337);            // same seed every frame => stable layout
+            const scale = 1 / (520 * u);             // noise scale independent of resolution
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            for (let i = 0; i < 260; i++) {
+              let x = (rnd() * 1.3 - 0.15) * w;
+              let y = (rnd() * 1.3 - 0.15) * h;
+              const tint = mixHex(colors.primary, colors.secondary, rnd());
+              ctx.lineWidth = (0.5 + rnd() * 1.6) * u;
+              ctx.strokeStyle = rgba(tint, 0.1 + 0.1 * breathe(phase + rnd(), 1));
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              for (let k = 0; k < 48; k++) {
+                const [dx, dy] = curl(x * scale, y * scale, phase, 2, 0.8);   // phase => seamless loop
+                const m = Math.hypot(dx, dy) || 1;
+                x += (dx / m) * 11 * u;
+                y += (dy / m) * 11 * u;
+                ctx.lineTo(x, y);
+              }
+              ctx.stroke();
+            }
+          };`;
+
+          function codePrompt(idea, prevCode, error) {
+            const spec = {
+              title: idea.title, concept: idea.concept, noveltyHook: idea.noveltyHook,
+              creativeAssignment: idea.creative, composition: idea.composition, visualSpec: idea.visualSpec,
+            };
+            const repair = prevCode ? `
+          ═══ YOUR PREVIOUS ATTEMPT FAILED ═══
+          Error:
+          ${error}
+
+          Previous code:
+          ${FENCE}ts
+          ${prevCode}
+          ${FENCE}
+          Fix the problem and return the COMPLETE corrected file.
+          ` : "";
+            return `You are an elite creative coder (Shadertoy / generative-art studio level) writing ONE Canvas 2D draw
+          function for a premium 4K stock-video loop. Remotion renders it frame by frame.
+
+          ═══ THE IDEA ═══
+          ${JSON.stringify(spec, null, 2)}
+
+          ═══ FILE CONTRACT ═══
+          Return ONE TypeScript file in a single ${FENCE}ts block and nothing else. It must:
+           1. import ONLY from '../lib/kit' and (type only) from '../lib/CanvasScene';
+           2. export const draw: DrawFn = (ctx, s) => { ... };
+          The harness paints the background + soft radial backdrop BEFORE draw() and adds vignette + film grain
+          AFTER. Do not fill the whole frame opaque, and do not add your own vignette or grain.
+
+          State s: s.w, s.h (3840x2160 landscape or 2160x3840 portrait), s.cx, s.cy (center), s.u (unit scale
+          ≈ min(w,h)/1000, ≈2.16 at 4K — multiply EVERY pixel size by it), s.phase (0..1 loop position — the ONLY
+          time source), s.seconds (loop length), s.portrait (boolean), s.colors {primary, secondary, bg}.
+
+          KIT (from '../lib/kit'):
+          ${KIT_DOC}
+
+          ═══ NON-NEGOTIABLE RULES ═══
+          1. Deterministic. No Math.random, Date, performance, window, document, fetch, timers. Create
+             const rnd = mulberry32(CONSTANT) INSIDE draw() so every frame gets the same layout; only
+             phase-driven quantities move.
+          2. SEAMLESS LOOP. Every moving quantity must return to its start value at phase = 1: use
+             sin/cos(TAU * phase * k) with INTEGER k, loopNoise/fbm/curl, breathe(phase,k), or circular motion.
+             No linear drift, no one-way growth.
+          3. Resolution- and aspect-independent: size with s.u, position relative to s.w/s.h/s.cx/s.cy. It must look
+             intentional in landscape AND portrait. Keep >= 30% of the frame calm (copy space) and adapt
+             the composition when s.portrait is true.
+          4. Performance budget ≈ 10 s per 4K frame on a CPU. Rough limits: <= 400k path segments, <= 3M noise()
+             calls, NO per-pixel loops at full resolution. For field/surface looks evaluate on a small buffer
+             (getBuffer(key, 240, 135), ImageData) then drawImage it upscaled with imageSmoothingQuality='high'.
+             Avoid shadowBlur (very slow at 4K): fake glow with layered radial gradients + 'lighter'.
+          5. Premium look: >= 3 depth layers; light behaves like light ('lighter' for emission, hairlines of
+             0.5–1.5*u for crisp detail, soft halos for bloom); one focal highlight; never clipped pure white;
+             colours derived from s.colors via mixHex/rgba (primary, secondary, tints/shades, at most ONE accent);
+             slow, eased motion; nothing flickers or pops.
+          6. The frame at phase 0 must already look complete and striking (thumbnails come from early frames).
+          7. No text, logos, people, faces, trademarks.
+          8. Genuinely original: the signature technique must be recognisable but pushed beyond the textbook
+             version. Not a generic particle cloud.
+          9. Complete, runnable code. No placeholders, no TODOs. It must work the first time.
+
+          ═══ STRUCTURE EXAMPLE ═══
+          ${FENCE}ts
+          ${EXAMPLE}
+          ${FENCE}
+          ${repair}`;
+          }
+
+          // ═══════════════════════════════════════════════════════════
+          // HELPERS
+          // ═══════════════════════════════════════════════════════════
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          class Soft extends Error {}
+
+          const sanitizeId = s => String(s || "").toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50);
+          function uniqueId(base, seen) {
+            let id = base, n = 2;
+            while (seen.has(id)) id = `${base}-${n++}`;
+            return id;
+          }
+          const stripFence = t => String(t).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+
+          async function callModel({ prompt, parse, json = false, search = false, label, attempts = ATTEMPTS_PER_MODEL }) {
+            if (!ai) return null;
+            for (const model of MODELS) {
+              for (let a = 1; a <= attempts; a++) {
+                try {
+                  console.log(`[INFO] ${label} — ${model} (${a}/${attempts})`);
+                  const config = { temperature: 1.0, topP: 0.95 };
+                  if (search) config.tools = [{ googleSearch: {} }];
+                  else if (json) config.responseMimeType = "application/json";
+                  const res = await ai.models.generateContent({ model, contents: prompt, config });
+                  try {
+                    return parse(res.text || "");
+                  } catch (pe) {
+                    throw new Soft(pe.message);
+                  }
+                } catch (e) {
+                  const msg = String(e?.message || e);
+                  console.warn(`[FAILED] ${label} ${model} #${a}: ${msg.slice(0, 300)}`);
+                  if (!(e instanceof Soft) && /404|NOT_FOUND|not found|401|403|API key|PERMISSION_DENIED/i.test(msg)) break;
+                  if (a < attempts) await sleep(2000 * 2 ** (a - 1));
+                }
+              }
+            }
+            return null;
+          }
+
+          // ── Idea parsing / validation ──
+          function parseIdea(raw, a, siblings) {
+            const d = JSON.parse(stripFence(raw));
+            const c = d.composition;
+            if (!c) throw new Error("missing composition");
+            if (!TYPES.includes(c.type)) c.type = "geometric-transform";
+            for (const k of ["primaryColor", "secondaryColor", "bgColor"])
+              if (!HEX.test(c[k] || "")) throw new Error(`invalid ${k}: ${c[k]}`);
+            for (const k of ["title", "stockTitle", "description", "concept"])
+              if (!d[k] || typeof d[k] !== "string") throw new Error(`missing ${k}`);
+            if (!(Number(d.demand?.score) >= 6)) throw new Error(`demand score too low: ${d.demand?.score}`);
+
+            const kws = [...new Set((d.keywords || []).map(k => String(k).toLowerCase().trim()).filter(Boolean))].slice(0, 49);
+            if (kws.length < 20) throw new Error("not enough keywords");
+
+            const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
+            const base = sanitizeId(d.id || d.title);
+            if (!base) throw new Error("empty id");
+
+            d.id = uniqueId(base, seen);
+            d.keywords = kws;
+            d.stockTitle = d.stockTitle.slice(0, 200);
+            c.durationSeconds = Math.min(18, Math.max(12, Math.round(Number(c.durationSeconds) || 15)));
+            d.creative = { ...a };
+            return d;
+          }
+
+          // ── Code parsing / static safety check ──
+          const BANNED = [
+            [/\bMath\.random\b/, "Math.random"],
+            [/\bDate\b/, "Date"],
+            [/\bperformance\b/, "performance"],
+            [/\bwindow\b/, "window"],
+            [/\bdocument\b/, "document (use getBuffer from the kit)"],
+            [/\bglobalThis\b/, "globalThis"],
+            [/\bfetch\s*\(/, "fetch"],
+            [/\b(XMLHttpRequest|WebSocket|localStorage|sessionStorage)\b/, "network/storage API"],
+            [/\beval\s*\(|\bnew\s+Function\b|\bFunction\s*\(/, "eval/Function"],
+            [/\brequire\s*\(|\bimport\s*\(/, "dynamic import/require"],
+            [/\bprocess\s*\./, "process"],
+            [/\b(setTimeout|setInterval|requestAnimationFrame)\b/, "timers"],
+          ];
+
+          function staticCheck(code) {
+            if (code.length < 400) return "code too short";
+            if (code.length > 30000) return "code too long";
+            if (!/export\s+const\s+draw\b/.test(code)) return "must contain: export const draw: DrawFn = (ctx, s) => { ... }";
+            if (/^\s*import\s+['"]/m.test(code)) return "side-effect imports are not allowed";
+            const imports = [...code.matchAll(/^\s*import\s+[^;]*?from\s+['"]([^'"]+)['"]/gm)].map(m => m[1]);
+            const bad = imports.filter(p => !ALLOWED_IMPORTS.includes(p));
+            if (bad.length) return `imports not allowed: ${bad.join(", ")}`;
+            const bare = code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+            for (const [re, name] of BANNED) if (re.test(bare)) return `forbidden API used: ${name}`;
+            return null;
+          }
+
+          function parseCode(raw) {
+            const m = String(raw).match(/```(?:ts|typescript|tsx|js)?\s*\n([\s\S]*?)```/);
+            const code = (m ? m[1] : String(raw)).trim();
+            const err = staticCheck(code);
+            if (err) throw new Error(err);
+            return code;
+          }
+
+          // ── Runtime validation: bundle + render stills + timing (child process tanpa API key) ──
+          function runtimeValidate(id, colors, frames) {
+            const env = { ...process.env };
+            delete env.GEMINI_API_KEY;
+            const r = spawnSync("node", ["validate.mjs", id, JSON.stringify(colors), String(frames)], {
+              cwd: RP, env, encoding: "utf8", timeout: 10 * 60 * 1000,
+            });
+            if (r.status === 0) {
+              console.log(`[VALIDATE OK] ${id} ${(r.stdout || "").trim().slice(-120)}`);
+              return null;
+            }
+            return ((r.stderr || "") + (r.stdout || "")).trim().slice(-1800) || "unknown validation error";
+          }
+
+          async function buildCode(idea) {
+            const c = idea.composition;
+            const colors = { primary: c.primaryColor, secondary: c.secondaryColor, bg: c.bgColor };
+            const frames = Math.round(c.durationSeconds * 30);
+            const file = `${CUSTOM_DIR}/${idea.id}.ts`;
+            let prevCode = "", lastError = "";
+
+            for (let attempt = 1; attempt <= CODE_ATTEMPTS; attempt++) {
+              const code = await callModel({
+                prompt: codePrompt(idea, prevCode, lastError),
+                label: `code ${idea.id} #${attempt}`,
+                parse: parseCode,
+              });
+              if (!code) break;
+              fs.writeFileSync(file, code);
+              const err = runtimeValidate(idea.id, colors, frames);
+              if (!err) return true;
+              console.warn(`[CODE FAIL] ${idea.id} #${attempt}: ${err.slice(0, 500)}`);
+              prevCode = code;
+              lastError = err;
+            }
+            fs.rmSync(file, { force: true });
+            return false;
+          }
+
+          // ── Fallback statis (engine bawaan) ──
+          const FALLBACK = [
+            { id: "neural-bloom", title: "Neural Bloom", concept: "GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
+              description: "Abstract neural network unfurling organically like bioluminescent roots.",
+              keywords: ["neural network", "abstract background", "motion", "loop", "4K", "ai", "technology", "growth", "digital", "brain", "connection", "synapse", "data", "future", "innovation", "conceptual", "organic", "science", "dark background", "glow", "vertical"],
+              composition: { type: "neural-network", primaryColor: "#6366f1", secondaryColor: "#22d3ee", bgColor: "#020617", animationStyle: "organic", durationSeconds: 15, elements: [] } },
+            { id: "tidal-fragments", title: "Tidal Fragments", concept: "ORDER vs CHAOS — particles snap into a perfect ring then dissolve",
+              description: "Particles converge into a luminous ring before dissolving into chaos.",
+              keywords: ["particles", "abstract background", "motion", "loop", "4K", "ring", "transformation", "innovation", "digital", "future", "conceptual", "glow", "dynamic", "fluid", "energy", "orbit", "cinematic", "science", "dark background", "technology", "vertical"],
+              composition: { type: "particle-morph", primaryColor: "#f59e0b", secondaryColor: "#ec4899", bgColor: "#0a0a0a", animationStyle: "fluid", durationSeconds: 15, elements: [] } },
+            { id: "data-river", title: "Data River", concept: "SPEED vs STILLNESS — packets rush while the background holds perfectly still",
+              description: "Streaming data packets with luminous trails across a calm field.",
+              keywords: ["data flow", "abstract background", "motion", "loop", "4K", "stream", "network", "technology", "speed", "digital", "information", "future", "connection", "cyber", "conceptual", "bandwidth", "signal", "transmission", "dark background", "lines", "vertical"],
+              composition: { type: "data-flow", primaryColor: "#10b981", secondaryColor: "#3b82f6", bgColor: "#030712", animationStyle: "mechanical", durationSeconds: 15, elements: [] } },
+            { id: "root-memory", title: "Root Memory", concept: "FRAGILITY vs STRENGTH — thin branches thicken into a resilient root system",
+              description: "Fractal branches growing and thickening like an ancient root system.",
+              keywords: ["organic growth", "abstract background", "motion", "loop", "4K", "branches", "roots", "fractal", "nature", "life", "green", "evolution", "conceptual", "botanical", "tree", "structure", "biology", "cinematic", "macro", "dark background", "vertical"],
+              composition: { type: "organic-growth", primaryColor: "#22c55e", secondaryColor: "#a3e635", bgColor: "#0c1510", animationStyle: "organic", durationSeconds: 15, elements: [] } },
+            { id: "prism-fold", title: "Prism Fold", concept: "ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
+              description: "Nested polygons rotating and folding inward until their edges intersect.",
+              keywords: ["geometric", "abstract background", "motion", "loop", "4K", "polygon", "shape", "geometry", "structure", "business", "strategy", "minimal", "modern", "conceptual", "digital", "design", "symmetry", "kaleidoscope", "mathematics", "dark background", "vertical"],
+              composition: { type: "geometric-transform", primaryColor: "#a855f7", secondaryColor: "#f472b6", bgColor: "#0b0614", animationStyle: "mechanical", durationSeconds: 15, elements: [] } },
+          ];
+
+          function fallbackIdea(i, a, siblings) {
+            const v = JSON.parse(JSON.stringify(FALLBACK[i % FALLBACK.length]));
+            const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
+            v.id = uniqueId(`${v.id}-${RUN}`, seen);
+            v.stockTitle = `${v.title} abstract motion background, seamless loop, 4K`;
+            v.creative = { ...a };
+            v.codeMode = "builtin";
+            return v;
+          }
+
+          function writeRegistry(videos) {
+            const custom = videos.filter(v => v.codeMode === "custom");
+            const imports = custom.map((v, i) => `import { draw as d${i} } from './custom/${v.id}';`).join("\n");
+            const entries = custom.map((v, i) => {
+              const c = v.composition;
+              const colors = JSON.stringify({ primary: c.primaryColor, secondary: c.secondaryColor, bg: c.bgColor });
+              return `  '${v.id}': () => <CanvasScene draw={d${i}} colors={${colors}} />,`;
+            }).join("\n");
+            fs.writeFileSync(`${RP}/src/registry.tsx`,
+              `import React from 'react';\nimport { CanvasScene } from './lib/CanvasScene';\n${imports}\n\n` +
+              `export const CUSTOM: Record<string, React.FC> = {\n${entries}\n};\n`);
+          }
+
+          // ═══════════════════════════════════════════════════════════
+          // MAIN
+          // ═══════════════════════════════════════════════════════════
+          async function main() {
+            fs.mkdirSync(CUSTOM_DIR, { recursive: true });
+            const videos = [];
+
+            if (!ai) {
+              console.warn("[WARN] GEMINI_API_KEY tidak diset — memakai fallback statis.");
+              for (let i = 0; i < COUNT; i++) videos.push(fallbackIdea(i, assignments[i], videos));
+            } else {
+              const brief = await callModel({
+                prompt: RESEARCH_PROMPT, search: true, label: "research", attempts: 1,
+                parse: t => { if (String(t).trim().length < 200) throw new Error("research too short"); return String(t).trim(); },
+              });
+              console.log(brief ? `[RESEARCH OK] ${brief.length} chars` : "[RESEARCH] tidak tersedia — lanjut tanpa brief");
+
+              for (let i = 0; i < COUNT; i++) {
+                const a = assignments[i];
+                const idea = await callModel({
+                  prompt: ideaPrompt(a, brief || "", videos), json: true, label: `idea ${i + 1}`,
+                  parse: raw => parseIdea(raw, a, videos),
+                });
+                if (!idea) {
+                  console.warn(`[FALLBACK] ide ${i + 1} memakai template statis`);
+                  videos.push(fallbackIdea(i, a, videos));
+                  continue;
+                }
+                idea.codeMode = (await buildCode(idea)) ? "custom" : "builtin";
+                console.log(`[IDEA] ${idea.id} → ${idea.codeMode}`);
+                videos.push(idea);
+              }
+            }
+
+            writeRegistry(videos);
+            fs.writeFileSync(OUTPUT_PATH, JSON.stringify({ videos }, null, 2));
+            console.log(`Selesai: ${videos.map(v => `${v.id}(${v.codeMode})`).join(", ")}`);
+          }
+
+          await main();
+          GENEOF
 
       - name: Write Remotion code
         run: |
@@ -182,6 +939,7 @@ jobs:
           registerRoot(RemotionRoot);
           EOF
 
+          # Engine bawaan: dipakai sebagai fallback bila kode AI gagal validasi
           cat > src/Scene.tsx <<'EOF'
           import React, { useMemo } from 'react';
           import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
@@ -304,6 +1062,11 @@ jobs:
                     </div>
                   );
                 })}
+                {[0,1,2].map(i => (
+                  <div key={`v${i}`} style={{ position: 'absolute', left: w * (0.3 + i * 0.2), top: 0,
+                    width: 1.5, height: h,
+                    background: `linear-gradient(180deg, transparent, ${c.secondary}33, transparent)` }} />
+                ))}
               </>
             );
           };
@@ -374,6 +1137,19 @@ jobs:
                     </g>
                   );
                 })}
+                {shapes.map((s, i) => {
+                  const rot = s.rotation + frame * s.speed;
+                  const r = s.radius * (0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4);
+                  const col = s.hue > 0.5 ? c.primary : c.secondary;
+                  return (
+                    <g key={`v${i}`}>
+                      {Array.from({ length: s.sides }).map((_, k) => {
+                        const a = rot + (k / s.sides) * Math.PI * 2;
+                        return <circle key={k} cx={w / 2 + Math.cos(a) * r} cy={h / 2 + Math.sin(a) * r} r={3} fill={col} opacity={0.9} />;
+                      })}
+                    </g>
+                  );
+                })}
               </svg>
             );
           };
@@ -415,22 +1191,89 @@ jobs:
           import { Composition } from 'remotion';
           import { Scene } from './Scene';
           import { IDEAS } from './ideas';
+          import { CUSTOM } from './registry';
+
+          const SIZES = [
+            { suffix: '16x9-4k', width: 3840, height: 2160 },
+            { suffix: '9x16-4k', width: 2160, height: 3840 },
+          ];
 
           export const RemotionRoot: React.FC = () => (
             <>
-              {IDEAS.map((idea: any) => (
-                <React.Fragment key={idea.id}>
-                  <Composition id={`${idea.id}-16x9-4k`} component={Scene}
-                    durationInFrames={Math.round(idea.duration * 30)} fps={30}
-                    width={3840} height={2160} defaultProps={{ idea }} />
-                  <Composition id={`${idea.id}-9x16-4k`} component={Scene}
-                    durationInFrames={Math.round(idea.duration * 30)} fps={30}
-                    width={2160} height={3840} defaultProps={{ idea }} />
-                </React.Fragment>
-              ))}
+              {IDEAS.map((idea: any) => {
+                const Custom = CUSTOM[idea.id];
+                const frames = Math.round(idea.duration * 30);
+                return (
+                  <React.Fragment key={idea.id}>
+                    {SIZES.map((sz) =>
+                      Custom ? (
+                        <Composition
+                          key={sz.suffix}
+                          id={`${idea.id}-${sz.suffix}`}
+                          component={Custom}
+                          durationInFrames={frames}
+                          fps={30}
+                          width={sz.width}
+                          height={sz.height}
+                        />
+                      ) : (
+                        <Composition
+                          key={sz.suffix}
+                          id={`${idea.id}-${sz.suffix}`}
+                          component={Scene}
+                          durationInFrames={frames}
+                          fps={30}
+                          width={sz.width}
+                          height={sz.height}
+                          defaultProps={{ idea }}
+                        />
+                      )
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </>
           );
           EOF
+
+      # SECRET hanya tersedia di step ini; kode AI divalidasi di child process TANPA API key
+      - name: Generate ideas + AI code (research → ideate → code → validate)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd generator
+          node gen.mjs
+
+      - name: Generate ideas.ts
+        run: |
+          cd remotion-project
+          cat > gen-ideas.mjs <<'EOF'
+          import fs from "fs";
+          const data = JSON.parse(fs.readFileSync("video-ideas.json","utf8"));
+          const ideas = data.videos.map(v => ({
+            id: v.id,
+            type: v.composition.type,
+            colors: {
+              primary: v.composition.primaryColor,
+              secondary: v.composition.secondaryColor,
+              bg: v.composition.bgColor,
+            },
+            duration: v.composition.durationSeconds || 15,
+          }));
+          fs.writeFileSync("src/ideas.ts",
+            "export const IDEAS = " + JSON.stringify(ideas, null, 2) + ";\n");
+          EOF
+          node gen-ideas.mjs
+
+      # Safety net: bila project gagal dimuat karena kode custom, kosongkan registry → pakai engine bawaan
+      - name: Verify project compiles (safety net)
+        run: |
+          cd remotion-project
+          if ! npx remotion compositions src/index.ts; then
+            echo "::warning::Registry bermasalah — fallback ke engine bawaan untuk semua ide"
+            printf "import React from 'react';\nexport const CUSTOM: Record<string, React.FC> = {};\n" > src/registry.tsx
+            npx remotion compositions src/index.ts
+          fi
 
       - name: Build composition list
         id: comps
@@ -443,12 +1286,12 @@ jobs:
               list.push(v.id + '-16x9-4k');
               list.push(v.id + '-9x16-4k');
             });
+            if (list.length === 0) { console.error('Daftar komposisi kosong'); process.exit(1); }
             require('fs').writeFileSync('comps.json', JSON.stringify(list));
           "
           echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
 
-      # tar tanpa node_modules: artifact tidak menyimpan permission file,
-      # sehingga binary (esbuild, dll.) akan kehilangan bit +x.
+      # node_modules TIDAK ikut (artifact tidak menyimpan permission +x). Install bersih di job render.
       - name: Pack project (tanpa node_modules)
         run: tar --exclude='node_modules' -czf project.tgz remotion-project
 
@@ -457,6 +1300,13 @@ jobs:
         with:
           name: remotion-project
           path: project.tgz
+          retention-days: 1
+
+      - name: Upload ideas metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ideas-meta
+          path: remotion-project/video-ideas.json
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
@@ -503,7 +1353,11 @@ jobs:
         run: |
           cd remotion-project
           npx remotion render "${{ matrix.comp }}" "out/${{ matrix.comp }}.mp4" \
-            --codec=h264 --concurrency=2 --jpeg-quality=92 --crf=14 --pixel-format=yuv420p
+            --codec=h264 \
+            --concurrency=2 \
+            --jpeg-quality=92 \
+            --crf=14 \
+            --pixel-format=yuv420p
 
       - name: Upload rendered video
         uses: actions/upload-artifact@v4
@@ -513,33 +1367,118 @@ jobs:
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 3 — RELEASE
+  # JOB 3 — RELEASE (tetap jalan walau sebagian render gagal)
   # ══════════════════════════════════════════════════════════
   release:
-    needs: render
+    needs: [prepare, render]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Download all rendered videos
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: video-*
           merge-multiple: true
           path: final-output
 
-      - name: Show output files
-        run: ls -lh final-output/
+      - name: Download ideas metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: ideas-meta
+          path: ideas-meta
+
+      - name: Verify output
+        run: |
+          mkdir -p final-output
+          if ! ls final-output/*.mp4 >/dev/null 2>&1; then
+            echo "::error::Tidak ada video yang berhasil dirender"
+            exit 1
+          fi
+          ls -lh final-output/
+          cp ideas-meta/video-ideas.json final-output/batch-metadata.json
+
+      # CSV metadata siap pakai untuk upload (judul ≤ 200 karakter, keyword ≤ 49)
+      - name: Build upload CSV
+        run: |
+          cat > make-csv.mjs <<'EOF'
+          import fs from "fs";
+          const ideas = JSON.parse(fs.readFileSync("ideas-meta/video-ideas.json", "utf8")).videos;
+          const files = fs.readdirSync("final-output").filter(f => f.endsWith(".mp4")).sort();
+          const esc = s => '"' + String(s).replace(/"/g, '""') + '"';
+          const rows = ["Filename,Title,Keywords,Category,Releases"];
+          for (const f of files) {
+            const v = ideas.find(x => f.startsWith(x.id + "-"));
+            if (!v) continue;
+            const portrait = f.includes("-9x16-");
+            const extra = portrait ? ["vertical", "9:16", "portrait"] : ["horizontal", "16:9"];
+            const base = (v.keywords || []).slice(0, 49 - extra.length);
+            const kws = [...new Set([...base, ...extra])].slice(0, 49);
+            const title = ((v.stockTitle || v.title) + (portrait ? ", vertical 9:16" : "")).slice(0, 200);
+            rows.push([esc(f), esc(title), esc(kws.join(",")), "", ""].join(","));
+          }
+          fs.writeFileSync("final-output/adobe-stock-upload.csv", rows.join("\n") + "\n");
+          console.log("CSV rows:", rows.length - 1);
+          EOF
+          node make-csv.mjs
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: batch-${{ github.run_number }}
           name: "Stock 4K Batch ${{ github.run_number }}"
-          files: final-output/*.mp4
+          files: |
+            final-output/*.mp4
+            final-output/batch-metadata.json
+            final-output/adobe-stock-upload.csv
           draft: false
           prerelease: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # History hanya mencatat ide yang videonya benar-benar dirender & dirilis
+      - name: Update history
+        run: |
+          [ -f history.json ] || echo '{"rendered":[],"version":1}' > history.json
+          node -e "
+            const fs = require('fs');
+            const hist = JSON.parse(fs.readFileSync('./history.json','utf8'));
+            const ideas = JSON.parse(fs.readFileSync('./ideas-meta/video-ideas.json','utf8'));
+            const files = fs.readdirSync('./final-output');
+            const done = ideas.videos.filter(v => files.some(f => f.startsWith(v.id + '-')));
+            const rendered = done.map(v => ({
+              id: v.id,
+              type: v.composition.type,
+              concept: v.concept || v.title,
+              technique: v.creative && v.creative.technique,
+              material: v.creative && v.creative.material,
+              stockTitle: v.stockTitle,
+              codeMode: v.codeMode,
+              renderedAt: new Date().toISOString(),
+              run: process.env.GITHUB_RUN_NUMBER,
+            }));
+            hist.rendered = hist.rendered.concat(rendered);
+            if (hist.rendered.length > 500) hist.rendered = hist.rendered.slice(-500);
+            fs.writeFileSync('./history.json', JSON.stringify(hist, null, 2));
+            console.log('Ditambahkan', rendered.length, 'ide. Total history:', hist.rendered.length);
+          "
+
+      - name: Commit history to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history.json
+          if git diff --staged --quiet; then
+            echo "No history change"
+          else
+            git commit -m "chore: update idea history [skip ci]"
+            git push
+          fi
