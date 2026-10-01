@@ -159,6 +159,41 @@
       "concept": "FRAGILITY vs STRENGTH — Impossibly thin, paper-like translucent planes withstand extreme folding dynamics without breaking.",
       "renderedAt": "2026-10-01T15:23:27.116Z",
       "run": "8"
+    },
+    {
+      "id": "indigo-synapse-mesh",
+      "type": "neural-network",
+      "concept": "ISOLATION vs CONNECTION — isolated points of light form a unified, pulsing web of thought.",
+      "renderedAt": "2026-10-01T21:05:40.451Z",
+      "run": "9"
+    },
+    {
+      "id": "amber-dust-drift",
+      "type": "particle-morph",
+      "concept": "ORDER vs CHAOS — microscopic mineral dust snaps from random turbulence into a strict crystalline lattice.",
+      "renderedAt": "2026-10-01T21:05:40.452Z",
+      "run": "9"
+    },
+    {
+      "id": "emerald-stream-flow",
+      "type": "data-flow",
+      "concept": "SPEED vs STILLNESS — blazing luminescent data currents carve paths through immutable midnight planes.",
+      "renderedAt": "2026-10-01T21:05:40.452Z",
+      "run": "9"
+    },
+    {
+      "id": "forest-spore-rebirth",
+      "type": "organic-growth",
+      "concept": "GROWTH vs DECAY — decomposing bark surfaces are consumed by aggressive, luminous neon flora.",
+      "renderedAt": "2026-10-01T21:05:40.452Z",
+      "run": "9"
+    },
+    {
+      "id": "violet-prism-fold",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — paper-thin glass planes withstand violent geometric folding without shattering.",
+      "renderedAt": "2026-10-01T21:05:40.452Z",
+      "run": "9"
     }
   ],
   "version": 1
