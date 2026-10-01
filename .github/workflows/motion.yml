@@ -1,9 +1,13 @@
-name: Auto Stock 4K Generator (Premium)
+name: Auto Stock Concept Motion Graphics (4K)
 
 on:
   schedule:
     - cron: '0 */8 * * *'   # 3x sehari
   workflow_dispatch:
+    inputs:
+      count:
+        description: 'Jumlah ide per batch (tiap ide = 4 video)'
+        default: '4'
 
 permissions:
   contents: write
@@ -13,14 +17,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  IDEA_COUNT: ${{ github.event.inputs.count || '4' }}
   # Daftar model Gemini (dicoba berurutan). Override lewat repo Variables: GEMINI_MODELS
   GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
 
 jobs:
   # ══════════════════════════════════════════════════════════
   # JOB 1 — PREPARE
-  #   riset tren (Google Search grounding) → ide → kode Canvas dari AI
-  #   → validasi otomatis (compile + render still + cek performa)
+  #   riset pasar → ide konsep (topik jelas × eksekusi mind-blowing)
+  #   → kode Canvas dari AI → validasi otomatis (render, piksel, loop, performa)
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
@@ -48,7 +53,7 @@ jobs:
           npm init -y
           npm install remotion@4.0.290 @remotion/cli@4.0.290 \
             @remotion/bundler@4.0.290 @remotion/renderer@4.0.290 \
-            react@18.3.1 react-dom@18.3.1
+            react@18.3.1 react-dom@18.3.1 jpeg-js
           npm install -D typescript@5.6.3 @types/react@18.3.12
 
           cat > tsconfig.json <<'EOF'
@@ -61,13 +66,14 @@ jobs:
           }
           EOF
 
-      # ── Toolkit yang dipakai kode buatan AI (noise yang bisa loop, warna, grain, dll.) ──
+      # ── Toolkit untuk kode buatan AI ──
       - name: Write creative-coding kit
         run: |
           cd remotion-project
 
           cat > src/lib/kit.ts <<'EOF'
           export const TAU = Math.PI * 2;
+          export type Pt = [number, number];
 
           export const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
           export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -75,8 +81,15 @@ jobs:
             const t = clamp((x - a) / (b - a || 1), 0, 1);
             return t * t * (3 - 2 * t);
           };
+          // Progres 0..1 antara phase a dan b (untuk membuat timeline)
+          export const seg = (phase: number, a: number, b: number) => clamp((phase - a) / (b - a || 1), 0, 1);
           export const easeInOut = (t: number) =>
             t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          export const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+          export const easeOutBack = (t: number) => {
+            const c1 = 1.70158, c3 = c1 + 1;
+            return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+          };
           // 0 → 1 → 0, sebanyak k siklus penuh per loop
           export const breathe = (phase: number, k = 1) => 0.5 - 0.5 * Math.cos(TAU * phase * k);
 
@@ -119,7 +132,7 @@ jobs:
             return sum * 2 - 1;
           }
 
-          // Noise yang berulang sempurna tiap phase = 1 (berjalan melingkar di dimensi z,w)
+          // Noise yang berulang sempurna tiap phase = 1
           export const loopNoise = (x: number, y: number, phase: number, r = 1) =>
             noise(x, y, Math.cos(TAU * phase) * r, Math.sin(TAU * phase) * r);
 
@@ -134,7 +147,6 @@ jobs:
             return sum / norm;
           }
 
-          // Vektor aliran divergence-free (mentah, normalisasi sendiri), loop sempurna
           export function curl(x: number, y: number, phase: number, octaves = 3, r = 1): [number, number] {
             const e = 0.02;
             const dy = (fbm(x, y + e, phase, octaves, r) - fbm(x, y - e, phase, octaves, r)) / (2 * e);
@@ -142,6 +154,7 @@ jobs:
             return [dy, -dx];
           }
 
+          // ── Warna ──
           export function hexToRgb(hex: string): [number, number, number] {
             const h = hex.replace('#', '');
             const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
@@ -156,8 +169,113 @@ jobs:
             const c = (i: number) => Math.round(lerp(A[i], B[i], clamp(t, 0, 1))).toString(16).padStart(2, '0');
             return `#${c(0)}${c(1)}${c(2)}`;
           }
+          // amt > 0 → lebih terang, amt < 0 → lebih gelap
+          export const shade = (hex: string, amt: number) =>
+            mixHex(hex, amt > 0 ? '#ffffff' : '#000000', Math.abs(amt));
 
-          // Canvas offscreen resolusi rendah (untuk efek field/permukaan). Tidak dibersihkan otomatis.
+          // ── Geometri untuk ikon (polyline bisa digambar bertahap, di-morph, dan di-resample) ──
+          export const pol = (cx: number, cy: number, r: number, a: number): Pt => [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+          // Proyeksi isometrik (satuan bebas; kalikan sendiri dengan ukuran)
+          export const iso = (x: number, y: number, z = 0): Pt => [(x - y) * 0.866025, (x + y) * 0.5 - z];
+
+          export function circlePts(cx: number, cy: number, r: number, n = 64, start = -Math.PI / 2): Pt[] {
+            const out: Pt[] = [];
+            for (let i = 0; i < n; i++) out.push(pol(cx, cy, r, start + (i / n) * TAU));
+            return out;
+          }
+
+          export function roundedRectPts(cx: number, cy: number, w: number, h: number, r: number, steps = 8): Pt[] {
+            const rr = Math.min(r, w / 2, h / 2);
+            const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
+            const out: Pt[] = [];
+            const arc = (ax: number, ay: number, a0: number) => {
+              for (let i = 0; i <= steps; i++) {
+                const a = a0 + (i / steps) * (Math.PI / 2);
+                out.push([ax + Math.cos(a) * rr, ay + Math.sin(a) * rr]);
+              }
+            };
+            arc(x1 - rr, y0 + rr, -Math.PI / 2);
+            arc(x1 - rr, y1 - rr, 0);
+            arc(x0 + rr, y1 - rr, Math.PI / 2);
+            arc(x0 + rr, y0 + rr, Math.PI);
+            return out; // path tertutup
+          }
+
+          // Resample polyline menjadi n titik berjarak sama → memungkinkan morph antar bentuk apa pun
+          export function resample(pts: Pt[], n: number, close = false): Pt[] {
+            const P = close ? [...pts, pts[0]] : pts;
+            if (P.length < 2) return Array.from({ length: n }, () => (P[0] || [0, 0]) as Pt);
+            const cum = [0];
+            for (let i = 1; i < P.length; i++) {
+              cum.push(cum[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
+            }
+            const total = cum[cum.length - 1] || 1;
+            const out: Pt[] = [];
+            for (let k = 0; k < n; k++) {
+              const d = (close ? k / n : k / (n - 1)) * total;
+              let i = 1;
+              while (i < cum.length - 1 && cum[i] < d) i++;
+              const sl = cum[i] - cum[i - 1] || 1;
+              const t = (d - cum[i - 1]) / sl;
+              out.push([P[i - 1][0] + (P[i][0] - P[i - 1][0]) * t, P[i - 1][1] + (P[i][1] - P[i - 1][1]) * t]);
+            }
+            return out;
+          }
+
+          export const lerpPts = (a: Pt[], b: Pt[], t: number): Pt[] =>
+            a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t)] as Pt);
+
+          // Menambahkan sebagian (0..1) panjang polyline ke path aktif (untuk efek draw-on)
+          export function tracePolyline(ctx: CanvasRenderingContext2D, pts: Pt[], t = 1, close = false) {
+            const P = close ? [...pts, pts[0]] : pts;
+            if (P.length < 2) return;
+            const seglen: number[] = [];
+            let total = 0;
+            for (let i = 1; i < P.length; i++) {
+              const d = Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+              seglen.push(d);
+              total += d;
+            }
+            let remain = total * clamp(t, 0, 1);
+            ctx.moveTo(P[0][0], P[0][1]);
+            for (let i = 1; i < P.length && remain > 0; i++) {
+              const d = seglen[i - 1];
+              if (remain >= d) {
+                ctx.lineTo(P[i][0], P[i][1]);
+                remain -= d;
+              } else {
+                const k = remain / (d || 1);
+                ctx.lineTo(P[i - 1][0] + (P[i][0] - P[i - 1][0]) * k, P[i - 1][1] + (P[i][1] - P[i - 1][1]) * k);
+                remain = 0;
+              }
+            }
+          }
+
+          // Garis neon: halo berlapis (tanpa shadowBlur yang lambat) + inti terang.
+          // `trace` adalah fungsi yang membangun path (moveTo/lineTo/tracePolyline) tanpa beginPath/stroke.
+          export function neonStroke(ctx: CanvasRenderingContext2D, trace: () => void, color: string, lw: number, intensity = 1) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalCompositeOperation = 'lighter';
+            const halo: [number, number][] = [[7, 0.04], [4, 0.09], [2.2, 0.2]];
+            for (const [k, a] of halo) {
+              ctx.lineWidth = lw * k;
+              ctx.strokeStyle = rgba(color, a * intensity);
+              ctx.beginPath();
+              trace();
+              ctx.stroke();
+            }
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.lineWidth = lw;
+            ctx.strokeStyle = rgba(mixHex(color, '#ffffff', 0.5), clamp(0.95 * intensity, 0, 1));
+            ctx.beginPath();
+            trace();
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Canvas offscreen resolusi rendah. Tidak dibersihkan otomatis.
           const buffers = new Map<string, { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>();
           export function getBuffer(key: string, w: number, h: number) {
             const id = `${key}:${w}x${h}`;
@@ -172,7 +290,7 @@ jobs:
             return b;
           }
 
-          // ── Finishing (dipanggil harness, bukan oleh kode AI) ──
+          // ── Finishing (dipanggil harness untuk varian 'dark', bukan oleh kode AI) ──
           export function drawVignette(ctx: CanvasRenderingContext2D, w: number, h: number, bg: string, strength = 0.5) {
             const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.55);
             g.addColorStop(0, rgba(bg, 0));
@@ -184,7 +302,7 @@ jobs:
             ctx.restore();
           }
 
-          // Grain halus = dithering untuk mencegah banding pada gradient gelap (penyebab reject umum)
+          // Grain halus = dithering anti-banding
           const grainTiles = new Map<number, HTMLCanvasElement>();
           export function drawGrain(ctx: CanvasRenderingContext2D, w: number, h: number, frame: number, amount = 0.02) {
             const k = frame % 8;
@@ -220,25 +338,37 @@ jobs:
           import { drawGrain, drawVignette, mixHex } from './kit';
 
           export type Colors = { primary: string; secondary: string; bg: string };
+          // dark  = backdrop gelap premium (vignette + grain)
+          // black = hitam murni datar (untuk overlay screen/add)
+          // green = hijau chroma key datar (tanpa efek apa pun di latar)
+          export type Variant = 'dark' | 'black' | 'green';
+
+          const FLAT_BG: Record<'black' | 'green', string> = { black: '#000000', green: '#00B140' };
 
           export type DrawState = {
             w: number;
             h: number;
             cx: number;
             cy: number;
-            u: number;          // unit scale ≈ min(w,h)/1000
-            phase: number;      // 0..1, posisi loop (satu-satunya sumber waktu)
+            u: number;          // unit skala ≈ min(w,h)/1000
+            hero: number;       // sisi persegi aman di tengah untuk subjek utama
+            phase: number;      // 0..1 posisi loop (satu-satunya sumber waktu)
             seconds: number;    // durasi loop dalam detik
             portrait: boolean;
+            variant: Variant;
+            bg: string;         // warna latar efektif
             colors: Colors;
           };
 
           export type DrawFn = (ctx: CanvasRenderingContext2D, s: DrawState) => void;
 
-          export const CanvasScene: React.FC<{ draw: DrawFn; colors: Colors }> = ({ draw, colors }) => {
+          export const CanvasScene: React.FC<{ draw: DrawFn; colors: Colors; variant?: Variant }> = ({
+            draw, colors, variant = 'dark',
+          }) => {
             const ref = useRef<HTMLCanvasElement>(null);
             const frame = useCurrentFrame();
             const { width, height, fps, durationInFrames } = useVideoConfig();
+            const bg = variant === 'dark' ? colors.bg : FLAT_BG[variant];
 
             useLayoutEffect(() => {
               const canvas = ref.current;
@@ -249,24 +379,30 @@ jobs:
               ctx.setTransform(1, 0, 0, 1, 0, 0);
               ctx.globalAlpha = 1;
               ctx.globalCompositeOperation = 'source-over';
-              ctx.fillStyle = colors.bg;
+              ctx.fillStyle = bg;
               ctx.fillRect(0, 0, width, height);
 
-              const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
-              g.addColorStop(0, mixHex(colors.bg, colors.primary, 0.1));
-              g.addColorStop(1, colors.bg);
-              ctx.fillStyle = g;
-              ctx.fillRect(0, 0, width, height);
+              if (variant === 'dark') {
+                const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
+                g.addColorStop(0, mixHex(bg, colors.primary, 0.12));
+                g.addColorStop(1, bg);
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, width, height);
+              }
 
+              const portrait = height > width;
               const s: DrawState = {
                 w: width,
                 h: height,
                 cx: width / 2,
                 cy: height / 2,
                 u: Math.min(width, height) / 1000,
+                hero: portrait ? width * 0.7 : height * 0.6,
                 phase: frame / durationInFrames,
                 seconds: durationInFrames / fps,
-                portrait: height > width,
+                portrait,
+                variant,
+                bg,
                 colors,
               };
 
@@ -274,33 +410,37 @@ jobs:
               draw(ctx, s);
               ctx.restore();
 
-              drawVignette(ctx, width, height, colors.bg, 0.55);
-              drawGrain(ctx, width, height, frame, 0.02);
-            }, [frame, width, height, fps, durationInFrames, colors, draw]);
+              if (variant === 'dark') {
+                drawVignette(ctx, width, height, bg, 0.55);
+                drawGrain(ctx, width, height, frame, 0.02);
+              }
+            }, [frame, width, height, fps, durationInFrames, colors, draw, variant, bg]);
 
             return (
-              <AbsoluteFill style={{ background: colors.bg }}>
+              <AbsoluteFill style={{ background: bg }}>
                 <canvas ref={ref} width={width} height={height} style={{ width: '100%', height: '100%' }} />
               </AbsoluteFill>
             );
           };
           EOF
 
-      # ── Validator: bundle + render still (landscape & portrait) + ukur waktu per frame 4K ──
+      # ── Validator: bundle + still (3 varian) + cek piksel, animasi, loop, spill hijau, performa ──
       - name: Write validator
         run: |
           cd remotion-project
           cat > validate.mjs <<'EOF'
           import { bundle } from '@remotion/bundler';
           import * as R from '@remotion/renderer';
+          import jpeg from 'jpeg-js';
           import fs from 'fs';
           import os from 'os';
           import path from 'path';
 
           const [id, colorsJson, framesStr] = process.argv.slice(2);
           const colors = JSON.parse(colorsJson);
-          const frames = parseInt(framesStr, 10);
-          const MAX_FRAME_SECONDS = 18; // satu frame 4K; 450 frame / concurrency 2 masih muat di timeout render
+          const F = parseInt(framesStr, 10);
+          const MAX_FRAME_SECONDS = 18;
+          const GREEN = [0, 177, 64];
           const entryFile = path.resolve('src/_validate-entry.tsx');
           const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'val-'));
 
@@ -309,11 +449,15 @@ jobs:
           import { CanvasScene } from './lib/CanvasScene';
           import { draw } from './custom/${id}';
           const colors = ${JSON.stringify(colors)};
-          const Comp: React.FC = () => <CanvasScene draw={draw} colors={colors} />;
+          const Dark: React.FC = () => <CanvasScene draw={draw} colors={colors} variant="dark" />;
+          const Black: React.FC = () => <CanvasScene draw={draw} colors={colors} variant="black" />;
+          const Green: React.FC = () => <CanvasScene draw={draw} colors={colors} variant="green" />;
           registerRoot(() => (
             <>
-              <Composition id="t-land" component={Comp} durationInFrames={${frames}} fps={30} width={3840} height={2160} />
-              <Composition id="t-port" component={Comp} durationInFrames={${frames}} fps={30} width={2160} height={3840} />
+              <Composition id="dark-land" component={Dark} durationInFrames={${F}} fps={30} width={3840} height={2160} />
+              <Composition id="dark-port" component={Dark} durationInFrames={${F}} fps={30} width={2160} height={3840} />
+              <Composition id="black-land" component={Black} durationInFrames={${F}} fps={30} width={3840} height={2160} />
+              <Composition id="green-land" component={Green} durationInFrames={${F}} fps={30} width={3840} height={2160} />
             </>
           ));
           `;
@@ -324,9 +468,45 @@ jobs:
             await R.renderStill({
               composition, serveUrl, frame, scale,
               output: path.join(outDir, name),
-              imageFormat: 'jpeg', jpegQuality: 70,
+              imageFormat: 'jpeg', jpegQuality: 80,
             });
             return (Date.now() - t0) / 1000;
+          }
+
+          const load = name => jpeg.decode(fs.readFileSync(path.join(outDir, name)), { useTArray: true });
+
+          // Fraksi piksel yang berbeda dari warna latar
+          function diffFraction(img, rgb, tol) {
+            const d = img.data;
+            let n = 0;
+            for (let i = 0; i < d.length; i += 4) {
+              const diff = Math.abs(d[i] - rgb[0]) + Math.abs(d[i + 1] - rgb[1]) + Math.abs(d[i + 2] - rgb[2]);
+              if (diff > tol) n++;
+            }
+            return n / (d.length / 4);
+          }
+          // Rata-rata selisih absolut per kanal (0..255)
+          function meanAbs(a, b) {
+            const da = a.data, db = b.data;
+            let s = 0, c = 0;
+            for (let i = 0; i < da.length; i += 4) {
+              s += Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]);
+              c += 3;
+            }
+            return s / c;
+          }
+          // Dari piksel subjek (bukan latar hijau), berapa fraksi yang dominan hijau (spill key)
+          function greenSpill(img) {
+            const d = img.data;
+            let subject = 0, greenish = 0;
+            for (let i = 0; i < d.length; i += 4) {
+              const diff = Math.abs(d[i] - GREEN[0]) + Math.abs(d[i + 1] - GREEN[1]) + Math.abs(d[i + 2] - GREEN[2]);
+              if (diff > 60) {
+                subject++;
+                if (d[i + 1] > d[i] + 35 && d[i + 1] > d[i + 2] + 35) greenish++;
+              }
+            }
+            return { subject: subject / (d.length / 4), greenRatio: subject ? greenish / subject : 0 };
           }
 
           let code = 0;
@@ -335,19 +515,54 @@ jobs:
             if (R.ensureBrowser) await R.ensureBrowser();
             const serveUrl = await bundle({ entryPoint: entryFile });
 
-            for (const f of [0, Math.floor(frames / 2), frames - 1]) {
-              await still(serveUrl, 't-land', f, 0.25, `l${f}.jpg`);
-            }
-            await still(serveUrl, 't-port', Math.floor(frames / 3), 0.25, 'p.jpg');
+            const q = Math.floor(F * 0.25), m = Math.floor(F * 0.5), last = F - 1;
+            await still(serveUrl, 'black-land', 0, 0.25, 'b0.jpg');
+            await still(serveUrl, 'black-land', q, 0.25, 'bq.jpg');
+            await still(serveUrl, 'black-land', m, 0.25, 'bm.jpg');
+            await still(serveUrl, 'black-land', last, 0.25, 'bl.jpg');
+            await still(serveUrl, 'green-land', 0, 0.25, 'g0.jpg');
+            await still(serveUrl, 'dark-port', Math.floor(F / 3), 0.25, 'p.jpg');
 
-            const secs = await still(serveUrl, 't-land', Math.floor(frames / 2), 1, 'full.jpg');
+            const b0 = load('b0.jpg'), bq = load('bq.jpg'), bm = load('bm.jpg'), bl = load('bl.jpg'), g0 = load('g0.jpg');
+
+            // 1) Subjek harus terlihat di phase 0 (thumbnail) dan tidak memenuhi seluruh frame
+            const cover = diffFraction(b0, [0, 0, 0], 40);
+            if (cover < 0.003 || cover > 0.6) {
+              throw new Error(
+                `Phase 0 (thumbnail): subjek menutupi ${(cover * 100).toFixed(2)}% frame (harus 0.3%–60%). ` +
+                `Gambar hero yang jelas, utuh, dan terlihat di tengah frame pada phase 0 (varian black).`);
+            }
+            // 2) Harus ada animasi nyata
+            const motion = Math.max(meanAbs(b0, bq), meanAbs(b0, bm));
+            if (motion < 0.25) {
+              throw new Error(`Animasi nyaris tidak terlihat (selisih frame ${motion.toFixed(2)}). Buat transformasi yang jelas di tengah loop.`);
+            }
+            // 3) Loop mulus: frame terakhir harus hampir sama dengan frame pertama
+            const dLast = meanAbs(b0, bl);
+            if (dLast > 0.35 * motion + 0.1) {
+              throw new Error(
+                `Loop tidak mulus: frame terakhir berbeda dari frame pertama (${dLast.toFixed(2)} vs gerak ${motion.toFixed(2)}). ` +
+                `Semua gerak harus kembali persis ke keadaan phase 0 pada phase 1.`);
+            }
+            // 4) Varian green: subjek terlihat dan tidak mengandung warna hijau (spill key)
+            const sp = greenSpill(g0);
+            if (sp.subject < 0.002) {
+              throw new Error(`Varian green: subjek hampir tidak terlihat (${(sp.subject * 100).toFixed(2)}%). Pastikan hero tergambar di latar hijau.`);
+            }
+            if (sp.greenRatio > 0.35) {
+              throw new Error(
+                `Varian green: ${(sp.greenRatio * 100).toFixed(0)}% piksel subjek berwarna hijau — akan ikut ter-key. ` +
+                `Pada variant === 'green' pakai warna non-hijau/teal dan tanpa glow aditif.`);
+            }
+
+            // 5) Performa: satu frame 4K penuh
+            const secs = await still(serveUrl, 'dark-land', Math.floor(F / 2), 1, 'full.jpg');
             if (secs > MAX_FRAME_SECONDS) {
               throw new Error(
                 `Terlalu berat: 1 frame 4K butuh ${secs.toFixed(1)}s (maks ${MAX_FRAME_SECONDS}s). ` +
-                `Kurangi jumlah path/noise call, gunakan getBuffer() resolusi rendah untuk field, hindari shadowBlur.`
-              );
+                `Kurangi jumlah path/noise call, pakai getBuffer() resolusi rendah, hindari shadowBlur.`);
             }
-            console.log(JSON.stringify({ ok: true, frameSeconds: secs }));
+            console.log(JSON.stringify({ ok: true, frameSeconds: secs, cover, motion, dLast, greenRatio: sp.greenRatio }));
           } catch (e) {
             console.error(String(e?.stack || e).slice(0, 1800));
             code = 1;
@@ -382,12 +597,13 @@ jobs:
 
           const ROOT = "..";
           const HISTORY_PATH = `${ROOT}/history.json`;
+          const MARKET_PATH = `${ROOT}/market-data.txt`;   // opsional: data pasar milik Anda sendiri
           const RP = `${ROOT}/remotion-project`;
           const OUTPUT_PATH = `${RP}/video-ideas.json`;
           const CUSTOM_DIR = `${RP}/src/custom`;
           const RUN = process.env.GITHUB_RUN_NUMBER || String(Date.now());
           const TODAY = new Date().toISOString().slice(0, 10);
-          const COUNT = 5;
+          const COUNT = Math.min(8, Math.max(1, parseInt(process.env.IDEA_COUNT || "4", 10) || 4));
           const ATTEMPTS_PER_MODEL = 2;
           const CODE_ATTEMPTS = 3;
           const FENCE = "```";
@@ -403,62 +619,55 @@ jobs:
           const history = JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8"));
           const previousIds = history.rendered.map(r => r.id);
           const shipped = history.rendered.slice(-80)
-            .map(r => `  - ${r.technique ? r.technique + " | " : ""}${r.concept}`);
+            .map(r => `  - ${r.sector ? r.sector + " / " : ""}${r.topic || r.concept}${r.style ? " | " + r.style : ""}`);
+          const marketData = fs.existsSync(MARKET_PATH) ? fs.readFileSync(MARKET_PATH, "utf8").trim().slice(0, 6000) : "";
 
           // ═══════════════════════════════════════════════════════════
-          // CREATIVE BANKS — dipilih oleh SCRIPT (bukan LLM) supaya hasil tiap run benar-benar beda.
-          // LLM cenderung konvergen ke ide yang sama; assignment acak memaksa variasi.
+          // CREATIVE BANKS — dipilih oleh SCRIPT agar tiap run beda (LLM cenderung konvergen)
+          // Topik spesifik DI DALAM sektor dipilih AI berdasarkan riset pasar.
           // ═══════════════════════════════════════════════════════════
-          const TECHNIQUES = [
-            "curl-noise flow-field ribbons",
-            "strange-attractor trails (Clifford / De Jong / Lorenz projection)",
-            "domain-warped fbm light field rendered on a low-res buffer and upscaled",
-            "Voronoi / Worley cell membranes with glowing edges",
-            "superformula (Gielis) morphing contours layered as nested outlines",
-            "phyllotaxis golden-angle spirals that breathe and counter-rotate",
-            "harmonograph / Lissajous multi-pendulum light trails",
-            "wave interference / moire from concentric ring emitters",
-            "Truchet-style arc weaving that slowly re-routes itself",
-            "kaleidoscopic mirror symmetry of a flowing luminous form",
-            "Fourier epicycle drawing machines tracing evolving curves",
-            "metaball / implicit-surface blobs (low-res field with smooth threshold)",
-            "L-system / fractal branching with growth pulses travelling along branches",
-            "magnetic dipole field lines with slowly drifting poles",
-            "Turing-pattern-like stripes (low-res approximation of reaction-diffusion)",
-            "boids-like swarm that forms and releases shapes",
-            "perspective wireframe terrain with travelling wave displacement",
-            "caustic light-web from summed waves",
-            "string-art envelopes (chord families between rotating anchor points)",
-            "halftone / dot-matrix field modulated by travelling waves",
-            "orbital ring systems with gravitational-lensing distortion",
-            "ink-in-water advection: thousands of soft translucent strokes following a curl field",
-            "stacked ridgelines (Joy-Division style) with depth and light sweep",
-            "quasicrystal / Penrose-like interference lattice",
-            "analytic echo trails: fading copies of a moving form drawn from phase offsets",
+          const SECTORS = [
+            "healthcare & telemedicine", "cloud, data & storage", "cybersecurity & privacy",
+            "fintech, payments & crypto", "e-commerce & delivery", "jobs, HR & careers",
+            "education & e-learning", "AI, automation & chatbots", "clean energy & sustainability",
+            "real estate & smart home", "travel & mobility", "logistics & supply chain",
+            "marketing, social media & analytics", "legal, insurance & compliance",
+            "food, agriculture & nutrition", "space, science & research", "gaming & entertainment tech",
+            "remote work & collaboration", "customer support & communication", "construction & Industry 4.0",
+          ];
+          const STYLES = [
+            "neon single-line icon with draw-on strokes and travelling light pulses",
+            "isometric flat-colour objects with crisp faces, a light sweep and a soft ground shadow",
+            "glassmorphism layered translucent cards with refraction highlights",
+            "duotone gradient line-art with a moving specular highlight",
+            "particle-assembled icon: thousands of points converge into the form",
+            "holographic wireframe with scan-line reveal",
+            "layered paper-cut shapes with parallax depth",
+            "blueprint technical drawing that builds itself (no text, no numbers)",
+            "halftone dot-matrix icon with wave-driven dot sizes",
+            "liquid-metal morph between two related shapes",
+            "exploded-view assembly: parts fly out and snap back",
+            "orbit-ring system: satellites with trails around a central hero",
+            "data-path infographic: glowing packets flow along circuit-like paths into the hero",
+            "faked-3D extruded icon built from stacked offset layers with volumetric light rays",
+          ];
+          const MOTIONS = [
+            "the hero breaks into its components and reassembles",
+            "the hero morphs into a second related object and back",
+            "energy travels around and through the hero in a continuous circuit",
+            "a sweeping light scans the hero and reveals an inner layer",
+            "elements orbit, then converge onto the hero",
+            "the hero unfolds to reveal an inner layer, then folds back",
+            "ripples of light radiate and the hero pulses with them",
+            "a grid of small copies ripples in a wave around the hero",
           ];
           const MATERIALS = [
-            "liquid chrome", "frosted glass layers", "bioluminescent deep-sea life", "aurora silk veils",
-            "ink and smoke", "molten glass", "neon gas tubes", "layered paper-cut depth",
-            "iridescent soap film", "starlight dust", "brushed anodized metal with a light sweep",
-            "watercolor bleed", "crystal prism refraction", "fiber-optic strands", "fine sand / powder",
+            "luminous neon gas", "frosted glass", "brushed metal with a light sweep", "soft-touch matte clay look",
+            "iridescent film", "cut paper", "crystal", "ink in liquid",
           ];
           const PALETTES = [
-            "deep teal + warm gold on near-black",
-            "ink indigo + coral on midnight",
-            "emerald + champagne on charcoal",
-            "violet + ice-blue on obsidian",
-            "terracotta + sand + teal on dark umber",
-            "graphite monochrome + one electric accent",
-            "rose quartz + deep burgundy",
-            "petrol blue + lime accent on dark slate",
-          ];
-          const MOODS = [
-            "calm, meditative, premium", "confident, corporate-clean", "futuristic, cinematic, dark",
-            "warm, optimistic", "serene wellness", "high-energy but elegant", "mysterious, luxurious",
-          ];
-          const TENSIONS = [
-            "GROWTH vs DECAY", "ORDER vs CHAOS", "ORGANIC vs MECHANICAL",
-            "ISOLATION vs CONNECTION", "SPEED vs STILLNESS", "FRAGILITY vs STRENGTH",
+            "deep teal + warm gold", "ink indigo + coral", "violet + ice-blue", "electric blue + magenta",
+            "terracotta + sand + teal", "graphite + one electric accent", "rose quartz + burgundy", "petrol blue + amber",
           ];
 
           const shuffle = arr => {
@@ -470,20 +679,20 @@ jobs:
             return a;
           };
           const recent = history.rendered.slice(-15);
-          const avoid = key => new Set(recent.map(r => r[key]).filter(Boolean));
           const pool = (bank, key) => {
-            const used = avoid(key);
+            const used = new Set(recent.map(r => r[key]).filter(Boolean));
             const free = bank.filter(x => !used.has(x));
             return shuffle(free.length >= COUNT ? free : bank);
           };
-          const techs = pool(TECHNIQUES, "technique");
-          const mats = pool(MATERIALS, "material");
-          const pals = shuffle(PALETTES);
-          const moods = shuffle(MOODS);
-          const tensions = shuffle(TENSIONS);
+          const sectors = pool(SECTORS, "sector");
+          const styles = pool(STYLES, "style");
+          const motions = shuffle(MOTIONS), materials = shuffle(MATERIALS), palettes = shuffle(PALETTES);
           const assignments = Array.from({ length: COUNT }, (_, i) => ({
-            technique: techs[i], material: mats[i], palette: pals[i % pals.length],
-            mood: moods[i % moods.length], tension: tensions[i % tensions.length],
+            sector: sectors[i % sectors.length],
+            style: styles[i % styles.length],
+            motion: motions[i % motions.length],
+            material: materials[i % materials.length],
+            palette: palettes[i % palettes.length],
           }));
 
           // ═══════════════════════════════════════════════════════════
@@ -491,66 +700,75 @@ jobs:
           // ═══════════════════════════════════════════════════════════
           const RESEARCH_PROMPT = `Today is ${TODAY}. Use Google Search.
 
-          You are a stock-footage market analyst. Research what buyers of ABSTRACT / CONCEPTUAL MOTION BACKGROUNDS
-          (4K loops, B-roll, presentation and UI backgrounds, social vertical video) are looking for RIGHT NOW and
-          over the next 90 days. Look at Adobe Stock, Shutterstock, Pond5, Envato, Freepik, Motion Array
-          (trending / popular searches, contributor blogs, "stock trends ${TODAY.slice(0, 4)}" reports) and at
-          current design / motion-design trend reports and upcoming seasonal or industry moments (product-launch
-          seasons, year-end corporate decks, wellness, AI, finance, sustainability, etc.).
+          You are a stock-footage market analyst. Research what buyers of CONCEPT MOTION GRAPHICS look for RIGHT NOW
+          and over the next 90 days: animated icons, explainer-video elements, neon / isometric / glass / 3D-style
+          icon animations, chroma-key green-screen elements, and isolated-on-black overlay elements, for topics such as
+          healthcare, cloud and data, cybersecurity, fintech, e-commerce, jobs and HR, education, AI, energy,
+          logistics, marketing. Look at Adobe Stock, Shutterstock, Pond5, Envato, Freepik, Motion Array (popular and
+          trending searches, search suggestions, contributor blogs, "stock trends ${TODAY.slice(0, 4)}" reports) and at
+          current motion-design trend reports and upcoming seasonal / industry moments.
 
-          Return a concise brief (max 450 words, plain text, no markdown tables):
-          1. TEN high-intent buyer search phrases, each with a one-line reason and a relative demand label
-             (high / medium) — do NOT invent numeric search volumes; say so if no numbers were found.
-          2. FIVE visual clichés that are heavily saturated and should be avoided.
-          3. THREE emerging aesthetics or techniques that buyers/designers are starting to want.
-          4. Seasonal or industry hooks for the next 90 days.
+          Return a concise brief (max 500 words, plain text, no tables):
+          1. TWELVE high-intent topics / search phrases grouped by sector, each with a relative demand label
+             (high / medium) and a note on saturation (many near-identical results vs. visible gaps).
+             Do NOT invent numeric search volumes; say so if none were found.
+          2. Formats that sell best (green screen, black background, loops, vertical 9:16, 4K) and why.
+          3. THREE emerging themes for the next 90 days.
+          4. FIVE visual clichés that are saturated and should be avoided.
           Name the sources you relied on.`;
 
           function ideaPrompt(a, brief, siblings) {
             const sib = siblings.length
-              ? siblings.map(s => `  - ${s.creative?.technique} | ${s.concept}`).join("\n")
+              ? siblings.map(s => `  - ${s.sector} / ${s.topic} | ${s.creative?.style}`).join("\n")
               : "  (none yet)";
-            return `You are the head of creative of a top-tier Adobe Stock video contributor studio: part art director,
-          part market analyst, part creative coder. Your clips must look like they belong in a premium collection that
-          agencies, SaaS brands and broadcasters license again and again — not like generic mass-produced
-          "particles on a gradient".
+            return `You are the head of creative of a top-selling Adobe Stock motion-graphics studio. Your best sellers are
+          concept animations such as: "Glowing neon line medical health record folder icon isolated on black background",
+          "3D office box with folders, job search and resume sending, chroma key green screen", "cloud computing storage
+          folder animation". They share three traits: a CLEAR SUBJECT that buyers actually search for, an OBVIOUS USE
+          (an editor knows instantly where it goes), and a look that reads in a thumbnail. Your edge is EXECUTION: the
+          same buyer-obvious subjects, built with so much craft and invention that viewers wonder how it was made —
+          and that buyers pick over the 500 near-identical icons next to it.
 
           TODAY: ${TODAY}
 
           ═══ 1. MARKET INTELLIGENCE ═══
           ${brief || "(no live research available — rely on your own knowledge of what buyers search for on stock platforms)"}
 
-          ═══ 2. STRATEGY: DEMAND × NOVELTY ═══
-          Blue ocean = (a search intent buyers ALREADY have) × (a visual treatment almost nobody has shipped).
-           - Pick ONE real, high-intent buyer search phrase for this clip (e.g. "abstract technology background loop",
-             "AI data visualization", "calm gradient motion background for presentation"). It must appear in the
-             stock title and lead the keyword list. Never invent a concept nobody would type into a search box.
-           - Deliver it with a surprising visual treatment built from the creative assignment below.
-           - Honesty rule: you have NO access to real search-volume numbers. Score demand and saturation as best
-             estimates and state the evidence they are based on.
+          ═══ 2. STRATEGY: CLEAR SUBJECT × MIND-BLOWING EXECUTION ═══
+           - Subject: ONE specific, high-intent topic inside the assigned sector — the strongest combination of buyer
+             demand and a clean visual metaphor. Utility first: name the buyers and exactly how the clip is used
+             (explainer, presentation, intro, social post, app promo, webinar, training).
+           - Creativity lives in the EXECUTION: transformation, assembly, light behaviour, impossible-but-readable
+             physics, a metaphor that explains the concept in one second. NOT in an obscure subject nobody searches.
+           - Never invent a topic nobody would type into a search box. The main search phrase must appear in the stock
+             title and lead the keywords.
+           - Honesty rule: you have NO real search-volume numbers. Score demand and saturation as best estimates
+             and state the evidence.
+           - Inspiration for the level of invention (do NOT reuse this subject): for "cloud storage", thousands of tiny
+             file-shaped slivers rise like embers and crystallise into a cloud whose edge is made of the files
+             themselves; mid-loop the cloud exhales and the files rain back into a folder-shaped well of light.
 
           ═══ 3. CREATIVE ASSIGNMENT (mandatory) ═══
-           - Signature technique : ${a.technique}
-           - Hero material       : ${a.material}
-           - Mood                : ${a.mood}
-           - Palette family      : ${a.palette}
-           - Core tension        : ${a.tension}
-          Fuse these into ONE coherent image that makes a viewer pause. Do not list them — resolve them.
-          Push the technique beyond its textbook version (a second interacting system, a symmetry break,
-          an unexpected change of scale).
+           - Sector          : ${a.sector}
+           - Visual language : ${a.style}
+           - Motion story    : ${a.motion}
+           - Material/finish : ${a.material}
+           - Palette family  : ${a.palette}
+          Fuse these into ONE coherent clip. Push the visual language beyond its textbook version.
 
           ═══ 4. PREMIUM QUALITY BAR ═══
-           - Restraint and negative space: at least 30% of the frame stays calm so an editor can place text.
-           - Depth: three layers (far = dim, slow, soft; mid = hero; near = sparse, large, soft).
-           - Refined colour: modern, muted, harmonious; max 3 hues + neutrals; no pure primaries; no clipped white.
-           - Cinematic light: emission, bloom, falloff. One focal highlight.
-           - Motion: slow, eased, elegant. 12–18 s SEAMLESS LOOP. No pops, flicker or strobing.
-           - Works as both 16:9 and 9:16. Strong from the very first frame (thumbnails).
-           - No text, logos, people, faces, trademarks.
+           - Thumbnail-readable (~320 px wide): ONE hero subject, bold silhouette, at most 4 supporting elements.
+           - Hero centred in a safe zone (~60% of frame height), generous margins, works in 16:9 and 9:16.
+           - Phase 0 (= end of loop) is the fully formed, beautiful hero (it becomes the thumbnail). The transformation
+             happens in the middle and returns EXACTLY. 8–12 s seamless loop.
+           - Craft: consistent stroke weights, precise geometry, max 3 hues + neutrals, cinematic light, easing everywhere.
+           - It renders three ways: premium dark backdrop, pure black (for screen/add blending), chroma-key green.
+             The design must survive all three (on green: no green/teal in the subject, no soft glow halos).
+           - No text, letters, numbers, logos, brands, people, faces, real app interfaces, medical or financial claims.
 
           ═══ 5. AVOID ═══
-          Generic floating particles, blue network nodes, matrix rain, plain gradient blobs, hexagon grids,
-          lens-flare spam, "glowing brain / robot head", anything that looks like a screensaver.
+          Generic icon + pulsing glow + three arrows, anything that looks like a clip-art template, stock cliches
+          from the research brief, and anything resembling the shipped list below.
 
           ═══ 6. ALREADY SHIPPED — never repeat or closely resemble ═══
           ${shipped.length ? shipped.join("\n") : "  (none yet — first batch)"}
@@ -562,76 +780,93 @@ jobs:
           {
             "id": "lowercase-kebab-case-unique-max-50-chars",
             "title": "evocative artistic title, max 60 chars",
-            "stockTitle": "Adobe Stock title in plain buyer language, 8–20 words, max 180 chars: main search phrase + the look + 'seamless loop' + '4K'. No brand names, no 'AI generated'.",
+            "stockTitle": "Adobe Stock title in plain buyer language, 1–3 short sentences separated by periods, max 180 chars. Pattern: '<look> <subject> icon, <synonym phrases>. <use-case phrase>. 4K video motion graphic, seamless loop.' Do NOT mention the background (it is added per variant). No brand names, no 'AI generated'.",
             "description": "1–2 commercial sentences about the look and typical uses",
-            "concept": "core tension + visual metaphor in one line",
+            "sector": "${a.sector}",
+            "topic": "the specific topic, e.g. 'telemedicine video consultation'",
             "primarySearchIntent": "the exact phrase a buyer would type",
             "relatedSearchPhrases": ["5-8 phrases"],
-            "demand": { "score": 1-10, "evidence": "why you believe buyers want this" },
+            "targetBuyers": ["3-5 buyer types"],
+            "useCase": "one sentence: where and how this clip is used",
+            "editorUsage": "how an editor places it (overlay, key, intro element, transition...)",
+            "concept": "visual metaphor in one line",
+            "demand": { "score": 1-10, "evidence": "why buyers want this" },
             "saturation": { "score": 1-10, "evidence": "how crowded this look already is" },
             "noveltyHook": "what the viewer has never seen before",
-            "keywords": ["30-49 terms, MOST important first; first 10 = strongest buyer search terms; include abstract, motion, background, loop, 4K; no brand names"],
+            "keywords": ["30-49 terms, MOST important first; first 10 = strongest buyer search terms; include icon, animation, motion graphic, loop, 4K and the topic synonyms; no brand names"],
             "composition": {
               "type": "closest of: neural-network | particle-morph | data-flow | organic-growth | geometric-transform",
-              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "bgColor": "#rrggbb",
-              "animationStyle": "", "durationSeconds": 15,
+              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "bgColor": "#rrggbb (near-black, tinted, for the dark variant)",
+              "animationStyle": "", "durationSeconds": 10,
               "elements": [{ "name": "", "behavior": "", "timing": { "start": 0, "end": 5 } }]
             },
             "visualSpec": {
-              "layers": ["far: ...", "mid: ...", "near: ..."],
-              "motionArc": "how the loop evolves and returns to its start",
-              "copySpace": "where the calm area is, for landscape AND portrait",
-              "lightingNotes": ""
+              "heroSubject": "exactly what is drawn as the hero",
+              "layers": ["hero: ...", "support: ...", "ambient: ..."],
+              "motionArc": "timeline of the loop (phase 0..1) and how it returns to the start",
+              "variantNotes": "how it adapts for black and for chroma-key green (colours that are safe on green)"
             }
           }
-          Rules: demand.score MUST be >= 6 (otherwise choose a stronger search intent). Colours are 6-digit hex.`;
+          Rules: demand.score MUST be >= 6. durationSeconds is 8–12. Colours are 6-digit hex.`;
           }
 
-          const KIT_DOC = `TAU
-          mulberry32(seed:number): () => number              // seeded random 0..1
+          const KIT_DOC = `TAU, type Pt = [number, number]
+          mulberry32(seed): () => number                     // seeded random 0..1
           noise(x,y,z=0,w=0): number                         // 4D value noise, -1..1
-          loopNoise(x,y,phase,r=1): number                   // -1..1, periodic in phase (period 1)
-          fbm(x,y,phase,octaves=4,r=1): number               // ~ -1..1, periodic in phase
-          curl(x,y,phase,octaves=3,r=1): [number, number]    // divergence-free flow vector (raw, normalise yourself), periodic
-          clamp(v,a,b)  lerp(a,b,t)  smoothstep(a,b,x)  easeInOut(t)
+          loopNoise(x,y,phase,r=1) / fbm(x,y,phase,octaves=4,r=1): number   // periodic in phase
+          curl(x,y,phase,octaves=3,r=1): [number, number]    // flow vector (raw), periodic
+          clamp(v,a,b)  lerp(a,b,t)  smoothstep(a,b,x)
+          seg(phase,a,b): number                             // 0..1 progress between phase a and b (timelines)
+          easeInOut(t)  easeOutCubic(t)  easeOutBack(t)
           breathe(phase,k=1): number                         // 0..1..0, k whole cycles per loop
-          hexToRgb(hex): [r,g,b]   rgba(hex,alpha): string   mixHex(hexA,hexB,t): hex string
-          getBuffer(key,w,h): { canvas, ctx }                // cached offscreen canvas for low-res fields; NOT cleared automatically`;
+          hexToRgb(hex)  rgba(hex,alpha): string  mixHex(a,b,t): hex  shade(hex,amt): hex  // amt>0 lighter, <0 darker
+          pol(cx,cy,r,angle): Pt     iso(x,y,z=0): Pt        // isometric projection (unit space, scale yourself)
+          circlePts(cx,cy,r,n=64,start): Pt[]                // closed
+          roundedRectPts(cx,cy,w,h,r,steps=8): Pt[]          // closed
+          resample(pts,n,close=false): Pt[]                  // n evenly spaced points → morph any shape into any other
+          lerpPts(a: Pt[], b: Pt[], t): Pt[]                 // morph between equal-length polylines
+          tracePolyline(ctx,pts,t=1,close=false)             // adds first t (0..1) of the polyline to the current path (draw-on)
+          neonStroke(ctx, trace, color, lw, intensity=1)     // glowing line; trace = () => { ctx.moveTo...; tracePolyline(...) } (no beginPath/stroke inside)
+          getBuffer(key,w,h): { canvas, ctx }                // cached offscreen canvas, NOT cleared automatically`;
 
-          const EXAMPLE = `import { mulberry32, curl, rgba, mixHex, breathe } from '../lib/kit';
+          const EXAMPLE = `import { mulberry32, rgba, seg, easeInOut, resample, roundedRectPts, tracePolyline, neonStroke, TAU } from '../lib/kit';
           import type { DrawFn } from '../lib/CanvasScene';
 
-          // EXAMPLE ONLY — shows structure, API use and loop discipline. Do NOT imitate its look.
+          // EXAMPLE ONLY — shows structure, kit use, variant handling and loop discipline.
+          // Do NOT reuse its subject or its look.
           export const draw: DrawFn = (ctx, s) => {
-            const { w, h, u, phase, colors } = s;
-            const rnd = mulberry32(1337);            // same seed every frame => stable layout
-            const scale = 1 / (520 * u);             // noise scale independent of resolution
-            ctx.globalCompositeOperation = 'lighter';
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
+            const { cx, cy, hero, u, phase, variant, colors } = s;
+            const glow = variant !== 'green';                       // additive light only on dark / black
+            const color = glow ? colors.primary : '#ff4d8d';        // key-safe colour on green
 
-            for (let i = 0; i < 260; i++) {
-              let x = (rnd() * 1.3 - 0.15) * w;
-              let y = (rnd() * 1.3 - 0.15) * h;
-              const tint = mixHex(colors.primary, colors.secondary, rnd());
-              ctx.lineWidth = (0.5 + rnd() * 1.6) * u;
-              ctx.strokeStyle = rgba(tint, 0.1 + 0.1 * breathe(phase + rnd(), 1));
+            // hold complete 0–0.25 · breaks apart 0.25–0.55 · re-forms 0.55–0.85 · hold 0.85–1
+            const apart = easeInOut(seg(phase, 0.25, 0.55)) - easeInOut(seg(phase, 0.55, 0.85));
+
+            const rnd = mulberry32(42);                             // same seed every frame
+            const body = resample(roundedRectPts(cx, cy, hero * 0.8, hero * 0.55, hero * 0.06), 140, true)
+              .map(([x, y]) => {
+                const a = rnd() * TAU, d = rnd() * hero * 0.25 * apart;
+                return [x + Math.cos(a) * d, y + Math.sin(a) * d] as [number, number];
+              });
+
+            const lw = 5 * u;
+            const trace = () => tracePolyline(ctx, body, 1, true);
+            if (glow) {
+              neonStroke(ctx, trace, color, lw, 1 - 0.4 * apart);
+            } else {
+              ctx.lineWidth = lw;
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              ctx.strokeStyle = color;
               ctx.beginPath();
-              ctx.moveTo(x, y);
-              for (let k = 0; k < 48; k++) {
-                const [dx, dy] = curl(x * scale, y * scale, phase, 2, 0.8);   // phase => seamless loop
-                const m = Math.hypot(dx, dy) || 1;
-                x += (dx / m) * 11 * u;
-                y += (dy / m) * 11 * u;
-                ctx.lineTo(x, y);
-              }
+              trace();
               ctx.stroke();
             }
           };`;
 
           function codePrompt(idea, prevCode, error) {
             const spec = {
-              title: idea.title, concept: idea.concept, noveltyHook: idea.noveltyHook,
+              topic: idea.topic, useCase: idea.useCase, concept: idea.concept, noveltyHook: idea.noveltyHook,
               creativeAssignment: idea.creative, composition: idea.composition, visualSpec: idea.visualSpec,
             };
             const repair = prevCode ? `
@@ -645,8 +880,9 @@ jobs:
           ${FENCE}
           Fix the problem and return the COMPLETE corrected file.
           ` : "";
-            return `You are an elite creative coder (Shadertoy / generative-art studio level) writing ONE Canvas 2D draw
-          function for a premium 4K stock-video loop. Remotion renders it frame by frame.
+            return `You are an elite motion-graphics coder (think top icon-animation studios and Shadertoy-level craft)
+          writing ONE Canvas 2D draw function for a premium 4K stock motion graphic. Remotion renders it frame by
+          frame, three times: on a dark premium backdrop, on pure black, and on chroma-key green.
 
           ═══ THE IDEA ═══
           ${JSON.stringify(spec, null, 2)}
@@ -655,38 +891,45 @@ jobs:
           Return ONE TypeScript file in a single ${FENCE}ts block and nothing else. It must:
            1. import ONLY from '../lib/kit' and (type only) from '../lib/CanvasScene';
            2. export const draw: DrawFn = (ctx, s) => { ... };
-          The harness paints the background + soft radial backdrop BEFORE draw() and adds vignette + film grain
-          AFTER. Do not fill the whole frame opaque, and do not add your own vignette or grain.
+          The harness paints the background BEFORE draw(). Do not fill the whole frame, and do not add a vignette
+          or grain (the harness does that for the dark variant only).
 
-          State s: s.w, s.h (3840x2160 landscape or 2160x3840 portrait), s.cx, s.cy (center), s.u (unit scale
-          ≈ min(w,h)/1000, ≈2.16 at 4K — multiply EVERY pixel size by it), s.phase (0..1 loop position — the ONLY
-          time source), s.seconds (loop length), s.portrait (boolean), s.colors {primary, secondary, bg}.
+          State s: s.w, s.h (3840x2160 landscape or 2160x3840 portrait), s.cx, s.cy (centre), s.u (unit scale ≈
+          min(w,h)/1000 — multiply EVERY pixel size by it), s.hero (side of the centred safe square for the hero),
+          s.phase (0..1 loop position — the ONLY time source), s.seconds, s.portrait, s.variant
+          ('dark' | 'black' | 'green'), s.bg (effective background colour), s.colors {primary, secondary, bg}.
 
           KIT (from '../lib/kit'):
           ${KIT_DOC}
 
           ═══ NON-NEGOTIABLE RULES ═══
           1. Deterministic. No Math.random, Date, performance, window, document, fetch, timers. Create
-             const rnd = mulberry32(CONSTANT) INSIDE draw() so every frame gets the same layout; only
-             phase-driven quantities move.
-          2. SEAMLESS LOOP. Every moving quantity must return to its start value at phase = 1: use
-             sin/cos(TAU * phase * k) with INTEGER k, loopNoise/fbm/curl, breathe(phase,k), or circular motion.
-             No linear drift, no one-way growth.
-          3. Resolution- and aspect-independent: size with s.u, position relative to s.w/s.h/s.cx/s.cy. It must look
-             intentional in landscape AND portrait. Keep >= 30% of the frame calm (copy space) and adapt
-             the composition when s.portrait is true.
-          4. Performance budget ≈ 10 s per 4K frame on a CPU. Rough limits: <= 400k path segments, <= 3M noise()
-             calls, NO per-pixel loops at full resolution. For field/surface looks evaluate on a small buffer
-             (getBuffer(key, 240, 135), ImageData) then drawImage it upscaled with imageSmoothingQuality='high'.
-             Avoid shadowBlur (very slow at 4K): fake glow with layered radial gradients + 'lighter'.
-          5. Premium look: >= 3 depth layers; light behaves like light ('lighter' for emission, hairlines of
-             0.5–1.5*u for crisp detail, soft halos for bloom); one focal highlight; never clipped pure white;
-             colours derived from s.colors via mixHex/rgba (primary, secondary, tints/shades, at most ONE accent);
-             slow, eased motion; nothing flickers or pops.
-          6. The frame at phase 0 must already look complete and striking (thumbnails come from early frames).
-          7. No text, logos, people, faces, trademarks.
-          8. Genuinely original: the signature technique must be recognisable but pushed beyond the textbook
-             version. Not a generic particle cloud.
+             const rnd = mulberry32(CONSTANT) INSIDE draw() so each frame gets the same layout.
+          2. SEAMLESS LOOP + THUMBNAIL. Phase 0 (= phase 1) is the fully formed, beautiful hero — it becomes the
+             stock thumbnail. The transformation / assembly / flow happens in between and returns EXACTLY to the
+             phase-0 state. Build timelines with seg(phase, a, b) + easing, e.g. hold 0–0.25, transform 0.25–0.55,
+             re-form 0.55–0.85, hold 0.85–1. Ambient motion must be periodic too (integer cycles per loop).
+             No linear drift, no one-way growth. An automatic check compares frame 0 with the last frame.
+          3. CLARITY. Readable at 320 px wide: one hero, bold silhouette, at most 4 supporting elements. The hero
+             fits inside a centred square of side s.hero. Works in landscape AND portrait. No tiny clutter.
+          4. VARIANTS (same composition and motion in all; only the rendering of light differs):
+             - 'dark' and 'black': bright, light-based look; additive glow allowed ('lighter', neonStroke). On
+               'black' nothing important may be near-black (it vanishes under screen blending).
+             - 'green': background is flat chroma green. NO green/teal/yellow-green hues anywhere in the subject,
+               NO additive blending, NO soft glow halos or blurry shadows (they ruin keying). Crisp, opaque edges,
+               flat or gradient fills with hard silhouettes. Use key-safe colours (blue, magenta, orange, white,
+               violet…), derived from s.colors by hue choice if its palette is green-ish. An automatic check
+               counts green-dominant subject pixels on the green variant.
+          5. Performance budget ≈ 10 s per 4K frame on a CPU: <= 400k path segments, <= 3M noise() calls, NO
+             per-pixel loops at full resolution. For field/surface looks use getBuffer(key, 240, 135) and drawImage
+             it upscaled (imageSmoothingQuality='high'). Avoid shadowBlur — fake glow with neonStroke or
+             layered radial gradients.
+          6. Premium craft: stroke widths in multiples of s.u, precise geometry via the kit point helpers, palette of
+             at most 3 hues + neutrals derived from s.colors, one focal highlight, never clipped pure white,
+             easing on every transition, nothing flickers or pops.
+          7. No text, letters, numbers, logos, brands, people, faces, real app interfaces.
+          8. Mind-blowing but readable: implement the motion story and visual language from the spec with real
+             invention — the viewer should wonder how it was made — while the subject stays instantly recognisable.
           9. Complete, runnable code. No placeholders, no TODOs. It must work the first time.
 
           ═══ STRUCTURE EXAMPLE ═══
@@ -745,8 +988,9 @@ jobs:
             if (!TYPES.includes(c.type)) c.type = "geometric-transform";
             for (const k of ["primaryColor", "secondaryColor", "bgColor"])
               if (!HEX.test(c[k] || "")) throw new Error(`invalid ${k}: ${c[k]}`);
-            for (const k of ["title", "stockTitle", "description", "concept"])
+            for (const k of ["title", "stockTitle", "description", "concept", "topic", "primarySearchIntent", "useCase", "editorUsage"])
               if (!d[k] || typeof d[k] !== "string") throw new Error(`missing ${k}`);
+            if (!d.visualSpec || typeof d.visualSpec.heroSubject !== "string") throw new Error("missing visualSpec.heroSubject");
             if (!(Number(d.demand?.score) >= 6)) throw new Error(`demand score too low: ${d.demand?.score}`);
 
             const kws = [...new Set((d.keywords || []).map(k => String(k).toLowerCase().trim()).filter(Boolean))].slice(0, 49);
@@ -757,9 +1001,10 @@ jobs:
             if (!base) throw new Error("empty id");
 
             d.id = uniqueId(base, seen);
+            d.sector = a.sector;
             d.keywords = kws;
             d.stockTitle = d.stockTitle.slice(0, 200);
-            c.durationSeconds = Math.min(18, Math.max(12, Math.round(Number(c.durationSeconds) || 15)));
+            c.durationSeconds = Math.min(12, Math.max(8, Math.round(Number(c.durationSeconds) || 10)));
             d.creative = { ...a };
             return d;
           }
@@ -801,7 +1046,7 @@ jobs:
             return code;
           }
 
-          // ── Runtime validation: bundle + render stills + timing (child process tanpa API key) ──
+          // ── Runtime validation (child process TANPA API key) ──
           function runtimeValidate(id, colors, frames) {
             const env = { ...process.env };
             delete env.GEMINI_API_KEY;
@@ -809,7 +1054,7 @@ jobs:
               cwd: RP, env, encoding: "utf8", timeout: 10 * 60 * 1000,
             });
             if (r.status === 0) {
-              console.log(`[VALIDATE OK] ${id} ${(r.stdout || "").trim().slice(-120)}`);
+              console.log(`[VALIDATE OK] ${id} ${(r.stdout || "").trim().slice(-200)}`);
               return null;
             }
             return ((r.stderr || "") + (r.stdout || "")).trim().slice(-1800) || "unknown validation error";
@@ -840,7 +1085,7 @@ jobs:
             return false;
           }
 
-          // ── Fallback statis (engine bawaan) ──
+          // ── Fallback statis (engine abstrak bawaan; hanya varian dark) ──
           const FALLBACK = [
             { id: "neural-bloom", title: "Neural Bloom", concept: "GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
               description: "Abstract neural network unfurling organically like bioluminescent roots.",
@@ -868,23 +1113,30 @@ jobs:
             const v = JSON.parse(JSON.stringify(FALLBACK[i % FALLBACK.length]));
             const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
             v.id = uniqueId(`${v.id}-${RUN}`, seen);
-            v.stockTitle = `${v.title} abstract motion background, seamless loop, 4K`;
-            v.creative = { ...a };
+            v.stockTitle = `${v.title} abstract motion background. 4K video, seamless loop.`;
+            v.sector = "abstract backgrounds";
+            v.topic = v.title;
+            v.creative = { ...a, sector: "abstract backgrounds" };
             v.codeMode = "builtin";
             return v;
           }
 
           function writeRegistry(videos) {
             const custom = videos.filter(v => v.codeMode === "custom");
+            if (custom.length === 0) {
+              fs.writeFileSync(`${RP}/src/registry.tsx`,
+                `import React from 'react';\nexport const CUSTOM: Record<string, React.FC<any>> = {};\n`);
+              return;
+            }
             const imports = custom.map((v, i) => `import { draw as d${i} } from './custom/${v.id}';`).join("\n");
             const entries = custom.map((v, i) => {
               const c = v.composition;
               const colors = JSON.stringify({ primary: c.primaryColor, secondary: c.secondaryColor, bg: c.bgColor });
-              return `  '${v.id}': () => <CanvasScene draw={d${i}} colors={${colors}} />,`;
+              return `  '${v.id}': ({ variant }: { variant: Variant }) => <CanvasScene draw={d${i}} colors={${colors}} variant={variant} />,`;
             }).join("\n");
             fs.writeFileSync(`${RP}/src/registry.tsx`,
-              `import React from 'react';\nimport { CanvasScene } from './lib/CanvasScene';\n${imports}\n\n` +
-              `export const CUSTOM: Record<string, React.FC> = {\n${entries}\n};\n`);
+              `import React from 'react';\nimport { CanvasScene } from './lib/CanvasScene';\nimport type { Variant } from './lib/CanvasScene';\n${imports}\n\n` +
+              `export const CUSTOM: Record<string, React.FC<{ variant: Variant }>> = {\n${entries}\n};\n`);
           }
 
           // ═══════════════════════════════════════════════════════════
@@ -898,16 +1150,22 @@ jobs:
               console.warn("[WARN] GEMINI_API_KEY tidak diset — memakai fallback statis.");
               for (let i = 0; i < COUNT; i++) videos.push(fallbackIdea(i, assignments[i], videos));
             } else {
-              const brief = await callModel({
+              const research = await callModel({
                 prompt: RESEARCH_PROMPT, search: true, label: "research", attempts: 1,
                 parse: t => { if (String(t).trim().length < 200) throw new Error("research too short"); return String(t).trim(); },
               });
-              console.log(brief ? `[RESEARCH OK] ${brief.length} chars` : "[RESEARCH] tidak tersedia — lanjut tanpa brief");
+              console.log(research ? `[RESEARCH OK] ${research.length} chars` : "[RESEARCH] tidak tersedia");
+              if (marketData) console.log(`[MARKET DATA] market-data.txt dipakai (${marketData.length} chars)`);
+
+              const brief = [
+                marketData ? `CONTRIBUTOR'S OWN MARKET DATA (highest-trust signal — weigh it above everything else):\n${marketData}` : "",
+                research || "",
+              ].filter(Boolean).join("\n\n");
 
               for (let i = 0; i < COUNT; i++) {
                 const a = assignments[i];
                 const idea = await callModel({
-                  prompt: ideaPrompt(a, brief || "", videos), json: true, label: `idea ${i + 1}`,
+                  prompt: ideaPrompt(a, brief, videos), json: true, label: `idea ${i + 1}`,
                   parse: raw => parseIdea(raw, a, videos),
                 });
                 if (!idea) {
@@ -916,7 +1174,7 @@ jobs:
                   continue;
                 }
                 idea.codeMode = (await buildCode(idea)) ? "custom" : "builtin";
-                console.log(`[IDEA] ${idea.id} → ${idea.codeMode}`);
+                console.log(`[IDEA] ${idea.id} (${idea.sector} / ${idea.topic}) → ${idea.codeMode}`);
                 videos.push(idea);
               }
             }
@@ -939,7 +1197,7 @@ jobs:
           registerRoot(RemotionRoot);
           EOF
 
-          # Engine bawaan: dipakai sebagai fallback bila kode AI gagal validasi
+          # Engine abstrak bawaan: fallback bila ide/kode AI gagal
           cat > src/Scene.tsx <<'EOF'
           import React, { useMemo } from 'react';
           import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
@@ -1186,6 +1444,7 @@ jobs:
           };
           EOF
 
+          # Ide custom → 4 render (dark 16:9, dark 9:16, green 16:9, black 16:9). Ide fallback → 2 render (dark).
           cat > src/Root.tsx <<'EOF'
           import React from 'react';
           import { Composition } from 'remotion';
@@ -1193,10 +1452,15 @@ jobs:
           import { IDEAS } from './ideas';
           import { CUSTOM } from './registry';
 
-          const SIZES = [
-            { suffix: '16x9-4k', width: 3840, height: 2160 },
-            { suffix: '9x16-4k', width: 2160, height: 3840 },
-          ];
+          const ASPECTS: Record<string, [number, number]> = {
+            '16x9': [3840, 2160],
+            '9x16': [2160, 3840],
+          };
+
+          const jobsFor = (custom: boolean): [string, string][] =>
+            custom
+              ? [['dark', '16x9'], ['dark', '9x16'], ['green', '16x9'], ['black', '16x9']]
+              : [['dark', '16x9'], ['dark', '9x16']];
 
           export const RemotionRoot: React.FC = () => (
             <>
@@ -1205,30 +1469,33 @@ jobs:
                 const frames = Math.round(idea.duration * 30);
                 return (
                   <React.Fragment key={idea.id}>
-                    {SIZES.map((sz) =>
-                      Custom ? (
+                    {jobsFor(!!Custom).map(([variant, aspect]) => {
+                      const [width, height] = ASPECTS[aspect];
+                      const id = `${idea.id}-${variant}-${aspect}-4k`;
+                      return Custom ? (
                         <Composition
-                          key={sz.suffix}
-                          id={`${idea.id}-${sz.suffix}`}
-                          component={Custom}
+                          key={id}
+                          id={id}
+                          component={Custom as any}
                           durationInFrames={frames}
                           fps={30}
-                          width={sz.width}
-                          height={sz.height}
+                          width={width}
+                          height={height}
+                          defaultProps={{ variant } as any}
                         />
                       ) : (
                         <Composition
-                          key={sz.suffix}
-                          id={`${idea.id}-${sz.suffix}`}
-                          component={Scene}
+                          key={id}
+                          id={id}
+                          component={Scene as any}
                           durationInFrames={frames}
                           fps={30}
-                          width={sz.width}
-                          height={sz.height}
-                          defaultProps={{ idea }}
+                          width={width}
+                          height={height}
+                          defaultProps={{ idea } as any}
                         />
-                      )
-                    )}
+                      );
+                    })}
                   </React.Fragment>
                 );
               })}
@@ -1265,30 +1532,38 @@ jobs:
           EOF
           node gen-ideas.mjs
 
-      # Safety net: bila project gagal dimuat karena kode custom, kosongkan registry → pakai engine bawaan
+      # Safety net: bila project gagal dimuat karena kode custom, kosongkan registry → engine bawaan
       - name: Verify project compiles (safety net)
         run: |
           cd remotion-project
           if ! npx remotion compositions src/index.ts; then
             echo "::warning::Registry bermasalah — fallback ke engine bawaan untuk semua ide"
-            printf "import React from 'react';\nexport const CUSTOM: Record<string, React.FC> = {};\n" > src/registry.tsx
+            printf "import React from 'react';\nexport const CUSTOM: Record<string, React.FC<any>> = {};\n" > src/registry.tsx
             npx remotion compositions src/index.ts
           fi
 
+      # Daftar render dibaca dari registry final, supaya selalu sinkron dengan Root.tsx
       - name: Build composition list
         id: comps
         run: |
           cd remotion-project
-          node -e "
-            const d = require('./video-ideas.json');
-            const list = [];
-            d.videos.forEach(v => {
-              list.push(v.id + '-16x9-4k');
-              list.push(v.id + '-9x16-4k');
-            });
-            if (list.length === 0) { console.error('Daftar komposisi kosong'); process.exit(1); }
-            require('fs').writeFileSync('comps.json', JSON.stringify(list));
-          "
+          cat > build-comps.mjs <<'EOF'
+          import fs from "fs";
+          const data = JSON.parse(fs.readFileSync("video-ideas.json", "utf8"));
+          const reg = fs.readFileSync("src/registry.tsx", "utf8");
+          const custom = new Set([...reg.matchAll(/^\s*'([a-z0-9-]+)':/gm)].map(m => m[1]));
+          const list = [];
+          for (const v of data.videos) {
+            v.codeMode = custom.has(v.id) ? "custom" : "builtin";
+            list.push(`${v.id}-dark-16x9-4k`, `${v.id}-dark-9x16-4k`);
+            if (custom.has(v.id)) list.push(`${v.id}-green-16x9-4k`, `${v.id}-black-16x9-4k`);
+          }
+          if (list.length === 0) { console.error("Daftar komposisi kosong"); process.exit(1); }
+          fs.writeFileSync("video-ideas.json", JSON.stringify(data, null, 2));
+          fs.writeFileSync("comps.json", JSON.stringify(list));
+          console.log(`${list.length} render:`, list.join(", "));
+          EOF
+          node build-comps.mjs
           echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
 
       # node_modules TIDAK ikut (artifact tidak menyimpan permission +x). Install bersih di job render.
@@ -1405,7 +1680,7 @@ jobs:
           ls -lh final-output/
           cp ideas-meta/video-ideas.json final-output/batch-metadata.json
 
-      # CSV metadata siap pakai untuk upload (judul ≤ 200 karakter, keyword ≤ 49)
+      # CSV metadata siap pakai (judul ≤ 200 karakter, keyword ≤ 49), disesuaikan per varian
       - name: Build upload CSV
         run: |
           cat > make-csv.mjs <<'EOF'
@@ -1417,11 +1692,20 @@ jobs:
           for (const f of files) {
             const v = ideas.find(x => f.startsWith(x.id + "-"));
             if (!v) continue;
-            const portrait = f.includes("-9x16-");
-            const extra = portrait ? ["vertical", "9:16", "portrait"] : ["horizontal", "16:9"];
+            let suffix = "", extra = [];
+            if (f.includes("-green-")) {
+              suffix = " Chroma key, green screen, green background.";
+              extra = ["chroma key", "green screen", "greenscreen", "green background", "keying"];
+            } else if (f.includes("-black-")) {
+              suffix = " Isolated on black background.";
+              extra = ["black background", "isolated on black", "overlay", "screen blend"];
+            } else if (f.includes("-9x16-")) {
+              suffix = " Vertical 9:16.";
+              extra = ["vertical", "9:16", "portrait", "social media"];
+            }
             const base = (v.keywords || []).slice(0, 49 - extra.length);
             const kws = [...new Set([...base, ...extra])].slice(0, 49);
-            const title = ((v.stockTitle || v.title) + (portrait ? ", vertical 9:16" : "")).slice(0, 200);
+            const title = ((v.stockTitle || v.title) + suffix).slice(0, 200);
             rows.push([esc(f), esc(title), esc(kws.join(",")), "", ""].join(","));
           }
           fs.writeFileSync("final-output/adobe-stock-upload.csv", rows.join("\n") + "\n");
@@ -1458,7 +1742,9 @@ jobs:
               id: v.id,
               type: v.composition.type,
               concept: v.concept || v.title,
-              technique: v.creative && v.creative.technique,
+              sector: v.sector,
+              topic: v.topic,
+              style: v.creative && v.creative.style,
               material: v.creative && v.creative.material,
               stockTitle: v.stockTitle,
               codeMode: v.codeMode,
