@@ -30,8 +30,6 @@ jobs:
           npm install remotion@4.0.290 @remotion/cli@4.0.290 \
             react@18.3.1 react-dom@18.3.1
           npm install -D typescript@5.6.3 @types/react@18.3.12
-          # ✅ Pin esbuild ke 0.24.0 untuk hindari bug 0.24.1
-          npm install -D esbuild@0.24.0
 
           cat > tsconfig.json <<'EOF'
           {
@@ -449,15 +447,20 @@ jobs:
           "
           echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
 
-      - name: Upload project artifacts
+      # tar tanpa node_modules: artifact tidak menyimpan permission file,
+      # sehingga binary (esbuild, dll.) akan kehilangan bit +x.
+      - name: Pack project (tanpa node_modules)
+        run: tar --exclude='node_modules' -czf project.tgz remotion-project
+
+      - name: Upload project artifact
         uses: actions/upload-artifact@v4
         with:
           name: remotion-project
-          path: remotion-project/
+          path: project.tgz
           retention-days: 1
 
   # ══════════════════════════════════════════════════════════
-  # JOB 2 — RENDER PARALEL (max-parallel: 5) — FIXED
+  # JOB 2 — RENDER PARALEL (max-parallel: 5)
   # ══════════════════════════════════════════════════════════
   render:
     needs: prepare
@@ -473,32 +476,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: remotion-project
-          path: remotion-project
+
+      - name: Extract project
+        run: tar -xzf project.tgz
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: remotion-project/package-lock.json
 
       - name: Install dependencies
         run: |
           cd remotion-project
-          npm install
-          # ✅ Pin esbuild ke versi stabil
-          npm install -D esbuild@0.24.0
+          npm ci
 
-      # ✅ FIX UTAMA: pastikan binary esbuild executable
-      - name: Fix esbuild permissions
+      - name: Install system dependencies (Chrome + fonts)
         run: |
-          cd remotion-project
-          # Cari semua binary esbuild dan beri permission +x
-          find node_modules -name "esbuild" -type f -exec chmod +x {} \; 2>/dev/null || true
-          find node_modules -path "*/esbuild/bin/esbuild" -exec chmod +x {} \; 2>/dev/null || true
-          # Verifikasi
-          echo "=== esbuild binary permissions ==="
-          find node_modules -name "esbuild" -type f -exec ls -la {} \; 2>/dev/null || echo "no esbuild binary found (ok, akan di-generate saat install)"
-
-      - name: Install CJK fonts
-        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk libnss3 libdbus-1-3 libatk1.0-0 \
+            libgbm-dev libasound2t64 libxrandr2 libxkbcommon-dev libxfixes3 \
+            libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 \
+            libcairo2 libcups2
 
       - name: Render ${{ matrix.comp }}
         run: |
