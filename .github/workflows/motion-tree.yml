@@ -1,0 +1,342 @@
+# =============================================================================
+#  CHRONO-SHINOBI — 3D NINJA CLOAK RENDER PIPELINE
+#  Satu file YAML ini membangun proyek Remotion 3D dari nol,
+#  lalu merender video menggunakan software renderer (swangle)
+#  yang berjalan di GitHub Actions tanpa GPU fisik.
+# =============================================================================
+
+name: Render Chrono-Shinobi 3D
+
+on:
+  workflow_dispatch:
+    inputs:
+      composition_id:
+        description: 'ID Komposisi Remotion'
+        required: true
+        default: 'ChronoShinobi'
+        type: string
+      output_name:
+        description: 'Nama file output (tanpa ekstensi)'
+        required: true
+        default: 'chrono-shinobi'
+        type: string
+
+jobs:
+  render:
+    name: Build & Render 3D Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # -----------------------------------------------------------------------
+      # LANGKAH 1: Tulis semua file proyek ke dalam workspace runner
+      # -----------------------------------------------------------------------
+      - name: Create project files
+        run: |
+          mkdir -p src
+
+          # -------------------------------------------------------------------
+          # package.json
+          # -------------------------------------------------------------------
+          cat <<'EOF' > package.json
+          {
+            "name": "chrono-shinobi",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "render": "remotion render ChronoShinobi out/chrono-shinobi.mp4 --gl=swangle"
+            },
+            "dependencies": {
+              "@remotion/cli": "4.0.230",
+              "@remotion/three": "4.0.230",
+              "@react-three/fiber": "8.15.19",
+              "react": "18.2.0",
+              "react-dom": "18.2.0",
+              "remotion": "4.0.230",
+              "three": "0.160.0"
+            },
+            "devDependencies": {
+              "@types/react": "18.2.79",
+              "@types/three": "0.160.0",
+              "typescript": "5.3.3"
+            }
+          }
+          EOF
+
+          # -------------------------------------------------------------------
+          # tsconfig.json
+          # -------------------------------------------------------------------
+          cat <<'EOF' > tsconfig.json
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "ESNext",
+              "jsx": "react-jsx",
+              "strict": true,
+              "esModuleInterop": true,
+              "skipLibCheck": true,
+              "moduleResolution": "node",
+              "allowSyntheticDefaultImports": true,
+              "forceConsistentCasingInFileNames": true
+            },
+            "include": ["src"]
+          }
+          EOF
+
+          # -------------------------------------------------------------------
+          # remotion.config.ts
+          # -------------------------------------------------------------------
+          cat <<'EOF' > remotion.config.ts
+          import { Config } from '@remotion/cli/config';
+
+          Config.setVideoImageFormat('jpeg');
+          Config.setOverwriteOutput(true);
+          EOF
+
+          # -------------------------------------------------------------------
+          # src/index.ts
+          # -------------------------------------------------------------------
+          cat <<'EOF' > src/index.ts
+          import { registerRoot } from 'remotion';
+          import { RemotionRoot } from './Root';
+
+          registerRoot(RemotionRoot);
+          EOF
+
+          # -------------------------------------------------------------------
+          # src/Root.tsx
+          # -------------------------------------------------------------------
+          cat <<'EOF' > src/Root.tsx
+          import React from 'react';
+          import { Composition } from 'remotion';
+          import { ChronoShinobi } from './ChronoShinobi';
+
+          export const RemotionRoot: React.FC = () => {
+            return (
+              <Composition
+                id="ChronoShinobi"
+                component={ChronoShinobi}
+                durationInFrames={300}
+                fps={30}
+                width={1920}
+                height={1080}
+              />
+            );
+          };
+          EOF
+
+          # -------------------------------------------------------------------
+          # src/ChronoShinobi.tsx  —  Scene utama
+          # -------------------------------------------------------------------
+          cat <<'EOF' > src/ChronoShinobi.tsx
+          import React from 'react';
+          import { ThreeCanvas } from '@remotion/three';
+          import { useCurrentFrame } from 'remotion';
+          import { CameraRig } from './CameraRig';
+          import { CloakOuter } from './CloakOuter';
+          import { CloakInner } from './CloakInner';
+
+          export const ChronoShinobi: React.FC = () => {
+            const frame = useCurrentFrame();
+            const time = frame / 30;
+
+            return (
+              <ThreeCanvas
+                width={1920}
+                height={1080}
+                camera={{ fov: 45, position: [0, 2, 5] }}
+              >
+                <color attach="background" args={['#050510']} />
+                <CameraRig time={time} />
+                <ambientLight intensity={0.3} />
+                <directionalLight
+                  position={[3, 5, 2]}
+                  intensity={0.6}
+                  color="#88ccff"
+                />
+                <CloakOuter time={time} />
+                <CloakInner time={time} />
+              </ThreeCanvas>
+            );
+          };
+          EOF
+
+          # -------------------------------------------------------------------
+          # src/CameraRig.tsx  —  Kamera orbit sinematik
+          # -------------------------------------------------------------------
+          cat <<'EOF' > src/CameraRig.tsx
+          import React, { useEffect } from 'react';
+          import { useThree } from '@react-three/fiber';
+
+          export const CameraRig: React.FC<{ time: number }> = ({ time }) => {
+            const { camera } = useThree();
+
+            useEffect(() => {
+              const radius = 5.5;
+              const angle = time * 0.25;
+              camera.position.x = Math.sin(angle) * radius;
+              camera.position.z = Math.cos(angle) * radius;
+              camera.position.y = 2.0 + Math.sin(time * 0.6) * 0.4;
+              camera.lookAt(0, 1.5, 0);
+            }, [time, camera]);
+
+            return null;
+          };
+          EOF
+
+          # -------------------------------------------------------------------
+          # src/CloakOuter.tsx  —  Jubah luar dengan shader Chrono-Thread
+          # -------------------------------------------------------------------
+          cat <<'EOF' > src/CloakOuter.tsx
+          import React, { useMemo, useEffect } from 'react';
+          import * as THREE from 'three';
+
+          const vertexShader = `
+            uniform float uTime;
+            varying vec3 vPosition;
+            varying vec2 vUv;
+            void main() {
+              vUv = uv;
+              vec3 pos = position;
+              float wave = sin(pos.y * 3.0 + uTime * 2.0) * 0.08
+                         + cos(pos.x * 4.0 + uTime * 1.5) * 0.04;
+              pos += normal * wave;
+              vPosition = pos;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+          `;
+
+          const fragmentShader = `
+            uniform float uTime;
+            varying vec3 vPosition;
+            varying vec2 vUv;
+            void main() {
+              vec3 color = vec3(0.01, 0.01, 0.03);
+              float glow = sin(vPosition.y * 2.0 - uTime * 3.0) * 0.5 + 0.5;
+              glow = pow(glow, 3.0);
+              color += vec3(0.0, 0.4, 1.0) * glow * 0.6;
+              float alpha = 0.8 - abs(vUv.y - 0.5) * 0.6;
+              alpha *= 0.8 + 0.2 * sin(uTime * 2.0);
+              gl_FragColor = vec4(color, alpha);
+            }
+          `;
+
+          export const CloakOuter: React.FC<{ time: number }> = ({ time }) => {
+            const geometry = useMemo(() => {
+              const geo = new THREE.CylinderGeometry(1.0, 1.2, 3.0, 64, 32, true);
+              geo.computeVertexNormals();
+              return geo;
+            }, []);
+
+            const material = useMemo(() => {
+              return new THREE.ShaderMaterial({
+                uniforms: { uTime: { value: 0 } },
+                vertexShader,
+                fragmentShader,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+              });
+            }, []);
+
+            useEffect(() => {
+              material.uniforms.uTime.value = time;
+            }, [time, material]);
+
+            return (
+              <mesh
+                geometry={geometry}
+                material={material}
+                position={[0, 1.5, 0]}
+              />
+            );
+          };
+          EOF
+
+          # -------------------------------------------------------------------
+          # src/CloakInner.tsx  —  Partikel sirkuit temporal di dalam jubah
+          # -------------------------------------------------------------------
+          cat <<'EOF' > src/CloakInner.tsx
+          import React, { useMemo, useEffect, useRef } from 'react';
+          import * as THREE from 'three';
+
+          export const CloakInner: React.FC<{ time: number }> = ({ time }) => {
+            const pointsRef = useRef<THREE.Points>(null);
+
+            const geometry = useMemo(() => {
+              const count = 1500;
+              const positions = new Float32Array(count * 3);
+              for (let i = 0; i < count; i++) {
+                const r = Math.random() * 0.8;
+                const angle = Math.random() * Math.PI * 2;
+                const y = Math.random() * 3.0;
+                positions[i * 3] = Math.cos(angle) * r;
+                positions[i * 3 + 1] = y;
+                positions[i * 3 + 2] = Math.sin(angle) * r;
+              }
+              const geo = new THREE.BufferGeometry();
+              geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+              return geo;
+            }, []);
+
+            useEffect(() => {
+              if (pointsRef.current) {
+                pointsRef.current.rotation.y = time * 0.5;
+              }
+            }, [time]);
+
+            return (
+              <points ref={pointsRef} geometry={geometry} position={[0, 1.5, 0]}>
+                <pointsMaterial
+                  color="#44aaff"
+                  size={0.06}
+                  transparent
+                  opacity={0.7}
+                  blending={THREE.AdditiveBlending}
+                  depthWrite={false}
+                  sizeAttenuation
+                />
+              </points>
+            );
+          };
+          EOF
+
+      # -----------------------------------------------------------------------
+      # LANGKAH 2: Install dependencies
+      # -----------------------------------------------------------------------
+      - name: Install dependencies
+        run: npm install
+
+      # -----------------------------------------------------------------------
+      # LANGKAH 3: Render video 3D dengan software renderer (swangle)
+      # -----------------------------------------------------------------------
+      - name: Render 3D video with swangle
+        run: |
+          npx remotion render ${{ github.event.inputs.composition_id }} \
+            out/${{ github.event.inputs.output_name }}.mp4 \
+            --gl=swangle \
+            --codec=h264 \
+            --crf=18 \
+            --concurrency=2
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+
+      # -----------------------------------------------------------------------
+      # LANGKAH 4: Upload hasil render sebagai artifact
+      # -----------------------------------------------------------------------
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.output_name }}.mp4
+          path: out/${{ github.event.inputs.output_name }}.mp4
+          retention-days: 7
+          compression-level: 0
