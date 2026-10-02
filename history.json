@@ -429,6 +429,41 @@
       "concept": "FRAGILITY vs STRENGTH — Translucent violet facets folding under extreme pressure without fracturing to form a robust shield.",
       "renderedAt": "2026-10-02T14:35:37.894Z",
       "run": "11"
+    },
+    {
+      "id": "biotitanium-synapse-conduit",
+      "type": "neural-network",
+      "concept": "ORGANIC vs MECHANICAL — Delicate bioluminescent dendritic tendrils thread through precision-machined titanium scaffolding.",
+      "renderedAt": "2026-10-02T20:28:38.148Z",
+      "run": "12"
+    },
+    {
+      "id": "ceramic-core-fusion-lattice",
+      "type": "particle-morph",
+      "concept": "FRAGILITY vs STRENGTH — Thousands of brittle drifting ceramic slivers compress under magnetic tension into an impervious floating sphere.",
+      "renderedAt": "2026-10-02T20:28:38.148Z",
+      "run": "12"
+    },
+    {
+      "id": "abyssal-prism-waveguide",
+      "type": "data-flow",
+      "concept": "ISOLATION vs CONNECTION — Monolithic subterranean prisms isolated in total dark water ignite into synchronized optical waveguides.",
+      "renderedAt": "2026-10-02T20:28:38.148Z",
+      "run": "12"
+    },
+    {
+      "id": "petrified-amber-chlorophyte",
+      "type": "organic-growth",
+      "concept": "SPEED vs STILLNESS — Stagnant millennia-old fossil resin fissures as rapid neon chlorophyte strands erupt along micro-fractures.",
+      "renderedAt": "2026-10-02T20:28:38.148Z",
+      "run": "12"
+    },
+    {
+      "id": "origami-vortex-tessellation",
+      "type": "geometric-transform",
+      "concept": "ORDER vs CHAOS — Precision-folded geometric pleats unravel into chaotic swirling vortex ribbons before snapping back into rigid equilibrium.",
+      "renderedAt": "2026-10-02T20:28:38.148Z",
+      "run": "12"
     }
   ],
   "version": 1
