@@ -1,13 +1,9 @@
-name: Auto Stock Concept Motion Graphics (4K)
+name: Auto Stock 4K Generator (Concept Assets)
 
 on:
   schedule:
     - cron: '0 */8 * * *'   # 3x sehari
   workflow_dispatch:
-    inputs:
-      count:
-        description: 'Jumlah ide per batch (tiap ide = 4 video)'
-        default: '4'
 
 permissions:
   contents: write
@@ -17,15 +13,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IDEA_COUNT: ${{ github.event.inputs.count || '4' }}
   # Daftar model Gemini (dicoba berurutan). Override lewat repo Variables: GEMINI_MODELS
   GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
 
 jobs:
   # ══════════════════════════════════════════════════════════
   # JOB 1 — PREPARE
-  #   riset pasar → ide konsep (topik jelas × eksekusi mind-blowing)
-  #   → kode Canvas dari AI → validasi otomatis (render, piksel, loop, performa)
+  #   riset topik (Google Search grounding) → rencana SERIES → metadata → kode Canvas dari AI
+  #   → validasi otomatis (compile + render still + cek performa)
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
@@ -53,7 +48,7 @@ jobs:
           npm init -y
           npm install remotion@4.0.290 @remotion/cli@4.0.290 \
             @remotion/bundler@4.0.290 @remotion/renderer@4.0.290 \
-            react@18.3.1 react-dom@18.3.1 jpeg-js
+            react@18.3.1 react-dom@18.3.1
           npm install -D typescript@5.6.3 @types/react@18.3.12
 
           cat > tsconfig.json <<'EOF'
@@ -66,14 +61,13 @@ jobs:
           }
           EOF
 
-      # ── Toolkit untuk kode buatan AI ──
+      # ── Toolkit yang dipakai kode buatan AI (noise yang bisa loop, warna, grain, dll.) ──
       - name: Write creative-coding kit
         run: |
           cd remotion-project
 
           cat > src/lib/kit.ts <<'EOF'
           export const TAU = Math.PI * 2;
-          export type Pt = [number, number];
 
           export const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
           export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -81,15 +75,8 @@ jobs:
             const t = clamp((x - a) / (b - a || 1), 0, 1);
             return t * t * (3 - 2 * t);
           };
-          // Progres 0..1 antara phase a dan b (untuk membuat timeline)
-          export const seg = (phase: number, a: number, b: number) => clamp((phase - a) / (b - a || 1), 0, 1);
           export const easeInOut = (t: number) =>
             t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-          export const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
-          export const easeOutBack = (t: number) => {
-            const c1 = 1.70158, c3 = c1 + 1;
-            return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-          };
           // 0 → 1 → 0, sebanyak k siklus penuh per loop
           export const breathe = (phase: number, k = 1) => 0.5 - 0.5 * Math.cos(TAU * phase * k);
 
@@ -132,7 +119,7 @@ jobs:
             return sum * 2 - 1;
           }
 
-          // Noise yang berulang sempurna tiap phase = 1
+          // Noise yang berulang sempurna tiap phase = 1 (berjalan melingkar di dimensi z,w)
           export const loopNoise = (x: number, y: number, phase: number, r = 1) =>
             noise(x, y, Math.cos(TAU * phase) * r, Math.sin(TAU * phase) * r);
 
@@ -147,6 +134,7 @@ jobs:
             return sum / norm;
           }
 
+          // Vektor aliran divergence-free (mentah, normalisasi sendiri), loop sempurna
           export function curl(x: number, y: number, phase: number, octaves = 3, r = 1): [number, number] {
             const e = 0.02;
             const dy = (fbm(x, y + e, phase, octaves, r) - fbm(x, y - e, phase, octaves, r)) / (2 * e);
@@ -154,7 +142,6 @@ jobs:
             return [dy, -dx];
           }
 
-          // ── Warna ──
           export function hexToRgb(hex: string): [number, number, number] {
             const h = hex.replace('#', '');
             const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
@@ -169,113 +156,8 @@ jobs:
             const c = (i: number) => Math.round(lerp(A[i], B[i], clamp(t, 0, 1))).toString(16).padStart(2, '0');
             return `#${c(0)}${c(1)}${c(2)}`;
           }
-          // amt > 0 → lebih terang, amt < 0 → lebih gelap
-          export const shade = (hex: string, amt: number) =>
-            mixHex(hex, amt > 0 ? '#ffffff' : '#000000', Math.abs(amt));
 
-          // ── Geometri untuk ikon (polyline bisa digambar bertahap, di-morph, dan di-resample) ──
-          export const pol = (cx: number, cy: number, r: number, a: number): Pt => [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
-          // Proyeksi isometrik (satuan bebas; kalikan sendiri dengan ukuran)
-          export const iso = (x: number, y: number, z = 0): Pt => [(x - y) * 0.866025, (x + y) * 0.5 - z];
-
-          export function circlePts(cx: number, cy: number, r: number, n = 64, start = -Math.PI / 2): Pt[] {
-            const out: Pt[] = [];
-            for (let i = 0; i < n; i++) out.push(pol(cx, cy, r, start + (i / n) * TAU));
-            return out;
-          }
-
-          export function roundedRectPts(cx: number, cy: number, w: number, h: number, r: number, steps = 8): Pt[] {
-            const rr = Math.min(r, w / 2, h / 2);
-            const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
-            const out: Pt[] = [];
-            const arc = (ax: number, ay: number, a0: number) => {
-              for (let i = 0; i <= steps; i++) {
-                const a = a0 + (i / steps) * (Math.PI / 2);
-                out.push([ax + Math.cos(a) * rr, ay + Math.sin(a) * rr]);
-              }
-            };
-            arc(x1 - rr, y0 + rr, -Math.PI / 2);
-            arc(x1 - rr, y1 - rr, 0);
-            arc(x0 + rr, y1 - rr, Math.PI / 2);
-            arc(x0 + rr, y0 + rr, Math.PI);
-            return out; // path tertutup
-          }
-
-          // Resample polyline menjadi n titik berjarak sama → memungkinkan morph antar bentuk apa pun
-          export function resample(pts: Pt[], n: number, close = false): Pt[] {
-            const P = close ? [...pts, pts[0]] : pts;
-            if (P.length < 2) return Array.from({ length: n }, () => (P[0] || [0, 0]) as Pt);
-            const cum = [0];
-            for (let i = 1; i < P.length; i++) {
-              cum.push(cum[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
-            }
-            const total = cum[cum.length - 1] || 1;
-            const out: Pt[] = [];
-            for (let k = 0; k < n; k++) {
-              const d = (close ? k / n : k / (n - 1)) * total;
-              let i = 1;
-              while (i < cum.length - 1 && cum[i] < d) i++;
-              const sl = cum[i] - cum[i - 1] || 1;
-              const t = (d - cum[i - 1]) / sl;
-              out.push([P[i - 1][0] + (P[i][0] - P[i - 1][0]) * t, P[i - 1][1] + (P[i][1] - P[i - 1][1]) * t]);
-            }
-            return out;
-          }
-
-          export const lerpPts = (a: Pt[], b: Pt[], t: number): Pt[] =>
-            a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t)] as Pt);
-
-          // Menambahkan sebagian (0..1) panjang polyline ke path aktif (untuk efek draw-on)
-          export function tracePolyline(ctx: CanvasRenderingContext2D, pts: Pt[], t = 1, close = false) {
-            const P = close ? [...pts, pts[0]] : pts;
-            if (P.length < 2) return;
-            const seglen: number[] = [];
-            let total = 0;
-            for (let i = 1; i < P.length; i++) {
-              const d = Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
-              seglen.push(d);
-              total += d;
-            }
-            let remain = total * clamp(t, 0, 1);
-            ctx.moveTo(P[0][0], P[0][1]);
-            for (let i = 1; i < P.length && remain > 0; i++) {
-              const d = seglen[i - 1];
-              if (remain >= d) {
-                ctx.lineTo(P[i][0], P[i][1]);
-                remain -= d;
-              } else {
-                const k = remain / (d || 1);
-                ctx.lineTo(P[i - 1][0] + (P[i][0] - P[i - 1][0]) * k, P[i - 1][1] + (P[i][1] - P[i - 1][1]) * k);
-                remain = 0;
-              }
-            }
-          }
-
-          // Garis neon: halo berlapis (tanpa shadowBlur yang lambat) + inti terang.
-          // `trace` adalah fungsi yang membangun path (moveTo/lineTo/tracePolyline) tanpa beginPath/stroke.
-          export function neonStroke(ctx: CanvasRenderingContext2D, trace: () => void, color: string, lw: number, intensity = 1) {
-            ctx.save();
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.globalCompositeOperation = 'lighter';
-            const halo: [number, number][] = [[7, 0.04], [4, 0.09], [2.2, 0.2]];
-            for (const [k, a] of halo) {
-              ctx.lineWidth = lw * k;
-              ctx.strokeStyle = rgba(color, a * intensity);
-              ctx.beginPath();
-              trace();
-              ctx.stroke();
-            }
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.lineWidth = lw;
-            ctx.strokeStyle = rgba(mixHex(color, '#ffffff', 0.5), clamp(0.95 * intensity, 0, 1));
-            ctx.beginPath();
-            trace();
-            ctx.stroke();
-            ctx.restore();
-          }
-
-          // Canvas offscreen resolusi rendah. Tidak dibersihkan otomatis.
+          // Canvas offscreen resolusi rendah (untuk efek field/permukaan). Tidak dibersihkan otomatis.
           const buffers = new Map<string, { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>();
           export function getBuffer(key: string, w: number, h: number) {
             const id = `${key}:${w}x${h}`;
@@ -290,7 +172,7 @@ jobs:
             return b;
           }
 
-          // ── Finishing (dipanggil harness untuk varian 'dark', bukan oleh kode AI) ──
+          // ── Finishing (dipanggil harness, bukan oleh kode AI) ──
           export function drawVignette(ctx: CanvasRenderingContext2D, w: number, h: number, bg: string, strength = 0.5) {
             const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.55);
             g.addColorStop(0, rgba(bg, 0));
@@ -302,7 +184,7 @@ jobs:
             ctx.restore();
           }
 
-          // Grain halus = dithering anti-banding
+          // Grain halus = dithering untuk mencegah banding pada gradient gelap (penyebab reject umum)
           const grainTiles = new Map<number, HTMLCanvasElement>();
           export function drawGrain(ctx: CanvasRenderingContext2D, w: number, h: number, frame: number, amount = 0.02) {
             const k = frame % 8;
@@ -330,6 +212,345 @@ jobs:
             ctx.fillRect(0, 0, w, h);
             ctx.restore();
           }
+
+          // ── Helper timeline & warna tambahan ──
+          // seg(phase, a, b): 0 sebelum a, 1 setelah b — dipakai untuk koreografi animasi
+          export const seg = (p: number, a: number, b: number) => clamp((p - a) / (b - a || 1), 0, 1);
+          export const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+          export const easeOutBack = (t: number) => {
+            const c1 = 1.70158, c3 = c1 + 1;
+            return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+          };
+          // shade(hex, t): t -1..0 gelapkan (ke hitam), 0..1 terangkan (ke putih)
+          export function shade(hex: string, t: number): string {
+            return t < 0 ? mixHex(hex, '#000000', -t) : mixHex(hex, '#ffffff', t);
+          }
+          EOF
+
+          cat > src/lib/shapes.ts <<'EOF'
+          import { TAU, clamp, lerp, rgba, mixHex, shade } from './kit';
+
+          export type Pt = [number, number];
+          export type Poly = { pts: Pt[]; closed?: boolean };
+
+          // ═══════════ Konstruktor bentuk (koordinat satuan, y ke bawah, sekitar -1..1) ═══════════
+          export const polyP = (pts: Pt[], closed = false): Poly => ({ pts, closed });
+          export const lineP = (x1: number, y1: number, x2: number, y2: number): Poly => ({ pts: [[x1, y1], [x2, y2]] });
+
+          export function ellipseArcP(cx: number, cy: number, rx: number, ry: number, a0: number, a1: number, n = 48): Poly {
+            const pts: Pt[] = [];
+            for (let i = 0; i <= n; i++) {
+              const a = lerp(a0, a1, i / n);
+              pts.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]);
+            }
+            return { pts };
+          }
+          export const arcP = (cx: number, cy: number, r: number, a0: number, a1: number, n = 48) =>
+            ellipseArcP(cx, cy, r, r, a0, a1, n);
+
+          export function ellipseP(cx: number, cy: number, rx: number, ry: number, n = 72): Poly {
+            const pts: Pt[] = [];
+            for (let i = 0; i < n; i++) {
+              const a = (i / n) * TAU;
+              pts.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]);
+            }
+            return { pts, closed: true };
+          }
+          export const circleP = (cx: number, cy: number, r: number, n = 72) => ellipseP(cx, cy, r, r, n);
+          export const rectP = (x: number, y: number, w: number, h: number): Poly =>
+            ({ pts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], closed: true });
+
+          export function roundRectP(x: number, y: number, w: number, h: number, r: number, n = 10): Poly {
+            r = Math.min(r, w / 2, h / 2);
+            const pts: Pt[] = [];
+            const corner = (cx: number, cy: number, a0: number) => {
+              for (let i = 0; i <= n; i++) {
+                const a = a0 + (i / n) * (Math.PI / 2);
+                pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+              }
+            };
+            corner(x + w - r, y + r, -Math.PI / 2);   // kanan-atas
+            corner(x + w - r, y + h - r, 0);          // kanan-bawah
+            corner(x + r, y + h - r, Math.PI / 2);    // kiri-bawah
+            corner(x + r, y + r, Math.PI);            // kiri-atas
+            return { pts, closed: true };
+          }
+
+          export function bezierP(p0: Pt, p1: Pt, p2: Pt, p3: Pt, n = 28): Pt[] {
+            const out: Pt[] = [];
+            for (let i = 0; i <= n; i++) {
+              const t = i / n, m = 1 - t;
+              out.push([
+                m * m * m * p0[0] + 3 * m * m * t * p1[0] + 3 * m * t * t * p2[0] + t * t * t * p3[0],
+                m * m * m * p0[1] + 3 * m * m * t * p1[1] + 3 * m * t * t * p2[1] + t * t * t * p3[1],
+              ]);
+            }
+            return out;
+          }
+
+          // ═══════════ Transform & ukur ═══════════
+          // place: petakan koordinat satuan (-1..1) ke piksel. scale = setengah ukuran dalam px.
+          export function place(polys: Poly[], cx: number, cy: number, scale: number, rot = 0): Poly[] {
+            const c = Math.cos(rot), s = Math.sin(rot);
+            return polys.map(p => ({
+              closed: p.closed,
+              pts: p.pts.map(([x, y]) => [cx + (x * c - y * s) * scale, cy + (x * s + y * c) * scale] as Pt),
+            }));
+          }
+
+          export function polyLen(p: Poly): number {
+            const pts = p.closed ? [...p.pts, p.pts[0]] : p.pts;
+            let t = 0;
+            for (let i = 1; i < pts.length; i++) t += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+            return t;
+          }
+
+          // n titik merata sepanjang garis (untuk efek partikel yang membentuk ikon)
+          export function samplePoly(p: Poly, n: number): Pt[] {
+            const pts = p.closed ? [...p.pts, p.pts[0]] : p.pts;
+            const segs: number[] = [];
+            let total = 0;
+            for (let i = 1; i < pts.length; i++) {
+              const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+              segs.push(d);
+              total += d;
+            }
+            const out: Pt[] = [];
+            if (total === 0 || n <= 0) return out;
+            let si = 0, acc = 0;
+            for (let k = 0; k < n; k++) {
+              const target = (k / n) * total;
+              while (si < segs.length - 1 && acc + segs[si] < target) { acc += segs[si]; si++; }
+              const f = segs[si] ? (target - acc) / segs[si] : 0;
+              out.push([lerp(pts[si][0], pts[si + 1][0], f), lerp(pts[si][1], pts[si + 1][1], f)]);
+            }
+            return out;
+          }
+
+          // ═══════════ Menggambar ═══════════
+          // Membuat path sebagian garis (t0..t1 = 0..1 sepanjang garis). Pakai untuk animasi "draw-on".
+          export function pathPoly(ctx: CanvasRenderingContext2D, poly: Poly, t0 = 0, t1 = 1) {
+            const pts = poly.closed ? [...poly.pts, poly.pts[0]] : poly.pts;
+            const segs: number[] = [];
+            let total = 0;
+            for (let i = 1; i < pts.length; i++) {
+              const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+              segs.push(d);
+              total += d;
+            }
+            const a = clamp(t0, 0, 1) * total, b = clamp(t1, 0, 1) * total;
+            ctx.beginPath();
+            if (total === 0 || b - a <= 0) return;
+            let acc = 0, started = false;
+            for (let i = 0; i < segs.length; i++) {
+              const s0 = acc, s1 = acc + segs[i];
+              acc = s1;
+              if (s1 < a || s0 > b) continue;
+              const ta = Math.max(a, s0), tb = Math.min(b, s1);
+              const d = segs[i] || 1;
+              const k0 = (ta - s0) / d, k1 = (tb - s0) / d;
+              const x0 = lerp(pts[i][0], pts[i + 1][0], k0), y0 = lerp(pts[i][1], pts[i + 1][1], k0);
+              const x1 = lerp(pts[i][0], pts[i + 1][0], k1), y1 = lerp(pts[i][1], pts[i + 1][1], k1);
+              if (!started) { ctx.moveTo(x0, y0); started = true; }
+              ctx.lineTo(x1, y1);
+            }
+          }
+          export function strokePoly(ctx: CanvasRenderingContext2D, poly: Poly, t0 = 0, t1 = 1) {
+            pathPoly(ctx, poly, t0, t1);
+            ctx.stroke();
+          }
+          export function fillPoly(ctx: CanvasRenderingContext2D, poly: Poly) {
+            if (!poly.pts.length) return;
+            ctx.beginPath();
+            poly.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          // Garis neon: halo berlapis (tanpa shadowBlur, cepat di 4K) + inti terang. t0..t1 = bagian garis yang tampil.
+          export function neon(ctx: CanvasRenderingContext2D, polys: Poly[], color: string, width: number,
+                               t0 = 0, t1 = 1, intensity = 1) {
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalCompositeOperation = 'lighter';
+            const layers: [number, number, string][] = [
+              [9, 0.035, color], [5, 0.07, color], [2.6, 0.16, color],
+              [1, 0.95, color], [0.38, 0.9, mixHex(color, '#ffffff', 0.72)],
+            ];
+            for (const [mult, alpha, col] of layers) {
+              ctx.lineWidth = width * mult;
+              ctx.strokeStyle = rgba(col, alpha * intensity);
+              for (const p of polys) strokePoly(ctx, p, t0, t1);
+            }
+            ctx.restore();
+          }
+
+          export function glowDot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, alpha = 1) {
+            const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+            g.addColorStop(0, rgba(color, alpha));
+            g.addColorStop(0.35, rgba(color, alpha * 0.35));
+            g.addColorStop(1, rgba(color, 0));
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = g;
+            ctx.fillRect(x - r, y - r, r * 2, r * 2);
+            ctx.restore();
+          }
+
+          // ═══════════ Isometrik pseudo-3D ═══════════
+          // Sumbu: x ke kanan-bawah, y ke kiri-bawah, z ke atas. s = px per satuan.
+          export function isoPt(x: number, y: number, z: number, cx: number, cy: number, s: number): Pt {
+            return [cx + (x - y) * s * 0.866, cy + (x + y) * s * 0.5 - z * s];
+          }
+          // Kotak isometrik 3 sisi dengan shading. Gambar dari belakang ke depan (urut x+y+z naik).
+          export function isoBox(ctx: CanvasRenderingContext2D, x: number, y: number, z: number,
+                                 w: number, d: number, h: number, color: string, cx: number, cy: number, s: number) {
+            const P = (px: number, py: number, pz: number) => isoPt(px, py, pz, cx, cy, s);
+            const face = (pts: Pt[], col: string) => {
+              ctx.beginPath();
+              pts.forEach(([a, b], i) => (i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)));
+              ctx.closePath();
+              ctx.fillStyle = col;
+              ctx.fill();
+            };
+            face([P(x, y + d, z), P(x + w, y + d, z), P(x + w, y + d, z + h), P(x, y + d, z + h)], shade(color, -0.18)); // depan-kiri
+            face([P(x + w, y, z), P(x + w, y + d, z), P(x + w, y + d, z + h), P(x + w, y, z + h)], shade(color, -0.38)); // depan-kanan
+            face([P(x, y, z + h), P(x + w, y, z + h), P(x + w, y + d, z + h), P(x, y + d, z + h)], shade(color, 0.22));  // atas
+          }
+
+          // ═══════════ Pustaka ikon (koordinat -1..1) ═══════════
+          function cloudOutline(): Poly {
+            const circles: [number, number, number][] = [[-0.45, 0.15, 0.3], [-0.05, -0.1, 0.45], [0.4, 0.1, 0.35]];
+            const inRect = (x: number, y: number) => x > -0.45 && x < 0.4 && y > 0.15 && y < 0.45;
+            const inCircle = (x: number, y: number, c: [number, number, number], eps: number) =>
+              Math.hypot(x - c[0], y - c[1]) < c[2] - eps;
+            const pts: Pt[] = [];
+            circles.forEach((c, ci) => {
+              for (let i = 0; i < 160; i++) {
+                const a = (i / 160) * TAU;
+                const x = c[0] + Math.cos(a) * c[2], y = c[1] + Math.sin(a) * c[2];
+                const hidden = circles.some((o, oi) => oi !== ci && inCircle(x, y, o, 0.004)) || inRect(x, y);
+                if (!hidden) pts.push([x, y]);
+              }
+            });
+            for (let i = 0; i <= 24; i++) pts.push([lerp(-0.45, 0.4, i / 24), 0.45]);
+            pts.sort((p, q) => Math.atan2(p[1] - 0.1, p[0]) - Math.atan2(q[1] - 0.1, q[0]));
+            return { pts, closed: true };
+          }
+
+          function shieldOutline(): Poly {
+            const right: Pt[] = [[0, -0.9], [0.78, -0.62], [0.78, 0.02], ...bezierP([0.78, 0.02], [0.78, 0.5], [0.38, 0.76], [0, 0.94], 24).slice(1)];
+            const left: Pt[] = right.slice(1, -1).map(([x, y]) => [-x, y] as Pt).reverse();
+            return { pts: [...right, ...left], closed: true };
+          }
+
+          function heartOutline(): Poly {
+            const pts: Pt[] = [];
+            for (let i = 0; i < 120; i++) {
+              const t = (i / 120) * TAU;
+              const x = 16 * Math.pow(Math.sin(t), 3);
+              const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+              pts.push([(x / 16) * 0.85, ((y - 2.5) / 17) * 0.9]);
+            }
+            return { pts, closed: true };
+          }
+
+          function gearOutline(): Poly {
+            const teeth = 8, pts: Pt[] = [];
+            for (let k = 0; k < teeth; k++) {
+              const a = (k / teeth) * TAU;
+              const prof: [number, number][] = [[-0.2, 0.66], [-0.11, 0.86], [0.11, 0.86], [0.2, 0.66]];
+              for (const [da, r] of prof) pts.push([Math.cos(a + da) * r, Math.sin(a + da) * r]);
+            }
+            return { pts, closed: true };
+          }
+
+          export const ICONS: Record<string, () => Poly[]> = {
+            folder: () => [roundRectP(-0.9, -0.45, 1.8, 1.25, 0.1), polyP([[-0.9, -0.45], [-0.9, -0.66], [-0.3, -0.66], [-0.12, -0.45]])],
+            document: () => [roundRectP(-0.6, -0.85, 1.2, 1.7, 0.08), lineP(-0.35, -0.45, 0.35, -0.45), lineP(-0.35, -0.15, 0.35, -0.15), lineP(-0.35, 0.15, 0.35, 0.15), lineP(-0.35, 0.45, 0.1, 0.45)],
+            cross: () => [polyP([[-0.18, -0.6], [0.18, -0.6], [0.18, -0.18], [0.6, -0.18], [0.6, 0.18], [0.18, 0.18], [0.18, 0.6], [-0.18, 0.6], [-0.18, 0.18], [-0.6, 0.18], [-0.6, -0.18], [-0.18, -0.18]], true)],
+            cloud: () => [cloudOutline()],
+            shield: () => [shieldOutline()],
+            lock: () => [roundRectP(-0.55, -0.1, 1.1, 0.85, 0.1), polyP([[-0.35, -0.1], [-0.35, -0.3], ...arcP(0, -0.3, 0.35, Math.PI, TAU).pts, [0.35, -0.3], [0.35, -0.1]]), circleP(0, 0.25, 0.1, 32), lineP(0, 0.35, 0, 0.5)],
+            heart: () => [heartOutline()],
+            ecg: () => [polyP([[-1, 0], [-0.55, 0], [-0.4, -0.25], [-0.25, 0.35], [-0.1, -0.7], [0.1, 0.5], [0.25, 0], [1, 0]])],
+            phone: () => [roundRectP(-0.42, -0.9, 0.84, 1.8, 0.14), roundRectP(-0.34, -0.74, 0.68, 1.38, 0.06), lineP(-0.1, 0.78, 0.1, 0.78)],
+            magnifier: () => [circleP(-0.15, -0.15, 0.5), lineP(0.2, 0.2, 0.75, 0.75)],
+            gear: () => [gearOutline(), circleP(0, 0, 0.3, 48)],
+            chart: () => [polyP([[-0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]), rectP(-0.55, 0.1, 0.25, 0.7), rectP(-0.15, -0.25, 0.25, 1.05), rectP(0.25, -0.6, 0.25, 1.4)],
+            database: () => [ellipseP(0, -0.55, 0.6, 0.2), lineP(-0.6, -0.55, -0.6, 0.55), lineP(0.6, -0.55, 0.6, 0.55), ellipseArcP(0, -0.1, 0.6, 0.2, 0, Math.PI), ellipseArcP(0, 0.22, 0.6, 0.2, 0, Math.PI), ellipseArcP(0, 0.55, 0.6, 0.2, 0, Math.PI)],
+            check: () => [polyP([[-0.5, 0.05], [-0.15, 0.4], [0.55, -0.4]])],
+            user: () => [circleP(0, -0.35, 0.27, 48), polyP([...arcP(0, 0.85, 0.62, Math.PI, TAU).pts], true)],
+            envelope: () => [rectP(-0.85, -0.55, 1.7, 1.1), polyP([[-0.85, -0.55], [0, 0.1], [0.85, -0.55]])],
+            globe: () => [circleP(0, 0, 0.8), ellipseP(0, 0, 0.35, 0.8, 48), lineP(-0.8, 0, 0.8, 0), lineP(-0.69, -0.4, 0.69, -0.4), lineP(-0.69, 0.4, 0.69, 0.4)],
+            chip: () => [roundRectP(-0.45, -0.45, 0.9, 0.9, 0.08), rectP(-0.22, -0.22, 0.44, 0.44),
+              ...[-0.25, 0, 0.25].flatMap(v => [lineP(v, -0.45, v, -0.7), lineP(v, 0.45, v, 0.7), lineP(-0.45, v, -0.7, v), lineP(0.45, v, 0.7, v)])],
+            bolt: () => [polyP([[0.1, -0.9], [-0.45, 0.1], [-0.05, 0.1], [-0.15, 0.9], [0.45, -0.15], [0.05, -0.15]], true)],
+          };
+          export const ICON_NAMES = Object.keys(ICONS);
+          EOF
+
+          cat > src/lib/fallbackDraw.ts <<'EOF'
+          import { TAU, mulberry32, rgba, mixHex, breathe, seg, easeOutCubic } from './kit';
+          import { ICONS, neon, place, glowDot, type Poly } from './shapes';
+          import type { DrawFn } from './CanvasScene';
+
+          // Template neon bawaan: dipakai bila kode AI gagal validasi. Ikon utama + ikon lencana,
+          // garis cahaya berjalan, cincin gelombang, dan titik orbit. Loop sempurna.
+          export function makeNeonIconDraw(keys: string[]): DrawFn {
+            return (ctx, s) => {
+              const { w, h, u, phase, colors, cx, cy } = s;
+              const m = Math.min(w, h);
+              const hero = (ICONS[keys[0]] || ICONS.cloud)();
+              const badge = keys[1] && ICONS[keys[1]] ? ICONS[keys[1]]() : null;
+              const float = Math.sin(phase * TAU) * 7 * u;
+              const size = m * 0.25;
+              const hy = cy + float;
+
+              glowDot(ctx, cx, hy, m * 0.55, colors.primary, 0.16 + 0.05 * breathe(phase, 1));
+
+              // cincin gelombang
+              for (let i = 0; i < 3; i++) {
+                const p = (phase * 1 + i / 3) % 1;
+                const r = m * (0.2 + 0.28 * easeOutCubic(p));
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.lineWidth = 1.4 * u;
+                ctx.strokeStyle = rgba(colors.secondary, 0.35 * (1 - p));
+                ctx.beginPath();
+                ctx.arc(cx, hy, r, 0, TAU);
+                ctx.stroke();
+                ctx.restore();
+              }
+
+              const polys: Poly[] = place(hero, cx, hy, size);
+              const lw = 3.2 * u;
+              neon(ctx, polys, colors.primary, lw);
+
+              // cahaya berjalan sepanjang garis ikon
+              const t0 = phase, t1 = phase + 0.14;
+              const lit = (a: number, b: number) => neon(ctx, polys, colors.secondary, lw * 1.15, a, b, 1.1);
+              if (t1 <= 1) lit(t0, t1); else { lit(t0, 1); lit(0, t1 - 1); }
+
+              // ikon lencana
+              if (badge) {
+                const bx = cx + size * 0.95, by = hy + size * 0.85;
+                glowDot(ctx, bx, by, size * 0.7, colors.secondary, 0.14);
+                neon(ctx, place(badge, bx, by, size * 0.34), colors.secondary, lw * 0.8);
+              }
+
+              // titik orbit
+              const N = 14;
+              for (let i = 0; i < N; i++) {
+                const a = (i / N) * TAU + phase * TAU;
+                const rx = m * 0.42, ry = m * 0.3;
+                const x = cx + Math.cos(a) * rx, y = hy + Math.sin(a) * ry;
+                const back = Math.sin(a) < 0 ? 0.45 : 1;
+                glowDot(ctx, x, y, (11 + 8 * back) * u, i % 2 ? colors.primary : colors.secondary, 0.95 * back);
+              }
+            };
+          }
           EOF
 
           cat > src/lib/CanvasScene.tsx <<'EOF'
@@ -338,37 +559,26 @@ jobs:
           import { drawGrain, drawVignette, mixHex } from './kit';
 
           export type Colors = { primary: string; secondary: string; bg: string };
-          // dark  = backdrop gelap premium (vignette + grain)
-          // black = hitam murni datar (untuk overlay screen/add)
-          // green = hijau chroma key datar (tanpa efek apa pun di latar)
-          export type Variant = 'dark' | 'black' | 'green';
-
-          const FLAT_BG: Record<'black' | 'green', string> = { black: '#000000', green: '#00B140' };
 
           export type DrawState = {
             w: number;
             h: number;
             cx: number;
             cy: number;
-            u: number;          // unit skala ≈ min(w,h)/1000
-            hero: number;       // sisi persegi aman di tengah untuk subjek utama
-            phase: number;      // 0..1 posisi loop (satu-satunya sumber waktu)
+            u: number;          // unit scale ≈ min(w,h)/1000
+            phase: number;      // 0..1, posisi loop (satu-satunya sumber waktu)
             seconds: number;    // durasi loop dalam detik
             portrait: boolean;
-            variant: Variant;
-            bg: string;         // warna latar efektif
             colors: Colors;
           };
 
           export type DrawFn = (ctx: CanvasRenderingContext2D, s: DrawState) => void;
 
-          export const CanvasScene: React.FC<{ draw: DrawFn; colors: Colors; variant?: Variant }> = ({
-            draw, colors, variant = 'dark',
-          }) => {
+          // finish: 'full' = backdrop + vignette + grain | 'clean' = hanya warna latar polos (hitam / chroma green)
+          export const CanvasScene: React.FC<{ draw: DrawFn; colors: Colors; finish?: 'full' | 'clean' }> = ({ draw, colors, finish = 'full' }) => {
             const ref = useRef<HTMLCanvasElement>(null);
             const frame = useCurrentFrame();
             const { width, height, fps, durationInFrames } = useVideoConfig();
-            const bg = variant === 'dark' ? colors.bg : FLAT_BG[variant];
 
             useLayoutEffect(() => {
               const canvas = ref.current;
@@ -379,30 +589,26 @@ jobs:
               ctx.setTransform(1, 0, 0, 1, 0, 0);
               ctx.globalAlpha = 1;
               ctx.globalCompositeOperation = 'source-over';
-              ctx.fillStyle = bg;
+              ctx.fillStyle = colors.bg;
               ctx.fillRect(0, 0, width, height);
 
-              if (variant === 'dark') {
+              if (finish === 'full') {
                 const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
-                g.addColorStop(0, mixHex(bg, colors.primary, 0.12));
-                g.addColorStop(1, bg);
+                g.addColorStop(0, mixHex(colors.bg, colors.primary, 0.1));
+                g.addColorStop(1, colors.bg);
                 ctx.fillStyle = g;
                 ctx.fillRect(0, 0, width, height);
               }
 
-              const portrait = height > width;
               const s: DrawState = {
                 w: width,
                 h: height,
                 cx: width / 2,
                 cy: height / 2,
                 u: Math.min(width, height) / 1000,
-                hero: portrait ? width * 0.7 : height * 0.6,
                 phase: frame / durationInFrames,
                 seconds: durationInFrames / fps,
-                portrait,
-                variant,
-                bg,
+                portrait: height > width,
                 colors,
               };
 
@@ -410,37 +616,35 @@ jobs:
               draw(ctx, s);
               ctx.restore();
 
-              if (variant === 'dark') {
-                drawVignette(ctx, width, height, bg, 0.55);
+              if (finish === 'full') {
+                drawVignette(ctx, width, height, colors.bg, 0.55);
                 drawGrain(ctx, width, height, frame, 0.02);
               }
-            }, [frame, width, height, fps, durationInFrames, colors, draw, variant, bg]);
+            }, [frame, width, height, fps, durationInFrames, colors, draw, finish]);
 
             return (
-              <AbsoluteFill style={{ background: bg }}>
+              <AbsoluteFill style={{ background: colors.bg }}>
                 <canvas ref={ref} width={width} height={height} style={{ width: '100%', height: '100%' }} />
               </AbsoluteFill>
             );
           };
           EOF
 
-      # ── Validator: bundle + still (3 varian) + cek piksel, animasi, loop, spill hijau, performa ──
+      # ── Validator: bundle + render still (landscape & portrait) + ukur waktu per frame 4K ──
       - name: Write validator
         run: |
           cd remotion-project
           cat > validate.mjs <<'EOF'
           import { bundle } from '@remotion/bundler';
           import * as R from '@remotion/renderer';
-          import jpeg from 'jpeg-js';
           import fs from 'fs';
           import os from 'os';
           import path from 'path';
 
-          const [id, colorsJson, framesStr] = process.argv.slice(2);
+          const [id, colorsJson, framesStr, finish = 'full'] = process.argv.slice(2);
           const colors = JSON.parse(colorsJson);
-          const F = parseInt(framesStr, 10);
-          const MAX_FRAME_SECONDS = 18;
-          const GREEN = [0, 177, 64];
+          const frames = parseInt(framesStr, 10);
+          const MAX_FRAME_SECONDS = 18; // satu frame 4K; 450 frame / concurrency 2 masih muat di timeout render
           const entryFile = path.resolve('src/_validate-entry.tsx');
           const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'val-'));
 
@@ -449,15 +653,11 @@ jobs:
           import { CanvasScene } from './lib/CanvasScene';
           import { draw } from './custom/${id}';
           const colors = ${JSON.stringify(colors)};
-          const Dark: React.FC = () => <CanvasScene draw={draw} colors={colors} variant="dark" />;
-          const Black: React.FC = () => <CanvasScene draw={draw} colors={colors} variant="black" />;
-          const Green: React.FC = () => <CanvasScene draw={draw} colors={colors} variant="green" />;
+          const Comp: React.FC = () => <CanvasScene draw={draw} colors={colors} finish="${finish}" />;
           registerRoot(() => (
             <>
-              <Composition id="dark-land" component={Dark} durationInFrames={${F}} fps={30} width={3840} height={2160} />
-              <Composition id="dark-port" component={Dark} durationInFrames={${F}} fps={30} width={2160} height={3840} />
-              <Composition id="black-land" component={Black} durationInFrames={${F}} fps={30} width={3840} height={2160} />
-              <Composition id="green-land" component={Green} durationInFrames={${F}} fps={30} width={3840} height={2160} />
+              <Composition id="t-land" component={Comp} durationInFrames={${frames}} fps={30} width={3840} height={2160} />
+              <Composition id="t-port" component={Comp} durationInFrames={${frames}} fps={30} width={2160} height={3840} />
             </>
           ));
           `;
@@ -468,45 +668,9 @@ jobs:
             await R.renderStill({
               composition, serveUrl, frame, scale,
               output: path.join(outDir, name),
-              imageFormat: 'jpeg', jpegQuality: 80,
+              imageFormat: 'jpeg', jpegQuality: 70,
             });
             return (Date.now() - t0) / 1000;
-          }
-
-          const load = name => jpeg.decode(fs.readFileSync(path.join(outDir, name)), { useTArray: true });
-
-          // Fraksi piksel yang berbeda dari warna latar
-          function diffFraction(img, rgb, tol) {
-            const d = img.data;
-            let n = 0;
-            for (let i = 0; i < d.length; i += 4) {
-              const diff = Math.abs(d[i] - rgb[0]) + Math.abs(d[i + 1] - rgb[1]) + Math.abs(d[i + 2] - rgb[2]);
-              if (diff > tol) n++;
-            }
-            return n / (d.length / 4);
-          }
-          // Rata-rata selisih absolut per kanal (0..255)
-          function meanAbs(a, b) {
-            const da = a.data, db = b.data;
-            let s = 0, c = 0;
-            for (let i = 0; i < da.length; i += 4) {
-              s += Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]);
-              c += 3;
-            }
-            return s / c;
-          }
-          // Dari piksel subjek (bukan latar hijau), berapa fraksi yang dominan hijau (spill key)
-          function greenSpill(img) {
-            const d = img.data;
-            let subject = 0, greenish = 0;
-            for (let i = 0; i < d.length; i += 4) {
-              const diff = Math.abs(d[i] - GREEN[0]) + Math.abs(d[i + 1] - GREEN[1]) + Math.abs(d[i + 2] - GREEN[2]);
-              if (diff > 60) {
-                subject++;
-                if (d[i + 1] > d[i] + 35 && d[i + 1] > d[i + 2] + 35) greenish++;
-              }
-            }
-            return { subject: subject / (d.length / 4), greenRatio: subject ? greenish / subject : 0 };
           }
 
           let code = 0;
@@ -515,54 +679,19 @@ jobs:
             if (R.ensureBrowser) await R.ensureBrowser();
             const serveUrl = await bundle({ entryPoint: entryFile });
 
-            const q = Math.floor(F * 0.25), m = Math.floor(F * 0.5), last = F - 1;
-            await still(serveUrl, 'black-land', 0, 0.25, 'b0.jpg');
-            await still(serveUrl, 'black-land', q, 0.25, 'bq.jpg');
-            await still(serveUrl, 'black-land', m, 0.25, 'bm.jpg');
-            await still(serveUrl, 'black-land', last, 0.25, 'bl.jpg');
-            await still(serveUrl, 'green-land', 0, 0.25, 'g0.jpg');
-            await still(serveUrl, 'dark-port', Math.floor(F / 3), 0.25, 'p.jpg');
+            for (const f of [0, Math.floor(frames / 2), frames - 1]) {
+              await still(serveUrl, 't-land', f, 0.25, `l${f}.jpg`);
+            }
+            await still(serveUrl, 't-port', Math.floor(frames / 3), 0.25, 'p.jpg');
 
-            const b0 = load('b0.jpg'), bq = load('bq.jpg'), bm = load('bm.jpg'), bl = load('bl.jpg'), g0 = load('g0.jpg');
-
-            // 1) Subjek harus terlihat di phase 0 (thumbnail) dan tidak memenuhi seluruh frame
-            const cover = diffFraction(b0, [0, 0, 0], 40);
-            if (cover < 0.003 || cover > 0.6) {
-              throw new Error(
-                `Phase 0 (thumbnail): subjek menutupi ${(cover * 100).toFixed(2)}% frame (harus 0.3%–60%). ` +
-                `Gambar hero yang jelas, utuh, dan terlihat di tengah frame pada phase 0 (varian black).`);
-            }
-            // 2) Harus ada animasi nyata
-            const motion = Math.max(meanAbs(b0, bq), meanAbs(b0, bm));
-            if (motion < 0.25) {
-              throw new Error(`Animasi nyaris tidak terlihat (selisih frame ${motion.toFixed(2)}). Buat transformasi yang jelas di tengah loop.`);
-            }
-            // 3) Loop mulus: frame terakhir harus hampir sama dengan frame pertama
-            const dLast = meanAbs(b0, bl);
-            if (dLast > 0.35 * motion + 0.1) {
-              throw new Error(
-                `Loop tidak mulus: frame terakhir berbeda dari frame pertama (${dLast.toFixed(2)} vs gerak ${motion.toFixed(2)}). ` +
-                `Semua gerak harus kembali persis ke keadaan phase 0 pada phase 1.`);
-            }
-            // 4) Varian green: subjek terlihat dan tidak mengandung warna hijau (spill key)
-            const sp = greenSpill(g0);
-            if (sp.subject < 0.002) {
-              throw new Error(`Varian green: subjek hampir tidak terlihat (${(sp.subject * 100).toFixed(2)}%). Pastikan hero tergambar di latar hijau.`);
-            }
-            if (sp.greenRatio > 0.35) {
-              throw new Error(
-                `Varian green: ${(sp.greenRatio * 100).toFixed(0)}% piksel subjek berwarna hijau — akan ikut ter-key. ` +
-                `Pada variant === 'green' pakai warna non-hijau/teal dan tanpa glow aditif.`);
-            }
-
-            // 5) Performa: satu frame 4K penuh
-            const secs = await still(serveUrl, 'dark-land', Math.floor(F / 2), 1, 'full.jpg');
+            const secs = await still(serveUrl, 't-land', Math.floor(frames / 2), 1, 'full.jpg');
             if (secs > MAX_FRAME_SECONDS) {
               throw new Error(
                 `Terlalu berat: 1 frame 4K butuh ${secs.toFixed(1)}s (maks ${MAX_FRAME_SECONDS}s). ` +
-                `Kurangi jumlah path/noise call, pakai getBuffer() resolusi rendah, hindari shadowBlur.`);
+                `Kurangi jumlah path/noise call, gunakan getBuffer() resolusi rendah untuk field, hindari shadowBlur.`
+              );
             }
-            console.log(JSON.stringify({ ok: true, frameSeconds: secs, cover, motion, dLast, greenRatio: sp.greenRatio }));
+            console.log(JSON.stringify({ ok: true, frameSeconds: secs }));
           } catch (e) {
             console.error(String(e?.stack || e).slice(0, 1800));
             code = 1;
@@ -597,19 +726,19 @@ jobs:
 
           const ROOT = "..";
           const HISTORY_PATH = `${ROOT}/history.json`;
-          const MARKET_PATH = `${ROOT}/market-data.txt`;   // opsional: data pasar milik Anda sendiri
           const RP = `${ROOT}/remotion-project`;
           const OUTPUT_PATH = `${RP}/video-ideas.json`;
           const CUSTOM_DIR = `${RP}/src/custom`;
           const RUN = process.env.GITHUB_RUN_NUMBER || String(Date.now());
           const TODAY = new Date().toISOString().slice(0, 10);
-          const COUNT = Math.min(8, Math.max(1, parseInt(process.env.IDEA_COUNT || "4", 10) || 4));
+          const COUNT = 5;                 // jumlah aset dalam satu SERIES
           const ATTEMPTS_PER_MODEL = 2;
           const CODE_ATTEMPTS = 3;
           const FENCE = "```";
-          const TYPES = ["neural-network", "particle-morph", "data-flow", "organic-growth", "geometric-transform"];
           const HEX = /^#[0-9a-fA-F]{6}$/;
-          const ALLOWED_IMPORTS = ["../lib/kit", "../lib/CanvasScene"];
+          const ALLOWED_IMPORTS = ["../lib/kit", "../lib/shapes", "../lib/CanvasScene"];
+          const ICON_NAMES = ["folder", "document", "cross", "cloud", "shield", "lock", "heart", "ecg", "phone", "magnifier",
+            "gear", "chart", "database", "check", "user", "envelope", "globe", "chip", "bolt"];
 
           const MODELS = (process.env.GEMINI_MODELS || "").split(",").map(s => s.trim()).filter(Boolean);
           const ai = process.env.GEMINI_API_KEY
@@ -619,55 +748,46 @@ jobs:
           const history = JSON.parse(fs.readFileSync(HISTORY_PATH, "utf8"));
           const previousIds = history.rendered.map(r => r.id);
           const shipped = history.rendered.slice(-80)
-            .map(r => `  - ${r.sector ? r.sector + " / " : ""}${r.topic || r.concept}${r.style ? " | " + r.style : ""}`);
-          const marketData = fs.existsSync(MARKET_PATH) ? fs.readFileSync(MARKET_PATH, "utf8").trim().slice(0, 6000) : "";
+            .map(r => `  - ${r.topic ? r.topic + " | " : ""}${r.subject || r.concept}`);
 
           // ═══════════════════════════════════════════════════════════
-          // CREATIVE BANKS — dipilih oleh SCRIPT agar tiap run beda (LLM cenderung konvergen)
-          // Topik spesifik DI DALAM sektor dipilih AI berdasarkan riset pasar.
+          // BANKS — dipilih SCRIPT (bukan LLM) agar tiap run beda topik & gaya
           // ═══════════════════════════════════════════════════════════
-          const SECTORS = [
-            "healthcare & telemedicine", "cloud, data & storage", "cybersecurity & privacy",
-            "fintech, payments & crypto", "e-commerce & delivery", "jobs, HR & careers",
-            "education & e-learning", "AI, automation & chatbots", "clean energy & sustainability",
-            "real estate & smart home", "travel & mobility", "logistics & supply chain",
-            "marketing, social media & analytics", "legal, insurance & compliance",
-            "food, agriculture & nutrition", "space, science & research", "gaming & entertainment tech",
-            "remote work & collaboration", "customer support & communication", "construction & Industry 4.0",
+          const DOMAINS = [
+            "healthcare & telemedicine", "medical records & health data", "cloud computing & data storage",
+            "cybersecurity & privacy", "fintech & online payments", "banking & mobile wallet",
+            "e-commerce & delivery", "logistics & supply chain", "AI & automation", "education & e-learning",
+            "HR, job search & remote work", "green energy & sustainability", "smart home & IoT",
+            "real estate & property tech", "legal, contracts & compliance", "marketing analytics & social media",
+            "travel & hospitality", "agriculture & food tech", "insurance & risk", "customer support & chat",
+            "blockchain & digital identity", "mobile apps & software development", "data analytics & business intelligence",
           ];
+
+          const BACKGROUNDS = {
+            "black": { bg: "#000000", finish: "clean",
+              rule: "PURE BLACK #000000 background. Emission-only look (light on black) so it works with a 'screen' blend over any footage. No vignette, no grain, no backdrop gradients." },
+            "chroma-green": { bg: "#00b140", finish: "clean",
+              rule: "SOLID chroma-key green #00b140 background. NO glow, NO green-tinted light, NO soft shadows that blend into the green, no semi-transparent edges. Crisp, matte-shaded opaque objects only, kept well inside the frame so keying is easy." },
+            "dark-gradient": { bg: null, finish: "full",
+              rule: "Deep, dark, rich background colour of your choice (the harness adds a soft radial backdrop, vignette and fine grain automatically)." },
+            "light-soft": { bg: null, finish: "full",
+              rule: "Soft light pastel background colour of your choice; clean modern look with gentle contact shadows (the harness adds a subtle backdrop, vignette and grain)." },
+          };
+          const BG_KEYWORDS = {
+            "black": ["black background", "isolated on black", "overlay"],
+            "chroma-green": ["chroma key", "green screen", "green background"],
+            "dark-gradient": ["dark background"],
+            "light-soft": ["light background"],
+          };
+
           const STYLES = [
-            "neon single-line icon with draw-on strokes and travelling light pulses",
-            "isometric flat-colour objects with crisp faces, a light sweep and a soft ground shadow",
-            "glassmorphism layered translucent cards with refraction highlights",
-            "duotone gradient line-art with a moving specular highlight",
-            "particle-assembled icon: thousands of points converge into the form",
-            "holographic wireframe with scan-line reveal",
-            "layered paper-cut shapes with parallax depth",
-            "blueprint technical drawing that builds itself (no text, no numbers)",
-            "halftone dot-matrix icon with wave-driven dot sizes",
-            "liquid-metal morph between two related shapes",
-            "exploded-view assembly: parts fly out and snap back",
-            "orbit-ring system: satellites with trails around a central hero",
-            "data-path infographic: glowing packets flow along circuit-like paths into the hero",
-            "faked-3D extruded icon built from stacked offset layers with volumetric light rays",
-          ];
-          const MOTIONS = [
-            "the hero breaks into its components and reassembles",
-            "the hero morphs into a second related object and back",
-            "energy travels around and through the hero in a continuous circuit",
-            "a sweeping light scans the hero and reveals an inner layer",
-            "elements orbit, then converge onto the hero",
-            "the hero unfolds to reveal an inner layer, then folds back",
-            "ripples of light radiate and the hero pulses with them",
-            "a grid of small copies ripples in a wave around the hero",
-          ];
-          const MATERIALS = [
-            "luminous neon gas", "frosted glass", "brushed metal with a light sweep", "soft-touch matte clay look",
-            "iridescent film", "cut paper", "crystal", "ink in liquid",
-          ];
-          const PALETTES = [
-            "deep teal + warm gold", "ink indigo + coral", "violet + ice-blue", "electric blue + magenta",
-            "terracotta + sand + teal", "graphite + one electric accent", "rose quartz + burgundy", "petrol blue + amber",
+            { name: "neon line icons with a dim always-visible base, a travelling light trace, layered glow and pulse rings (kit: neon())", background: "black" },
+            { name: "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())", background: "black" },
+            { name: "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())", background: "light-soft" },
+            { name: "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())", background: "chroma-green" },
+            { name: "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes", background: "dark-gradient" },
+            { name: "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow", background: "dark-gradient" },
+            { name: "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)", background: "light-soft" },
           ];
 
           const shuffle = arr => {
@@ -678,196 +798,194 @@ jobs:
             }
             return a;
           };
-          const recent = history.rendered.slice(-15);
-          const pool = (bank, key) => {
-            const used = new Set(recent.map(r => r[key]).filter(Boolean));
-            const free = bank.filter(x => !used.has(x));
-            return shuffle(free.length >= COUNT ? free : bank);
-          };
-          const sectors = pool(SECTORS, "sector");
-          const styles = pool(STYLES, "style");
-          const motions = shuffle(MOTIONS), materials = shuffle(MATERIALS), palettes = shuffle(PALETTES);
-          const assignments = Array.from({ length: COUNT }, (_, i) => ({
-            sector: sectors[i % sectors.length],
-            style: styles[i % styles.length],
-            motion: motions[i % motions.length],
-            material: materials[i % materials.length],
-            palette: palettes[i % palettes.length],
-          }));
+          const recentSet = key => new Set(history.rendered.slice(-20).map(r => r[key]).filter(Boolean));
+
+          function pickStyle() {
+            const used = recentSet("style");
+            const free = STYLES.filter(s => !used.has(s.name));
+            return shuffle(free.length ? free : STYLES)[0];
+          }
+          function pickDomains(n) {
+            const used = recentSet("topic");
+            const free = DOMAINS.filter(d => !used.has(d));
+            return shuffle(free.length >= n ? free : DOMAINS).slice(0, n);
+          }
 
           // ═══════════════════════════════════════════════════════════
           // PROMPTS
           // ═══════════════════════════════════════════════════════════
-          const RESEARCH_PROMPT = `Today is ${TODAY}. Use Google Search.
+          function researchPrompt(domains) {
+            return `Today is ${TODAY}. Use Google Search.
 
-          You are a stock-footage market analyst. Research what buyers of CONCEPT MOTION GRAPHICS look for RIGHT NOW
-          and over the next 90 days: animated icons, explainer-video elements, neon / isometric / glass / 3D-style
-          icon animations, chroma-key green-screen elements, and isolated-on-black overlay elements, for topics such as
-          healthcare, cloud and data, cybersecurity, fintech, e-commerce, jobs and HR, education, AI, energy,
-          logistics, marketing. Look at Adobe Stock, Shutterstock, Pond5, Envato, Freepik, Motion Array (popular and
-          trending searches, search suggestions, contributor blogs, "stock trends ${TODAY.slice(0, 4)}" reports) and at
-          current motion-design trend reports and upcoming seasonal / industry moments.
+          You are a stock-footage market analyst. Research what buyers of FUNCTIONAL MOTION-GRAPHIC ASSETS are searching for
+          right now (animated icons, concept animations, explainer-video elements, 3D/isometric objects, chroma-key / green-screen
+          objects, isolated-on-black overlays, UI/app-promo elements; 4K and HD) on Adobe Stock, Shutterstock, Pond5, Envato,
+          Freepik, Motion Array and in explainer-video / corporate-video / app-promo production communities.
 
-          Return a concise brief (max 500 words, plain text, no tables):
-          1. TWELVE high-intent topics / search phrases grouped by sector, each with a relative demand label
-             (high / medium) and a note on saturation (many near-identical results vs. visible gaps).
-             Do NOT invent numeric search volumes; say so if none were found.
-          2. Formats that sell best (green screen, black background, loops, vertical 9:16, 4K) and why.
-          3. THREE emerging themes for the next 90 days.
-          4. FIVE visual clichés that are saturated and should be avoided.
-          Name the sources you relied on.`;
+          Candidate topic domains: ${domains.join(" | ")}.
 
-          function ideaPrompt(a, brief, siblings) {
-            const sib = siblings.length
-              ? siblings.map(s => `  - ${s.sector} / ${s.topic} | ${s.creative?.style}`).join("\n")
-              : "  (none yet)";
-            return `You are the head of creative of a top-selling Adobe Stock motion-graphics studio. Your best sellers are
-          concept animations such as: "Glowing neon line medical health record folder icon isolated on black background",
-          "3D office box with folders, job search and resume sending, chroma key green screen", "cloud computing storage
-          folder animation". They share three traits: a CLEAR SUBJECT that buyers actually search for, an OBVIOUS USE
-          (an editor knows instantly where it goes), and a look that reads in a thumbnail. Your edge is EXECUTION: the
-          same buyer-obvious subjects, built with so much craft and invention that viewers wonder how it was made —
-          and that buyers pick over the 500 near-identical icons next to it.
+          For EACH domain return (plain text, concise, max 500 words in total):
+           - 5 specific high-intent buyer search phrases (concrete nouns such as "medical record folder icon", not vague themes)
+             with a relative demand label (high / medium) and the typical use case;
+           - what looks saturated (generic clip-art, same flat style) vs. what is under-served.
+          Then add 3 emerging visual styles buyers/designers currently want, and seasonal/industry hooks for the next 90 days.
+          Do NOT invent numeric search volumes — say so if no numbers were found. Name the sources you relied on.`;
+          }
+
+          function seriesPrompt(style, domains, brief) {
+            const B = BACKGROUNDS[style.background];
+            return `You are the head of creative of a top-tier Adobe Stock motion-graphics studio. Your assets are FUNCTIONAL:
+          an editor must instantly know what each one is for (explainer videos, corporate decks, app promos, social ads, UI demos,
+          overlays) and must be able to find it with a plain search phrase. Think: "neon line medical-record folder icon on black",
+          "3D cloud storage animation", "telemedicine video-call concept", "green-screen 3D box with folders".
+          Buyers license CONSISTENT SETS, so you will design ONE SERIES of ${COUNT} assets sharing topic, style, palette and motion language.
 
           TODAY: ${TODAY}
 
           ═══ 1. MARKET INTELLIGENCE ═══
-          ${brief || "(no live research available — rely on your own knowledge of what buyers search for on stock platforms)"}
+          ${brief || "(no live research available — rely on your own knowledge of what buyers search for)"}
 
-          ═══ 2. STRATEGY: CLEAR SUBJECT × MIND-BLOWING EXECUTION ═══
-           - Subject: ONE specific, high-intent topic inside the assigned sector — the strongest combination of buyer
-             demand and a clean visual metaphor. Utility first: name the buyers and exactly how the clip is used
-             (explainer, presentation, intro, social post, app promo, webinar, training).
-           - Creativity lives in the EXECUTION: transformation, assembly, light behaviour, impossible-but-readable
-             physics, a metaphor that explains the concept in one second. NOT in an obscure subject nobody searches.
-           - Never invent a topic nobody would type into a search box. The main search phrase must appear in the stock
-             title and lead the keywords.
-           - Honesty rule: you have NO real search-volume numbers. Score demand and saturation as best estimates
-             and state the evidence.
-           - Inspiration for the level of invention (do NOT reuse this subject): for "cloud storage", thousands of tiny
-             file-shaped slivers rise like embers and crystallise into a cloud whose edge is made of the files
-             themselves; mid-loop the cloud exhales and the files rain back into a folder-shaped well of light.
+          ═══ 2. CHOOSE THE TOPIC ═══
+          Candidate domains: ${domains.join(" | ")}
+          Pick the ONE domain with the strongest buyer demand where this treatment can still feel fresh.
+          Honesty rule: you have NO real search-volume numbers; estimate demand and state your evidence.
 
-          ═══ 3. CREATIVE ASSIGNMENT (mandatory) ═══
-           - Sector          : ${a.sector}
-           - Visual language : ${a.style}
-           - Motion story    : ${a.motion}
-           - Material/finish : ${a.material}
-           - Palette family  : ${a.palette}
-          Fuse these into ONE coherent clip. Push the visual language beyond its textbook version.
+          ═══ 3. ASSIGNED STYLE (mandatory) ═══
+          Style     : ${style.name}
+          Background: ${style.background} — ${B.rule}
+          Refine it into a precise signature look for THIS series (palette, line weight, tempo, easing, signature motion).
 
-          ═══ 4. PREMIUM QUALITY BAR ═══
-           - Thumbnail-readable (~320 px wide): ONE hero subject, bold silhouette, at most 4 supporting elements.
-           - Hero centred in a safe zone (~60% of frame height), generous margins, works in 16:9 and 9:16.
-           - Phase 0 (= end of loop) is the fully formed, beautiful hero (it becomes the thumbnail). The transformation
-             happens in the middle and returns EXACTLY. 8–12 s seamless loop.
-           - Craft: consistent stroke weights, precise geometry, max 3 hues + neutrals, cinematic light, easing everywhere.
-           - It renders three ways: premium dark backdrop, pure black (for screen/add blending), chroma-key green.
-             The design must survive all three (on green: no green/teal in the subject, no soft glow halos).
-           - No text, letters, numbers, logos, brands, people, faces, real app interfaces, medical or financial claims.
+          ═══ 4. THE ${COUNT} SUBJECTS ═══
+          Each subject = a SPECIFIC noun concept a buyer would type ("medical record folder", "online payment shield",
+          "cloud backup upload", "delivery tracking pin"), never a vague theme. Together they must cover the topic broadly.
+           - Legibility first: recognisable within one second at thumbnail size, single clear hero object, centred.
+           - Then mind-blowing: ONE memorable "wow beat" per subject — a surprising but logical, satisfying animated moment that
+             still reads as the subject (e.g. the folder opens and a heartbeat line draws itself through its pages; the cloud rains
+             data cubes that stack into a padlock). Clever metaphors must never hide what the asset is.
+           - Each subject lists 1–2 icon names it could be built from, chosen from: ${ICON_NAMES.join(", ")}.
 
-          ═══ 5. AVOID ═══
-          Generic icon + pulsing glow + three arrows, anything that looks like a clip-art template, stock cliches
-          from the research brief, and anything resembling the shipped list below.
+          ═══ 5. PREMIUM BAR ═══
+          Crisp and clean; consistent line weight and palette across the series (max 3 hues + neutrals, modern/muted, no pure primaries);
+          smooth eased motion; no flicker; no clutter; seamless loop of 10–15 s; works in 16:9 and 9:16.
+          No text, letters, numbers, people/faces, brand logos or trademarks, no medical or financial claims.
 
-          ═══ 6. ALREADY SHIPPED — never repeat or closely resemble ═══
-          ${shipped.length ? shipped.join("\n") : "  (none yet — first batch)"}
-          Siblings in this batch:
+          ═══ 6. ALREADY SHIPPED — do not repeat ═══
+          ${shipped.length ? shipped.join("\n") : "  (none yet)"}
+
+          ═══ OUTPUT ═══ Output ONLY valid JSON:
+          {
+            "seriesName": "short internal name",
+            "topic": "the chosen domain, copied exactly from the candidates",
+            "topicEvidence": "why buyers want this now, citing the research",
+            "buyerUseCases": ["3-5 concrete uses"],
+            "style": {
+              "look": "precise signature look of this series",
+              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "bgColor": "#rrggbb",
+              "lineWeight": "e.g. 3-4 units", "motionLanguage": "tempo, easing, signature motion",
+              "durationSeconds": 12
+            },
+            "subjects": [ exactly ${COUNT} x {
+              "subject": "specific noun concept", "buyerSearchPhrase": "exact phrase a buyer would type",
+              "useCase": "who uses it and for what", "metaphorTwist": "the fresh angle", "wowBeat": "the memorable animated moment",
+              "iconHints": ["1-2 icon names"]
+            } ]
+          }
+          Colours are 6-digit hex.`;
+          }
+
+          function subjectPrompt(plan, subj, siblings) {
+            const B = BACKGROUNDS[plan.style.background];
+            const sib = siblings.length ? siblings.map(s => `  - ${s.subject}`).join("\n") : "  (none yet)";
+            return `You are an Adobe Stock metadata and creative director. Write the listing and the creative spec for ONE asset of a series.
+
+          SERIES: ${plan.seriesName} | topic: ${plan.topic}
+          STYLE : ${plan.style.look}
+          BACKGROUND: ${plan.style.background} — ${B.rule}
+          SUBJECT: ${subj.subject}
+          BUYER SEARCH PHRASE: ${subj.buyerSearchPhrase}
+          USE CASE: ${subj.useCase}
+          TWIST: ${subj.metaphorTwist}
+          WOW BEAT: ${subj.wowBeat}
+          Already in this series:
           ${sib}
 
-          ═══ OUTPUT ═══
-          Output ONLY valid JSON, this exact shape:
+          Write like top-selling listings: a descriptive sentence-style title packed with the terms buyers type, for example
+          "Glowing neon line medical record folder icon animation on black background. Patient file symbol, health data concept.
+          4K video motion graphic, seamless loop." (adapt to YOUR subject and background — never copy this sentence).
+          For chroma-key backgrounds include the words chroma key, green screen, green background naturally.
+          No brand names, no "AI generated".
+
+          Output ONLY valid JSON:
           {
             "id": "lowercase-kebab-case-unique-max-50-chars",
-            "title": "evocative artistic title, max 60 chars",
-            "stockTitle": "Adobe Stock title in plain buyer language, 1–3 short sentences separated by periods, max 180 chars. Pattern: '<look> <subject> icon, <synonym phrases>. <use-case phrase>. 4K video motion graphic, seamless loop.' Do NOT mention the background (it is added per variant). No brand names, no 'AI generated'.",
-            "description": "1–2 commercial sentences about the look and typical uses",
-            "sector": "${a.sector}",
-            "topic": "the specific topic, e.g. 'telemedicine video consultation'",
-            "primarySearchIntent": "the exact phrase a buyer would type",
+            "title": "short internal title, max 60 chars",
+            "stockTitle": "Adobe Stock title, 15-35 words, max 190 chars",
+            "description": "1-2 commercial sentences: the look and typical uses",
+            "primarySearchIntent": "${subj.buyerSearchPhrase}",
             "relatedSearchPhrases": ["5-8 phrases"],
-            "targetBuyers": ["3-5 buyer types"],
-            "useCase": "one sentence: where and how this clip is used",
-            "editorUsage": "how an editor places it (overlay, key, intro element, transition...)",
-            "concept": "visual metaphor in one line",
             "demand": { "score": 1-10, "evidence": "why buyers want this" },
-            "saturation": { "score": 1-10, "evidence": "how crowded this look already is" },
-            "noveltyHook": "what the viewer has never seen before",
-            "keywords": ["30-49 terms, MOST important first; first 10 = strongest buyer search terms; include icon, animation, motion graphic, loop, 4K and the topic synonyms; no brand names"],
-            "composition": {
-              "type": "closest of: neural-network | particle-morph | data-flow | organic-growth | geometric-transform",
-              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "bgColor": "#rrggbb (near-black, tinted, for the dark variant)",
-              "animationStyle": "", "durationSeconds": 10,
-              "elements": [{ "name": "", "behavior": "", "timing": { "start": 0, "end": 5 } }]
-            },
+            "saturation": { "score": 1-10, "evidence": "how crowded this exact look is" },
+            "noveltyHook": "what makes this one special",
+            "keywords": ["30-49 terms, MOST important first; first 10 = strongest buyer search terms; include icon, animation, motion graphics, 4K, loop, concept; no brand names"],
+            "iconHints": ["1-2 names from: ${ICON_NAMES.join(", ")}"],
             "visualSpec": {
-              "heroSubject": "exactly what is drawn as the hero",
-              "layers": ["hero: ...", "support: ...", "ambient: ..."],
-              "motionArc": "timeline of the loop (phase 0..1) and how it returns to the start",
-              "variantNotes": "how it adapts for black and for chroma-key green (colours that are safe on green)"
+              "composition": "layout of the hero and supporting elements (works in landscape and portrait)",
+              "storyboard": ["beat 1: ...", "beat 2: ...", "beat 3: ..."],
+              "wowBeat": "the memorable animated moment, precisely staged",
+              "lightingNotes": ""
             }
           }
-          Rules: demand.score MUST be >= 6. durationSeconds is 8–12. Colours are 6-digit hex.`;
+          Rules: demand.score MUST be >= 6.`;
           }
 
-          const KIT_DOC = `TAU, type Pt = [number, number]
-          mulberry32(seed): () => number                     // seeded random 0..1
-          noise(x,y,z=0,w=0): number                         // 4D value noise, -1..1
-          loopNoise(x,y,phase,r=1) / fbm(x,y,phase,octaves=4,r=1): number   // periodic in phase
-          curl(x,y,phase,octaves=3,r=1): [number, number]    // flow vector (raw), periodic
-          clamp(v,a,b)  lerp(a,b,t)  smoothstep(a,b,x)
-          seg(phase,a,b): number                             // 0..1 progress between phase a and b (timelines)
-          easeInOut(t)  easeOutCubic(t)  easeOutBack(t)
-          breathe(phase,k=1): number                         // 0..1..0, k whole cycles per loop
-          hexToRgb(hex)  rgba(hex,alpha): string  mixHex(a,b,t): hex  shade(hex,amt): hex  // amt>0 lighter, <0 darker
-          pol(cx,cy,r,angle): Pt     iso(x,y,z=0): Pt        // isometric projection (unit space, scale yourself)
-          circlePts(cx,cy,r,n=64,start): Pt[]                // closed
-          roundedRectPts(cx,cy,w,h,r,steps=8): Pt[]          // closed
-          resample(pts,n,close=false): Pt[]                  // n evenly spaced points → morph any shape into any other
-          lerpPts(a: Pt[], b: Pt[], t): Pt[]                 // morph between equal-length polylines
-          tracePolyline(ctx,pts,t=1,close=false)             // adds first t (0..1) of the polyline to the current path (draw-on)
-          neonStroke(ctx, trace, color, lw, intensity=1)     // glowing line; trace = () => { ctx.moveTo...; tracePolyline(...) } (no beginPath/stroke inside)
-          getBuffer(key,w,h): { canvas, ctx }                // cached offscreen canvas, NOT cleared automatically`;
+          const KIT_DOC = `── from '../lib/kit' ──
+          TAU, clamp(v,a,b), lerp(a,b,t), smoothstep(a,b,x), easeInOut(t), easeOutCubic(t), easeOutBack(t)
+          seg(phase,a,b)        // 0 before a, 1 after b — stage beats inside the loop
+          breathe(phase,k=1)    // 0..1..0, k whole cycles per loop
+          mulberry32(seed)      // seeded random 0..1
+          noise(x,y,z=0,w=0), loopNoise(x,y,phase,r=1), fbm(x,y,phase,oct=4,r=1), curl(x,y,phase,oct=3,r=1)   // loopNoise/fbm/curl loop perfectly
+          hexToRgb(hex), rgba(hex,alpha), mixHex(a,b,t), shade(hex,t)   // shade: t<0 darker, t>0 lighter
+          getBuffer(key,w,h)    // cached offscreen canvas {canvas, ctx}; not cleared automatically
+          ── from '../lib/shapes' ──
+          type Pt=[number,number]; type Poly={pts:Pt[]; closed?:boolean}
+          Constructors (unit coords, y down, roughly -1..1): polyP(pts,closed?), lineP(x1,y1,x2,y2), arcP(cx,cy,r,a0,a1), ellipseP(cx,cy,rx,ry),
+            ellipseArcP(cx,cy,rx,ry,a0,a1), circleP(cx,cy,r), rectP(x,y,w,h), roundRectP(x,y,w,h,r), bezierP(p0,p1,p2,p3): Pt[]
+          ICONS[name]() -> Poly[]   names: ${ICON_NAMES.join(", ")}
+          place(polys,cx,cy,scale,rot=0): Poly[]     // unit coords -> pixels (scale = half-size in px)
+          polyLen(poly), samplePoly(poly,n): Pt[]    // n evenly spaced points along a line (particle assembly)
+          strokePoly(ctx,poly,t0=0,t1=1), pathPoly(ctx,poly,t0,t1), fillPoly(ctx,poly)   // t0..t1 = portion of the line drawn (draw-on / traces)
+          neon(ctx,polys,color,width,t0=0,t1=1,intensity=1)   // layered-glow neon lines (no shadowBlur)
+          glowDot(ctx,x,y,r,color,alpha=1)                    // soft light blob
+          isoPt(x,y,z,cx,cy,s): Pt                            // isometric projection (x right-down, y left-down, z up; s = px per unit)
+          isoBox(ctx,x,y,z,w,d,h,color,cx,cy,s)               // shaded isometric box; draw back-to-front (ascending x+y+z)`;
 
-          const EXAMPLE = `import { mulberry32, rgba, seg, easeInOut, resample, roundedRectPts, tracePolyline, neonStroke, TAU } from '../lib/kit';
+          const EXAMPLE = `import { breathe, rgba } from '../lib/kit';
+          import { ICONS, place, neon, glowDot } from '../lib/shapes';
           import type { DrawFn } from '../lib/CanvasScene';
 
-          // EXAMPLE ONLY — shows structure, kit use, variant handling and loop discipline.
-          // Do NOT reuse its subject or its look.
+          // EXAMPLE ONLY — structure, API use and loop discipline. Do NOT copy its look or composition.
           export const draw: DrawFn = (ctx, s) => {
-            const { cx, cy, hero, u, phase, variant, colors } = s;
-            const glow = variant !== 'green';                       // additive light only on dark / black
-            const color = glow ? colors.primary : '#ff4d8d';        // key-safe colour on green
+            const { cx, cy, u, phase, colors, w, h } = s;
+            const m = Math.min(w, h);
+            const folder = place(ICONS.folder(), cx, cy, m * 0.24);
 
-            // hold complete 0–0.25 · breaks apart 0.25–0.55 · re-forms 0.55–0.85 · hold 0.85–1
-            const apart = easeInOut(seg(phase, 0.25, 0.55)) - easeInOut(seg(phase, 0.55, 0.85));
+            glowDot(ctx, cx, cy, m * 0.5, colors.primary, 0.12 + 0.06 * breathe(phase, 1));
+            neon(ctx, folder, colors.primary, 3 * u, 0, 1, 0.45);            // dim base: ALWAYS fully visible, so frame 0 is recognisable
 
-            const rnd = mulberry32(42);                             // same seed every frame
-            const body = resample(roundedRectPts(cx, cy, hero * 0.8, hero * 0.55, hero * 0.06), 140, true)
-              .map(([x, y]) => {
-                const a = rnd() * TAU, d = rnd() * hero * 0.25 * apart;
-                return [x + Math.cos(a) * d, y + Math.sin(a) * d] as [number, number];
-              });
+            const t = (phase * 2) % 1;                                        // 2 laps per loop (integer => seamless)
+            neon(ctx, folder, colors.secondary, 3.4 * u, t, Math.min(1, t + 0.2), 1.2);   // travelling bright trace
 
-            const lw = 5 * u;
-            const trace = () => tracePolyline(ctx, body, 1, true);
-            if (glow) {
-              neonStroke(ctx, trace, color, lw, 1 - 0.4 * apart);
-            } else {
-              ctx.lineWidth = lw;
-              ctx.lineCap = 'round';
-              ctx.lineJoin = 'round';
-              ctx.strokeStyle = color;
-              ctx.beginPath();
-              trace();
-              ctx.stroke();
-            }
+            const k = 1 + 0.08 * breathe(phase, 2);
+            neon(ctx, place(ICONS.cross(), cx, cy + m * 0.04, m * 0.09 * k), colors.secondary, 3 * u);
           };`;
 
-          function codePrompt(idea, prevCode, error) {
+          function codePrompt(idea, plan, prevCode, error) {
+            const B = BACKGROUNDS[plan.style.background];
             const spec = {
-              topic: idea.topic, useCase: idea.useCase, concept: idea.concept, noveltyHook: idea.noveltyHook,
-              creativeAssignment: idea.creative, composition: idea.composition, visualSpec: idea.visualSpec,
+              subject: idea.subject, title: idea.title, series: plan.seriesName, topic: plan.topic,
+              look: plan.style.look, lineWeight: plan.style.lineWeight, motionLanguage: plan.style.motionLanguage,
+              background: plan.style.background, backgroundRule: B.rule, palette: idea.composition,
+              iconsAvailable: idea.iconHints, visualSpec: idea.visualSpec, noveltyHook: idea.noveltyHook,
             };
             const repair = prevCode ? `
           ═══ YOUR PREVIOUS ATTEMPT FAILED ═══
@@ -880,56 +998,43 @@ jobs:
           ${FENCE}
           Fix the problem and return the COMPLETE corrected file.
           ` : "";
-            return `You are an elite motion-graphics coder (think top icon-animation studios and Shadertoy-level craft)
-          writing ONE Canvas 2D draw function for a premium 4K stock motion graphic. Remotion renders it frame by
-          frame, three times: on a dark premium backdrop, on pure black, and on chroma-key green.
+            return `You are an elite motion designer and creative coder writing ONE Canvas 2D draw function for a premium 4K
+          stock-video motion-graphic asset. Remotion renders it frame by frame.
 
-          ═══ THE IDEA ═══
+          ═══ THE ASSET ═══
           ${JSON.stringify(spec, null, 2)}
 
           ═══ FILE CONTRACT ═══
           Return ONE TypeScript file in a single ${FENCE}ts block and nothing else. It must:
-           1. import ONLY from '../lib/kit' and (type only) from '../lib/CanvasScene';
+           1. import ONLY from '../lib/kit', '../lib/shapes' and (type only) from '../lib/CanvasScene';
            2. export const draw: DrawFn = (ctx, s) => { ... };
-          The harness paints the background BEFORE draw(). Do not fill the whole frame, and do not add a vignette
-          or grain (the harness does that for the dark variant only).
+          The harness paints the background colour (and, for non-clean backgrounds, a soft backdrop, vignette and grain). Never fill the
+          whole frame yourself.
 
-          State s: s.w, s.h (3840x2160 landscape or 2160x3840 portrait), s.cx, s.cy (centre), s.u (unit scale ≈
-          min(w,h)/1000 — multiply EVERY pixel size by it), s.hero (side of the centred safe square for the hero),
-          s.phase (0..1 loop position — the ONLY time source), s.seconds, s.portrait, s.variant
-          ('dark' | 'black' | 'green'), s.bg (effective background colour), s.colors {primary, secondary, bg}.
+          State s: s.w, s.h (3840x2160 landscape or 2160x3840 portrait), s.cx, s.cy, s.u (unit scale ≈ min(w,h)/1000 — multiply EVERY
+          pixel size by it), s.phase (0..1 loop position — the ONLY time source), s.seconds, s.portrait, s.colors {primary, secondary, bg}.
 
-          KIT (from '../lib/kit'):
+          KIT:
           ${KIT_DOC}
 
           ═══ NON-NEGOTIABLE RULES ═══
-          1. Deterministic. No Math.random, Date, performance, window, document, fetch, timers. Create
-             const rnd = mulberry32(CONSTANT) INSIDE draw() so each frame gets the same layout.
-          2. SEAMLESS LOOP + THUMBNAIL. Phase 0 (= phase 1) is the fully formed, beautiful hero — it becomes the
-             stock thumbnail. The transformation / assembly / flow happens in between and returns EXACTLY to the
-             phase-0 state. Build timelines with seg(phase, a, b) + easing, e.g. hold 0–0.25, transform 0.25–0.55,
-             re-form 0.55–0.85, hold 0.85–1. Ambient motion must be periodic too (integer cycles per loop).
-             No linear drift, no one-way growth. An automatic check compares frame 0 with the last frame.
-          3. CLARITY. Readable at 320 px wide: one hero, bold silhouette, at most 4 supporting elements. The hero
-             fits inside a centred square of side s.hero. Works in landscape AND portrait. No tiny clutter.
-          4. VARIANTS (same composition and motion in all; only the rendering of light differs):
-             - 'dark' and 'black': bright, light-based look; additive glow allowed ('lighter', neonStroke). On
-               'black' nothing important may be near-black (it vanishes under screen blending).
-             - 'green': background is flat chroma green. NO green/teal/yellow-green hues anywhere in the subject,
-               NO additive blending, NO soft glow halos or blurry shadows (they ruin keying). Crisp, opaque edges,
-               flat or gradient fills with hard silhouettes. Use key-safe colours (blue, magenta, orange, white,
-               violet…), derived from s.colors by hue choice if its palette is green-ish. An automatic check
-               counts green-dominant subject pixels on the green variant.
-          5. Performance budget ≈ 10 s per 4K frame on a CPU: <= 400k path segments, <= 3M noise() calls, NO
-             per-pixel loops at full resolution. For field/surface looks use getBuffer(key, 240, 135) and drawImage
-             it upscaled (imageSmoothingQuality='high'). Avoid shadowBlur — fake glow with neonStroke or
-             layered radial gradients.
-          6. Premium craft: stroke widths in multiples of s.u, precise geometry via the kit point helpers, palette of
-             at most 3 hues + neutrals derived from s.colors, one focal highlight, never clipped pure white,
-             easing on every transition, nothing flickers or pops.
-          7. No text, letters, numbers, logos, brands, people, faces, real app interfaces.
-          8. Mind-blowing but readable: implement the motion story and visual language from the spec with real
-             invention — the viewer should wonder how it was made — while the subject stays instantly recognisable.
+          1. The subject must be IMMEDIATELY recognisable at thumbnail size: one clear hero object, centred, about 35–55% of min(w,h),
+             generous margins. Use ICONS where they fit, combine several, or build custom shapes with the constructors. Never let effects
+             hide the subject. No text, letters, numbers, people, faces or logos.
+          2. Obey the background rule exactly: ${B.rule}
+          3. Stay in the series style (palette from s.colors, the stated line weight and motion language). Premium finish: crisp edges,
+             consistent line weight, restrained glow, a clear luminance hierarchy, never clipped pure white.
+          4. Mind-blowing but legible: stage the WOW BEAT from the spec as a precise, satisfying animated moment (anticipation → action →
+             settle) with easing (easeOutBack, easeInOut, ...). One surprising idea executed perfectly beats many effects.
+          5. Deterministic: no Math.random, Date, performance, window, document, fetch, timers. Create const rnd = mulberry32(CONSTANT)
+             INSIDE draw().
+          6. SEAMLESS LOOP. Every moving quantity must return to its start value at phase = 1 (sin/cos(TAU*phase*k) with INTEGER k,
+             breathe(phase,k), loopNoise/fbm/curl, circular motion). Frame 0 must already show a complete, recognisable subject. Build-up
+             effects (draw-on, assembly) are allowed as a bright layer over an always-visible dim version, or if the piece un-builds to
+             exactly its starting state. No one-way drift or growth.
+          7. Works in landscape AND portrait: position relative to s.cx/s.cy and min(s.w,s.h); never rely on s.w alone.
+          8. Performance budget ≈ 10 s per 4K frame on a CPU: <= 400k path segments, <= 8000 particles, no per-pixel loops at full
+             resolution, avoid shadowBlur.
           9. Complete, runnable code. No placeholders, no TODOs. It must work the first time.
 
           ═══ STRUCTURE EXAMPLE ═══
@@ -953,6 +1058,7 @@ jobs:
             return id;
           }
           const stripFence = t => String(t).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+          const cleanIcons = a => (Array.isArray(a) ? a : []).map(x => String(x).toLowerCase().trim()).filter(x => ICON_NAMES.includes(x)).slice(0, 2);
 
           async function callModel({ prompt, parse, json = false, search = false, label, attempts = ATTEMPTS_PER_MODEL }) {
             if (!ai) return null;
@@ -980,36 +1086,71 @@ jobs:
             return null;
           }
 
-          // ── Idea parsing / validation ──
-          function parseIdea(raw, a, siblings) {
+          // ── Parsing / validasi ──
+          function parseSeries(raw, styleAssign) {
             const d = JSON.parse(stripFence(raw));
-            const c = d.composition;
-            if (!c) throw new Error("missing composition");
-            if (!TYPES.includes(c.type)) c.type = "geometric-transform";
-            for (const k of ["primaryColor", "secondaryColor", "bgColor"])
-              if (!HEX.test(c[k] || "")) throw new Error(`invalid ${k}: ${c[k]}`);
-            for (const k of ["title", "stockTitle", "description", "concept", "topic", "primarySearchIntent", "useCase", "editorUsage"])
-              if (!d[k] || typeof d[k] !== "string") throw new Error(`missing ${k}`);
-            if (!d.visualSpec || typeof d.visualSpec.heroSubject !== "string") throw new Error("missing visualSpec.heroSubject");
-            if (!(Number(d.demand?.score) >= 6)) throw new Error(`demand score too low: ${d.demand?.score}`);
-
-            const kws = [...new Set((d.keywords || []).map(k => String(k).toLowerCase().trim()).filter(Boolean))].slice(0, 49);
-            if (kws.length < 20) throw new Error("not enough keywords");
-
-            const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
-            const base = sanitizeId(d.id || d.title);
-            if (!base) throw new Error("empty id");
-
-            d.id = uniqueId(base, seen);
-            d.sector = a.sector;
-            d.keywords = kws;
-            d.stockTitle = d.stockTitle.slice(0, 200);
-            c.durationSeconds = Math.min(12, Math.max(8, Math.round(Number(c.durationSeconds) || 10)));
-            d.creative = { ...a };
+            if (!Array.isArray(d.subjects) || d.subjects.length !== COUNT) throw new Error(`need exactly ${COUNT} subjects`);
+            if (!d.topic || typeof d.topic !== "string") throw new Error("missing topic");
+            const st = d.style || {};
+            for (const k of ["primaryColor", "secondaryColor"]) if (!HEX.test(st[k] || "")) throw new Error(`invalid style.${k}`);
+            const B = BACKGROUNDS[styleAssign.background];
+            const bg = B.bg || st.bgColor;
+            if (!HEX.test(bg || "")) throw new Error("invalid style.bgColor");
+            d.style = {
+              ...st, bgColor: bg, background: styleAssign.background, finish: B.finish, assigned: styleAssign.name,
+              durationSeconds: Math.min(15, Math.max(8, Math.round(Number(st.durationSeconds) || 12))),
+            };
+            const seen = new Set();
+            for (const s of d.subjects) {
+              for (const k of ["subject", "buyerSearchPhrase", "useCase", "wowBeat"])
+                if (!s[k] || typeof s[k] !== "string") throw new Error(`subject missing ${k}`);
+              const key = s.subject.toLowerCase().trim();
+              if (seen.has(key)) throw new Error("duplicate subject");
+              seen.add(key);
+              s.iconHints = cleanIcons(s.iconHints);
+              if (!s.metaphorTwist) s.metaphorTwist = "";
+            }
+            d.seriesName = d.seriesName || d.topic;
             return d;
           }
 
-          // ── Code parsing / static safety check ──
+          function composeKeywords(kws, bgMode) {
+            const extra = BG_KEYWORDS[bgMode] || [];
+            const base = [...new Set(kws.map(k => String(k).toLowerCase().trim()).filter(Boolean))];
+            return [...new Set([...base.slice(0, 5), ...extra, ...base.slice(5)])].slice(0, 49);
+          }
+
+          function baseComposition(plan) {
+            return {
+              primaryColor: plan.style.primaryColor, secondaryColor: plan.style.secondaryColor, bgColor: plan.style.bgColor,
+              durationSeconds: plan.style.durationSeconds,
+            };
+          }
+
+          function parseIdea(raw, plan, subj, siblings) {
+            const d = JSON.parse(stripFence(raw));
+            for (const k of ["title", "stockTitle", "description"]) if (!d[k] || typeof d[k] !== "string") throw new Error(`missing ${k}`);
+            if (!(Number(d.demand?.score) >= 6)) throw new Error(`demand score too low: ${d.demand?.score}`);
+            if (!Array.isArray(d.keywords) || d.keywords.length < 20) throw new Error("not enough keywords");
+
+            const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
+            const base = sanitizeId(d.id || d.title || subj.subject);
+            if (!base) throw new Error("empty id");
+
+            d.id = uniqueId(base, seen);
+            d.subject = subj.subject;
+            d.concept = subj.wowBeat;
+            d.stockTitle = d.stockTitle.slice(0, 200);
+            d.keywords = composeKeywords(d.keywords, plan.style.background);
+            d.iconHints = cleanIcons(d.iconHints).length ? cleanIcons(d.iconHints) : subj.iconHints;
+            d.composition = baseComposition(plan);
+            d.finish = plan.style.finish;
+            d.background = plan.style.background;
+            d.creative = { topic: plan.topic, style: plan.style.assigned, series: plan.seriesName };
+            return d;
+          }
+
+          // ── Pemeriksaan statis kode AI ──
           const BANNED = [
             [/\bMath\.random\b/, "Math.random"],
             [/\bDate\b/, "Date"],
@@ -1046,21 +1187,21 @@ jobs:
             return code;
           }
 
-          // ── Runtime validation (child process TANPA API key) ──
-          function runtimeValidate(id, colors, frames) {
+          // ── Validasi runtime (child process tanpa API key) ──
+          function runtimeValidate(id, colors, frames, finish) {
             const env = { ...process.env };
             delete env.GEMINI_API_KEY;
-            const r = spawnSync("node", ["validate.mjs", id, JSON.stringify(colors), String(frames)], {
+            const r = spawnSync("node", ["validate.mjs", id, JSON.stringify(colors), String(frames), finish], {
               cwd: RP, env, encoding: "utf8", timeout: 10 * 60 * 1000,
             });
             if (r.status === 0) {
-              console.log(`[VALIDATE OK] ${id} ${(r.stdout || "").trim().slice(-200)}`);
+              console.log(`[VALIDATE OK] ${id} ${(r.stdout || "").trim().slice(-120)}`);
               return null;
             }
             return ((r.stderr || "") + (r.stdout || "")).trim().slice(-1800) || "unknown validation error";
           }
 
-          async function buildCode(idea) {
+          async function buildCode(idea, plan) {
             const c = idea.composition;
             const colors = { primary: c.primaryColor, secondary: c.secondaryColor, bg: c.bgColor };
             const frames = Math.round(c.durationSeconds * 30);
@@ -1069,13 +1210,13 @@ jobs:
 
             for (let attempt = 1; attempt <= CODE_ATTEMPTS; attempt++) {
               const code = await callModel({
-                prompt: codePrompt(idea, prevCode, lastError),
+                prompt: codePrompt(idea, plan, prevCode, lastError),
                 label: `code ${idea.id} #${attempt}`,
                 parse: parseCode,
               });
               if (!code) break;
               fs.writeFileSync(file, code);
-              const err = runtimeValidate(idea.id, colors, frames);
+              const err = runtimeValidate(idea.id, colors, frames, idea.finish);
               if (!err) return true;
               console.warn(`[CODE FAIL] ${idea.id} #${attempt}: ${err.slice(0, 500)}`);
               prevCode = code;
@@ -1085,58 +1226,72 @@ jobs:
             return false;
           }
 
-          // ── Fallback statis (engine abstrak bawaan; hanya varian dark) ──
-          const FALLBACK = [
-            { id: "neural-bloom", title: "Neural Bloom", concept: "GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
-              description: "Abstract neural network unfurling organically like bioluminescent roots.",
-              keywords: ["neural network", "abstract background", "motion", "loop", "4K", "ai", "technology", "growth", "digital", "brain", "connection", "synapse", "data", "future", "innovation", "conceptual", "organic", "science", "dark background", "glow", "vertical"],
-              composition: { type: "neural-network", primaryColor: "#6366f1", secondaryColor: "#22d3ee", bgColor: "#020617", animationStyle: "organic", durationSeconds: 15, elements: [] } },
-            { id: "tidal-fragments", title: "Tidal Fragments", concept: "ORDER vs CHAOS — particles snap into a perfect ring then dissolve",
-              description: "Particles converge into a luminous ring before dissolving into chaos.",
-              keywords: ["particles", "abstract background", "motion", "loop", "4K", "ring", "transformation", "innovation", "digital", "future", "conceptual", "glow", "dynamic", "fluid", "energy", "orbit", "cinematic", "science", "dark background", "technology", "vertical"],
-              composition: { type: "particle-morph", primaryColor: "#f59e0b", secondaryColor: "#ec4899", bgColor: "#0a0a0a", animationStyle: "fluid", durationSeconds: 15, elements: [] } },
-            { id: "data-river", title: "Data River", concept: "SPEED vs STILLNESS — packets rush while the background holds perfectly still",
-              description: "Streaming data packets with luminous trails across a calm field.",
-              keywords: ["data flow", "abstract background", "motion", "loop", "4K", "stream", "network", "technology", "speed", "digital", "information", "future", "connection", "cyber", "conceptual", "bandwidth", "signal", "transmission", "dark background", "lines", "vertical"],
-              composition: { type: "data-flow", primaryColor: "#10b981", secondaryColor: "#3b82f6", bgColor: "#030712", animationStyle: "mechanical", durationSeconds: 15, elements: [] } },
-            { id: "root-memory", title: "Root Memory", concept: "FRAGILITY vs STRENGTH — thin branches thicken into a resilient root system",
-              description: "Fractal branches growing and thickening like an ancient root system.",
-              keywords: ["organic growth", "abstract background", "motion", "loop", "4K", "branches", "roots", "fractal", "nature", "life", "green", "evolution", "conceptual", "botanical", "tree", "structure", "biology", "cinematic", "macro", "dark background", "vertical"],
-              composition: { type: "organic-growth", primaryColor: "#22c55e", secondaryColor: "#a3e635", bgColor: "#0c1510", animationStyle: "organic", durationSeconds: 15, elements: [] } },
-            { id: "prism-fold", title: "Prism Fold", concept: "ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
-              description: "Nested polygons rotating and folding inward until their edges intersect.",
-              keywords: ["geometric", "abstract background", "motion", "loop", "4K", "polygon", "shape", "geometry", "structure", "business", "strategy", "minimal", "modern", "conceptual", "digital", "design", "symmetry", "kaleidoscope", "mathematics", "dark background", "vertical"],
-              composition: { type: "geometric-transform", primaryColor: "#a855f7", secondaryColor: "#f472b6", bgColor: "#0b0614", animationStyle: "mechanical", durationSeconds: 15, elements: [] } },
-          ];
-
-          function fallbackIdea(i, a, siblings) {
-            const v = JSON.parse(JSON.stringify(FALLBACK[i % FALLBACK.length]));
-            const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
-            v.id = uniqueId(`${v.id}-${RUN}`, seen);
-            v.stockTitle = `${v.title} abstract motion background. 4K video, seamless loop.`;
-            v.sector = "abstract backgrounds";
-            v.topic = v.title;
-            v.creative = { ...a, sector: "abstract backgrounds" };
-            v.codeMode = "builtin";
+          // ── Mode template (neon bawaan) — metadata dibuat jujur sesuai tampilan template ──
+          function toTemplate(v) {
+            v.codeMode = "template";
+            v.finish = "clean";
+            v.background = "black";
+            v.composition = { ...v.composition, bgColor: "#000000" };
+            const kws = (v.keywords || []).filter(k => !["chroma key", "green screen", "green background", "light background", "dark background"].includes(k));
+            v.keywords = composeKeywords(kws.length ? kws : ["icon", "animation", "motion graphics", "4K", "loop"], "black");
+            v.stockTitle = `Glowing neon line ${v.subject} icon animation on black background. ${v.creative?.topic || "Business"} concept symbol. 4K video motion graphic, seamless loop.`.slice(0, 200);
             return v;
           }
 
-          function writeRegistry(videos) {
-            const custom = videos.filter(v => v.codeMode === "custom");
-            if (custom.length === 0) {
-              fs.writeFileSync(`${RP}/src/registry.tsx`,
-                `import React from 'react';\nexport const CUSTOM: Record<string, React.FC<any>> = {};\n`);
-              return;
-            }
-            const imports = custom.map((v, i) => `import { draw as d${i} } from './custom/${v.id}';`).join("\n");
-            const entries = custom.map((v, i) => {
-              const c = v.composition;
-              const colors = JSON.stringify({ primary: c.primaryColor, secondary: c.secondaryColor, bg: c.bgColor });
-              return `  '${v.id}': ({ variant }: { variant: Variant }) => <CanvasScene draw={d${i}} colors={${colors}} variant={variant} />,`;
-            }).join("\n");
-            fs.writeFileSync(`${RP}/src/registry.tsx`,
-              `import React from 'react';\nimport { CanvasScene } from './lib/CanvasScene';\nimport type { Variant } from './lib/CanvasScene';\n${imports}\n\n` +
-              `export const CUSTOM: Record<string, React.FC<{ variant: Variant }>> = {\n${entries}\n};\n`);
+          function ideaFromSubject(plan, subj, siblings) {
+            const seen = new Set([...previousIds, ...siblings.map(s => s.id)]);
+            const phraseWords = subj.buyerSearchPhrase.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+            const v = {
+              id: uniqueId(sanitizeId(subj.subject) || `asset-${RUN}`, seen),
+              title: subj.subject.slice(0, 60),
+              description: `${subj.subject} animated icon for ${subj.useCase}.`,
+              subject: subj.subject, concept: subj.wowBeat,
+              keywords: [subj.buyerSearchPhrase.toLowerCase(), ...phraseWords, "icon", "animation", "motion graphics", "4K", "loop", "concept",
+                "symbol", "technology", "business", "digital", "modern", "explainer", "presentation", "app", "video", "graphic", "element", "overlay"],
+              iconHints: subj.iconHints,
+              visualSpec: { composition: "hero icon centred", storyboard: [], wowBeat: subj.wowBeat },
+              composition: baseComposition(plan), finish: plan.style.finish, background: plan.style.background,
+              creative: { topic: plan.topic, style: plan.style.assigned, series: plan.seriesName },
+            };
+            return toTemplate(v);
+          }
+
+          // ── Rencana statis bila AI sama sekali tidak tersedia ──
+          function staticPlan() {
+            const mk = (subject, phrase, icons, use) => ({ subject, buyerSearchPhrase: phrase, useCase: use, metaphorTwist: "", wowBeat: "light trace runs around the icon", iconHints: icons });
+            return {
+              seriesName: `neon-series-${RUN}`, topic: "cloud computing & cybersecurity",
+              style: { look: "neon line icons on black", primaryColor: "#22d3ee", secondaryColor: "#a78bfa", bgColor: "#000000",
+                background: "black", finish: "clean", durationSeconds: 12, assigned: STYLES[0].name },
+              subjects: [
+                mk("cloud data storage", "cloud storage icon", ["cloud", "database"], "cloud computing explainers and SaaS promos"),
+                mk("cybersecurity shield", "cyber security shield icon", ["shield", "check"], "security and privacy videos"),
+                mk("medical record folder", "medical record folder icon", ["folder", "cross"], "healthcare and patient data videos"),
+                mk("data analytics chart", "data analytics chart icon", ["chart", "magnifier"], "business intelligence presentations"),
+                mk("telemedicine phone", "telemedicine app icon", ["phone", "heart"], "online doctor and health app promos"),
+              ],
+            };
+          }
+
+          function writeRegistries(videos) {
+            const make = (templateOnly) => {
+              const custom = videos.filter(v => v.codeMode === "custom" && !templateOnly);
+              const imports = custom.map((v, i) => `import { draw as d${i} } from './custom/${v.id}';`).join("\n");
+              const tpl = videos.filter(v => !custom.includes(v));
+              const tplDecl = tpl.map((v, i) =>
+                `const t${i} = makeNeonIconDraw(${JSON.stringify(v.iconHints && v.iconHints.length ? v.iconHints : ["cloud"])});`).join("\n");
+              const colorsOf = v => JSON.stringify({ primary: v.composition.primaryColor, secondary: v.composition.secondaryColor, bg: templateOnly || v.codeMode === "template" ? "#000000" : v.composition.bgColor });
+              const entries = videos.map(v => {
+                const ci = custom.indexOf(v);
+                const draw = ci >= 0 ? `d${ci}` : `t${tpl.indexOf(v)}`;
+                const finish = ci >= 0 ? v.finish : "clean";
+                return `  '${v.id}': () => <CanvasScene draw={${draw}} colors={${colorsOf(v)}} finish="${finish}" />,`;
+              }).join("\n");
+              return `import React from 'react';\nimport { CanvasScene } from './lib/CanvasScene';\nimport { makeNeonIconDraw } from './lib/fallbackDraw';\n${imports}\n\n${tplDecl}\n\n` +
+                `export const CUSTOM: Record<string, React.FC> = {\n${entries}\n};\n`;
+            };
+            fs.writeFileSync(`${RP}/src/registry.tsx`, make(false));
+            fs.writeFileSync(`${RP}/src/registry.safe.tsx`, make(true));
           }
 
           // ═══════════════════════════════════════════════════════════
@@ -1145,46 +1300,56 @@ jobs:
           async function main() {
             fs.mkdirSync(CUSTOM_DIR, { recursive: true });
             const videos = [];
+            const style = pickStyle();
+            const domains = pickDomains(4);
+            console.log(`[PICK] style: ${style.name}\n[PICK] domains: ${domains.join(" | ")}`);
 
+            let plan = null, aiPlan = false;
             if (!ai) {
-              console.warn("[WARN] GEMINI_API_KEY tidak diset — memakai fallback statis.");
-              for (let i = 0; i < COUNT; i++) videos.push(fallbackIdea(i, assignments[i], videos));
+              console.warn("[WARN] GEMINI_API_KEY tidak diset — memakai rencana statis.");
             } else {
-              const research = await callModel({
-                prompt: RESEARCH_PROMPT, search: true, label: "research", attempts: 1,
+              const brief = await callModel({
+                prompt: researchPrompt(domains), search: true, label: "research", attempts: 1,
                 parse: t => { if (String(t).trim().length < 200) throw new Error("research too short"); return String(t).trim(); },
               });
-              console.log(research ? `[RESEARCH OK] ${research.length} chars` : "[RESEARCH] tidak tersedia");
-              if (marketData) console.log(`[MARKET DATA] market-data.txt dipakai (${marketData.length} chars)`);
+              console.log(brief ? `[RESEARCH OK] ${brief.length} chars` : "[RESEARCH] tidak tersedia — lanjut tanpa brief");
+              plan = await callModel({
+                prompt: seriesPrompt(style, domains, brief || ""), json: true, label: "series plan",
+                parse: raw => parseSeries(raw, style),
+              });
+              aiPlan = !!plan;
+            }
+            if (!plan) { console.warn("[FALLBACK] memakai rencana series statis"); plan = staticPlan(); }
 
-              const brief = [
-                marketData ? `CONTRIBUTOR'S OWN MARKET DATA (highest-trust signal — weigh it above everything else):\n${marketData}` : "",
-                research || "",
-              ].filter(Boolean).join("\n\n");
-
-              for (let i = 0; i < COUNT; i++) {
-                const a = assignments[i];
-                const idea = await callModel({
-                  prompt: ideaPrompt(a, brief, videos), json: true, label: `idea ${i + 1}`,
-                  parse: raw => parseIdea(raw, a, videos),
+            for (let i = 0; i < plan.subjects.length; i++) {
+              const subj = plan.subjects[i];
+              let idea = null;
+              if (aiPlan) {
+                idea = await callModel({
+                  prompt: subjectPrompt(plan, subj, videos), json: true, label: `asset ${i + 1}: ${subj.subject}`,
+                  parse: raw => parseIdea(raw, plan, subj, videos),
                 });
-                if (!idea) {
-                  console.warn(`[FALLBACK] ide ${i + 1} memakai template statis`);
-                  videos.push(fallbackIdea(i, a, videos));
-                  continue;
-                }
-                idea.codeMode = (await buildCode(idea)) ? "custom" : "builtin";
-                console.log(`[IDEA] ${idea.id} (${idea.sector} / ${idea.topic}) → ${idea.codeMode}`);
-                videos.push(idea);
               }
+              if (!idea) {
+                console.warn(`[TEMPLATE] ${subj.subject} → template neon bawaan`);
+                idea = ideaFromSubject(plan, subj, videos);
+              } else if (await buildCode(idea, plan)) {
+                idea.codeMode = "custom";
+              } else {
+                console.warn(`[TEMPLATE] kode AI gagal untuk ${idea.id} → template neon bawaan`);
+                toTemplate(idea);
+              }
+              console.log(`[ASSET] ${idea.id} → ${idea.codeMode}`);
+              videos.push(idea);
             }
 
-            writeRegistry(videos);
-            fs.writeFileSync(OUTPUT_PATH, JSON.stringify({ videos }, null, 2));
+            writeRegistries(videos);
+            fs.writeFileSync(OUTPUT_PATH, JSON.stringify({ series: { name: plan.seriesName, topic: plan.topic, style: plan.style }, videos }, null, 2));
             console.log(`Selesai: ${videos.map(v => `${v.id}(${v.codeMode})`).join(", ")}`);
           }
 
-          await main();
+          export { staticCheck, parseCode, parseSeries, parseIdea, staticPlan, ideaFromSubject, toTemplate };
+          if (!process.env.GEN_NO_MAIN) await main();
           GENEOF
 
       - name: Write Remotion code
@@ -1197,314 +1362,40 @@ jobs:
           registerRoot(RemotionRoot);
           EOF
 
-          # Engine abstrak bawaan: fallback bila ide/kode AI gagal
-          cat > src/Scene.tsx <<'EOF'
-          import React, { useMemo } from 'react';
-          import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing } from 'remotion';
-
-          const seeded = (i: number, s: number) => {
-            const x = Math.sin(i * 12.9898 + s * 78.233) * 43758.5453;
-            return x - Math.floor(x);
-          };
-
-          type Idea = { id: string; type: string; colors: { primary: string; secondary: string; bg: string }; duration: number };
-          type C = { primary: string; secondary: string };
-
-          const Defs: React.FC = () => (
-            <defs>
-              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="3" result="b" />
-                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-            </defs>
-          );
-
-          const NeuralNetwork: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
-            const frame = useCurrentFrame();
-            const { fps } = useVideoConfig();
-            const nodes = useMemo(() => Array.from({ length: 70 }, (_, i) => {
-              const a = seeded(i, 1) * Math.PI * 2;
-              const r = Math.sqrt(seeded(i, 2)) * Math.min(w, h) * 0.38;
-              return { x: w / 2 + Math.cos(a) * r, y: h / 2 + Math.sin(a) * r * 0.85,
-                size: 2 + seeded(i, 3) * 4, delay: seeded(i, 4) * 0.5, pulse: seeded(i, 5) * 6.28 };
-            }), [w, h]);
-            const links = useMemo(() => {
-              const out: any[] = [];
-              for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
-                const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
-                const d = Math.sqrt(dx * dx + dy * dy);
-                if (d < Math.min(w, h) * 0.2 && seeded(i * 100 + j, 20) > 0.65)
-                  out.push({ from: i, to: j, delay: seeded(i * 100 + j, 21) * 0.4 });
-              }
-              return out;
-            }, [nodes, w, h]);
-            const prog = interpolate(frame, [0, fps * 5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) });
-            return (
-              <svg width={w} height={h} style={{ position: 'absolute' }}>
-                <Defs />
-                {links.map((l, i) => {
-                  const f = nodes[l.from], t = nodes[l.to];
-                  const p = Math.max(0, Math.min(1, (prog - 0.35 - l.delay) / 0.4));
-                  if (p <= 0) return null;
-                  return <line key={i} x1={f.x} y1={f.y} x2={f.x + (t.x - f.x) * p} y2={f.y + (t.y - f.y) * p} stroke={c.secondary} strokeWidth={1.2} opacity={0.5 * p} />;
-                })}
-                {nodes.map((n, i) => {
-                  const p = Math.max(0, Math.min(1, (prog - n.delay) / 0.5));
-                  if (p <= 0) return null;
-                  const pulse = 0.7 + Math.sin(frame / 18 + n.pulse) * 0.3;
-                  return (
-                    <g key={i}>
-                      <circle cx={n.x} cy={n.y} r={n.size * 4 * p} fill={c.primary} opacity={0.08 * p} />
-                      <circle cx={n.x} cy={n.y} r={n.size * p * pulse} fill={i % 3 === 0 ? c.secondary : c.primary} opacity={0.9 * p} filter="url(#glow)" />
-                      <circle cx={n.x} cy={n.y} r={n.size * 0.35 * p} fill="#fff" opacity={0.85 * p} />
-                    </g>
-                  );
-                })}
-              </svg>
-            );
-          };
-
-          const ParticleMorph: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
-            const frame = useCurrentFrame();
-            const { fps, durationInFrames } = useVideoConfig();
-            const particles = useMemo(() => Array.from({ length: 200 }, (_, i) => {
-              const sx = seeded(i, 1) * w, sy = seeded(i, 2) * h;
-              const a = seeded(i, 3) * Math.PI * 2;
-              const r = Math.min(w, h) * 0.28;
-              return { sx, sy, tx: w / 2 + Math.cos(a) * r, ty: h / 2 + Math.sin(a) * r,
-                size: 1.5 + seeded(i, 4) * 2.5, delay: seeded(i, 5) * 0.5, hue: seeded(i, 6) };
-            }), [w, h]);
-            const inP = interpolate(frame, [0, fps * 3.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) });
-            const outP = interpolate(frame, [durationInFrames - fps * 2, durationInFrames], [0, 1], { extrapolateLeft: 'clamp' });
-            return (
-              <>
-                {particles.map((p, i) => {
-                  const local = Math.max(0, Math.min(1, (inP - p.delay) / (1 - p.delay)));
-                  const e = 1 - Math.pow(1 - local, 3);
-                  const orbit = Math.sin(frame / 30 + p.delay * 10) * 8;
-                  const x = p.sx + (p.tx - p.sx) * e + Math.cos(orbit) * orbit;
-                  const y = p.sy + (p.ty - p.sy) * e + Math.sin(orbit) * orbit;
-                  const col = p.hue > 0.5 ? c.primary : c.secondary;
-                  return <div key={i} style={{
-                    position: 'absolute', left: x, top: y, width: p.size, height: p.size,
-                    borderRadius: '50%', background: col,
-                    opacity: Math.min(1, local * 2) * (1 - outP * 0.5) }} />;
-                })}
-              </>
-            );
-          };
-
-          const DataFlow: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
-            const frame = useCurrentFrame();
-            const streams = useMemo(() => Array.from({ length: 18 }, (_, i) => ({
-              y: (i + 0.5) * (h / 18), speed: 0.3 + seeded(i, 1) * 0.9,
-              offset: seeded(i, 2) * w, thickness: 1 + seeded(i, 3) * 2, hue: seeded(i, 4),
-            })), [h]);
-            return (
-              <>
-                {streams.map((s, i) => (
-                  <div key={`l${i}`} style={{ position: 'absolute', left: 0, top: s.y, width: w, height: s.thickness,
-                    background: `linear-gradient(90deg, transparent, ${s.hue > 0.5 ? c.primary : c.secondary}22, transparent)` }} />
-                ))}
-                {streams.map((s, i) => {
-                  const x = (s.offset + frame * s.speed * 6) % (w + 200) - 100;
-                  const col = s.hue > 0.5 ? c.primary : c.secondary;
-                  return (
-                    <div key={`d${i}`}>
-                      {[0,1,2,3,4].map(k => {
-                        const size = 6 - k * 0.9;
-                        return <div key={k} style={{ position: 'absolute', left: x - k * 12, top: s.y - size / 2,
-                          width: size, height: size, borderRadius: '50%', background: col,
-                          opacity: (1 - k / 5) * 0.9 }} />;
-                      })}
-                    </div>
-                  );
-                })}
-                {[0,1,2].map(i => (
-                  <div key={`v${i}`} style={{ position: 'absolute', left: w * (0.3 + i * 0.2), top: 0,
-                    width: 1.5, height: h,
-                    background: `linear-gradient(180deg, transparent, ${c.secondary}33, transparent)` }} />
-                ))}
-              </>
-            );
-          };
-
-          const OrganicGrowth: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
-            const frame = useCurrentFrame();
-            const { fps } = useVideoConfig();
-            const branches = useMemo(() => {
-              const out: any[] = [];
-              const grow = (x: number, y: number, a: number, len: number, d: number, id: number, delay: number) => {
-                const ex = x + Math.cos(a) * len, ey = y + Math.sin(a) * len;
-                out.push({ x1: x, y1: y, x2: ex, y2: ey, d, delay });
-                if (d < 5) {
-                  const nl = len * 0.72;
-                  grow(ex, ey, a - 0.4 - seeded(id, 1) * 0.3, nl, d + 1, id * 2, delay + 0.05);
-                  grow(ex, ey, a + 0.4 + seeded(id, 2) * 0.3, nl, d + 1, id * 2 + 1, delay + 0.05);
-                }
-              };
-              grow(w / 2, h * 0.9, -Math.PI / 2, Math.min(w, h) * 0.14, 0, 1, 0);
-              return out;
-            }, [w, h]);
-            const prog = interpolate(frame, [0, fps * 5.5], [0, 1], { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) });
-            return (
-              <svg width={w} height={h} style={{ position: 'absolute' }}>
-                {branches.map((b, i) => {
-                  const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
-                  if (p <= 0) return null;
-                  return <line key={i} x1={b.x1} y1={b.y1} x2={b.x1 + (b.x2 - b.x1) * p} y2={b.y1 + (b.y2 - b.y1) * p}
-                    stroke={b.d % 2 === 0 ? c.primary : c.secondary} strokeWidth={3 - b.d * 0.4} opacity={0.7 - b.d * 0.1} strokeLinecap="round" />;
-                })}
-                {branches.filter(b => b.d === 5).map((b, i) => {
-                  const p = Math.max(0, Math.min(1, (prog - b.delay) / (1 - b.delay)));
-                  if (p <= 0) return null;
-                  return <circle key={`t${i}`} cx={b.x2} cy={b.y2} r={3 + Math.sin(frame / 15 + i) * 0.8} fill={c.secondary} opacity={0.7 * p} />;
-                })}
-              </svg>
-            );
-          };
-
-          const GeometricTransform: React.FC<{ w: number; h: number; c: C }> = ({ w, h, c }) => {
-            const frame = useCurrentFrame();
-            const { durationInFrames } = useVideoConfig();
-            const shapes = useMemo(() => Array.from({ length: 5 }, (_, i) => ({
-              sides: 3 + i, radius: Math.min(w, h) * (0.12 + i * 0.06),
-              rotation: seeded(i, 1) * Math.PI, speed: (seeded(i, 2) - 0.5) * 0.02, hue: seeded(i, 3),
-            })), [w, h]);
-            const prog = interpolate(frame, [0, durationInFrames], [0, 1]);
-            const poly = (cx: number, cy: number, r: number, sides: number, rot: number) => {
-              const pts: string[] = [];
-              for (let k = 0; k < sides; k++) {
-                const a = rot + (k / sides) * Math.PI * 2;
-                pts.push(`${cx + Math.cos(a) * r},${cy + Math.sin(a) * r}`);
-              }
-              return pts.join(' ');
-            };
-            return (
-              <svg width={w} height={h} style={{ position: 'absolute' }}>
-                <Defs />
-                {shapes.map((s, i) => {
-                  const rot = s.rotation + frame * s.speed;
-                  const scale = 0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4;
-                  const r = s.radius * scale;
-                  const col = s.hue > 0.5 ? c.primary : c.secondary;
-                  return (
-                    <g key={i} filter="url(#glow)">
-                      <polygon points={poly(w / 2, h / 2, r, s.sides, rot)} fill="none" stroke={col} strokeWidth={2} opacity={0.7} />
-                      <polygon points={poly(w / 2, h / 2, r * 0.96, s.sides, rot + 0.1)} fill="none" stroke={col} strokeWidth={1} opacity={0.3} />
-                    </g>
-                  );
-                })}
-                {shapes.map((s, i) => {
-                  const rot = s.rotation + frame * s.speed;
-                  const r = s.radius * (0.7 + Math.sin(frame / 40 + i) * 0.15 + prog * 0.4);
-                  const col = s.hue > 0.5 ? c.primary : c.secondary;
-                  return (
-                    <g key={`v${i}`}>
-                      {Array.from({ length: s.sides }).map((_, k) => {
-                        const a = rot + (k / s.sides) * Math.PI * 2;
-                        return <circle key={k} cx={w / 2 + Math.cos(a) * r} cy={h / 2 + Math.sin(a) * r} r={3} fill={col} opacity={0.9} />;
-                      })}
-                    </g>
-                  );
-                })}
-              </svg>
-            );
-          };
-
-          export const Scene: React.FC<{ idea: Idea }> = ({ idea }) => {
-            const frame = useCurrentFrame();
-            const { fps, durationInFrames, width, height } = useVideoConfig();
-            const { primary, secondary, bg } = idea.colors;
-            const camX = Math.sin(frame / 100) * width * 0.008;
-            const camY = Math.cos(frame / 120) * height * 0.006;
-            const camZoom = 1 + Math.sin(frame / 160) * 0.006;
-            const gradAngle = interpolate(frame, [0, durationInFrames], [135, 225]);
-            const exitOp = interpolate(frame, [durationInFrames - fps * 1.5, durationInFrames - fps * 0.3], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-            const c = { primary, secondary };
-            const engine = (() => {
-              switch (idea.type) {
-                case 'particle-morph': return <ParticleMorph w={width} h={height} c={c} />;
-                case 'data-flow': return <DataFlow w={width} h={height} c={c} />;
-                case 'organic-growth': return <OrganicGrowth w={width} h={height} c={c} />;
-                case 'geometric-transform': return <GeometricTransform w={width} h={height} c={c} />;
-                default: return <NeuralNetwork w={width} h={height} c={c} />;
-              }
-            })();
-            return (
-              <AbsoluteFill style={{ background: bg, overflow: 'hidden', opacity: exitOp }}>
-                <AbsoluteFill style={{ background: `linear-gradient(${gradAngle}deg, ${bg} 0%, ${bg} 50%, ${primary}12 100%)` }} />
-                <AbsoluteFill style={{ background: `radial-gradient(circle at 50% 50%, ${primary}08 0%, transparent 65%)` }} />
-                <AbsoluteFill style={{ transform: `translate(${camX}px, ${camY}px) scale(${camZoom})` }}>
-                  {engine}
-                </AbsoluteFill>
-                <AbsoluteFill style={{ background: `radial-gradient(ellipse at center, transparent 50%, ${bg} 110%)`, mixBlendMode: 'multiply', pointerEvents: 'none' }} />
-              </AbsoluteFill>
-            );
-          };
-          EOF
-
-          # Ide custom → 4 render (dark 16:9, dark 9:16, green 16:9, black 16:9). Ide fallback → 2 render (dark).
           cat > src/Root.tsx <<'EOF'
           import React from 'react';
           import { Composition } from 'remotion';
-          import { Scene } from './Scene';
           import { IDEAS } from './ideas';
           import { CUSTOM } from './registry';
 
-          const ASPECTS: Record<string, [number, number]> = {
-            '16x9': [3840, 2160],
-            '9x16': [2160, 3840],
-          };
-
-          const jobsFor = (custom: boolean): [string, string][] =>
-            custom
-              ? [['dark', '16x9'], ['dark', '9x16'], ['green', '16x9'], ['black', '16x9']]
-              : [['dark', '16x9'], ['dark', '9x16']];
+          const SIZES = [
+            { suffix: '16x9-4k', width: 3840, height: 2160 },
+            { suffix: '9x16-4k', width: 2160, height: 3840 },
+          ];
 
           export const RemotionRoot: React.FC = () => (
             <>
-              {IDEAS.map((idea: any) => {
-                const Custom = CUSTOM[idea.id];
-                const frames = Math.round(idea.duration * 30);
-                return (
-                  <React.Fragment key={idea.id}>
-                    {jobsFor(!!Custom).map(([variant, aspect]) => {
-                      const [width, height] = ASPECTS[aspect];
-                      const id = `${idea.id}-${variant}-${aspect}-4k`;
-                      return Custom ? (
-                        <Composition
-                          key={id}
-                          id={id}
-                          component={Custom as any}
-                          durationInFrames={frames}
-                          fps={30}
-                          width={width}
-                          height={height}
-                          defaultProps={{ variant } as any}
-                        />
-                      ) : (
-                        <Composition
-                          key={id}
-                          id={id}
-                          component={Scene as any}
-                          durationInFrames={frames}
-                          fps={30}
-                          width={width}
-                          height={height}
-                          defaultProps={{ idea } as any}
-                        />
-                      );
-                    })}
-                  </React.Fragment>
-                );
-              })}
+              {IDEAS.filter((idea: any) => CUSTOM[idea.id]).map((idea: any) => (
+                <React.Fragment key={idea.id}>
+                  {SIZES.map((sz) => (
+                    <Composition
+                      key={sz.suffix}
+                      id={`${idea.id}-${sz.suffix}`}
+                      component={CUSTOM[idea.id]}
+                      durationInFrames={Math.round(idea.duration * 30)}
+                      fps={30}
+                      width={sz.width}
+                      height={sz.height}
+                    />
+                  ))}
+                </React.Fragment>
+              ))}
             </>
           );
           EOF
 
       # SECRET hanya tersedia di step ini; kode AI divalidasi di child process TANPA API key
-      - name: Generate ideas + AI code (research → ideate → code → validate)
+      - name: Generate series + AI code (research → plan → metadata → code → validate)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -1519,51 +1410,37 @@ jobs:
           const data = JSON.parse(fs.readFileSync("video-ideas.json","utf8"));
           const ideas = data.videos.map(v => ({
             id: v.id,
-            type: v.composition.type,
-            colors: {
-              primary: v.composition.primaryColor,
-              secondary: v.composition.secondaryColor,
-              bg: v.composition.bgColor,
-            },
-            duration: v.composition.durationSeconds || 15,
+            duration: v.composition.durationSeconds || 12,
           }));
           fs.writeFileSync("src/ideas.ts",
             "export const IDEAS = " + JSON.stringify(ideas, null, 2) + ";\n");
           EOF
           node gen-ideas.mjs
 
-      # Safety net: bila project gagal dimuat karena kode custom, kosongkan registry → engine bawaan
+      # Safety net: bila project gagal dimuat karena kode custom, kosongkan registry → pakai engine bawaan
       - name: Verify project compiles (safety net)
         run: |
           cd remotion-project
           if ! npx remotion compositions src/index.ts; then
-            echo "::warning::Registry bermasalah — fallback ke engine bawaan untuk semua ide"
-            printf "import React from 'react';\nexport const CUSTOM: Record<string, React.FC<any>> = {};\n" > src/registry.tsx
+            echo "::warning::Registry bermasalah — fallback ke template neon bawaan untuk semua aset"
+            cp src/registry.safe.tsx src/registry.tsx
             npx remotion compositions src/index.ts
           fi
 
-      # Daftar render dibaca dari registry final, supaya selalu sinkron dengan Root.tsx
       - name: Build composition list
         id: comps
         run: |
           cd remotion-project
-          cat > build-comps.mjs <<'EOF'
-          import fs from "fs";
-          const data = JSON.parse(fs.readFileSync("video-ideas.json", "utf8"));
-          const reg = fs.readFileSync("src/registry.tsx", "utf8");
-          const custom = new Set([...reg.matchAll(/^\s*'([a-z0-9-]+)':/gm)].map(m => m[1]));
-          const list = [];
-          for (const v of data.videos) {
-            v.codeMode = custom.has(v.id) ? "custom" : "builtin";
-            list.push(`${v.id}-dark-16x9-4k`, `${v.id}-dark-9x16-4k`);
-            if (custom.has(v.id)) list.push(`${v.id}-green-16x9-4k`, `${v.id}-black-16x9-4k`);
-          }
-          if (list.length === 0) { console.error("Daftar komposisi kosong"); process.exit(1); }
-          fs.writeFileSync("video-ideas.json", JSON.stringify(data, null, 2));
-          fs.writeFileSync("comps.json", JSON.stringify(list));
-          console.log(`${list.length} render:`, list.join(", "));
-          EOF
-          node build-comps.mjs
+          node -e "
+            const d = require('./video-ideas.json');
+            const list = [];
+            d.videos.forEach(v => {
+              list.push(v.id + '-16x9-4k');
+              list.push(v.id + '-9x16-4k');
+            });
+            if (list.length === 0) { console.error('Daftar komposisi kosong'); process.exit(1); }
+            require('fs').writeFileSync('comps.json', JSON.stringify(list));
+          "
           echo "list=$(cat comps.json)" >> $GITHUB_OUTPUT
 
       # node_modules TIDAK ikut (artifact tidak menyimpan permission +x). Install bersih di job render.
@@ -1680,7 +1557,7 @@ jobs:
           ls -lh final-output/
           cp ideas-meta/video-ideas.json final-output/batch-metadata.json
 
-      # CSV metadata siap pakai (judul ≤ 200 karakter, keyword ≤ 49), disesuaikan per varian
+      # CSV metadata siap pakai untuk upload (judul ≤ 200 karakter, keyword ≤ 49)
       - name: Build upload CSV
         run: |
           cat > make-csv.mjs <<'EOF'
@@ -1692,20 +1569,11 @@ jobs:
           for (const f of files) {
             const v = ideas.find(x => f.startsWith(x.id + "-"));
             if (!v) continue;
-            let suffix = "", extra = [];
-            if (f.includes("-green-")) {
-              suffix = " Chroma key, green screen, green background.";
-              extra = ["chroma key", "green screen", "greenscreen", "green background", "keying"];
-            } else if (f.includes("-black-")) {
-              suffix = " Isolated on black background.";
-              extra = ["black background", "isolated on black", "overlay", "screen blend"];
-            } else if (f.includes("-9x16-")) {
-              suffix = " Vertical 9:16.";
-              extra = ["vertical", "9:16", "portrait", "social media"];
-            }
+            const portrait = f.includes("-9x16-");
+            const extra = portrait ? ["vertical", "9:16", "portrait"] : ["horizontal", "16:9"];
             const base = (v.keywords || []).slice(0, 49 - extra.length);
             const kws = [...new Set([...base, ...extra])].slice(0, 49);
-            const title = ((v.stockTitle || v.title) + suffix).slice(0, 200);
+            const title = ((v.stockTitle || v.title) + (portrait ? ", vertical 9:16" : "")).slice(0, 200);
             rows.push([esc(f), esc(title), esc(kws.join(",")), "", ""].join(","));
           }
           fs.writeFileSync("final-output/adobe-stock-upload.csv", rows.join("\n") + "\n");
@@ -1740,12 +1608,10 @@ jobs:
             const done = ideas.videos.filter(v => files.some(f => f.startsWith(v.id + '-')));
             const rendered = done.map(v => ({
               id: v.id,
-              type: v.composition.type,
               concept: v.concept || v.title,
-              sector: v.sector,
-              topic: v.topic,
+              topic: v.creative && v.creative.topic,
               style: v.creative && v.creative.style,
-              material: v.creative && v.creative.material,
+              subject: v.subject,
               stockTitle: v.stockTitle,
               codeMode: v.codeMode,
               renderedAt: new Date().toISOString(),
