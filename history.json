@@ -339,6 +339,61 @@
       "concept": "FRAGILITY vs STRENGTH — paper-thin translucent facets endure extreme geometric transformations without breaking.",
       "renderedAt": "2026-10-02T04:06:25.009Z",
       "run": "10"
+    },
+    {
+      "id": "green-energy-solar-battery-charging-icon",
+      "concept": "the central lightning bolt pulses and splits into tiny clean-energy leaves that float upward",
+      "topic": "green energy & sustainability",
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "renewable energy solar charging battery",
+      "stockTitle": "Glowing neon line renewable energy solar charging battery icon animation on black background. green energy & sustainability concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-10-02T04:51:40.262Z",
+      "run": "10"
+    },
+    {
+      "id": "eco-smart-home-gear-leaf-icon-anim",
+      "concept": "a central gear opens up to reveal a blooming minimalist flower before resetting seamlessly",
+      "topic": "green energy & sustainability",
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "eco smart home control gear",
+      "stockTitle": "Smart home eco gear and leaf icon animation on light soft pastel background. IoT sustainability concept, modern flat duotone motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T04:51:40.263Z",
+      "run": "10"
+    },
+    {
+      "id": "global-sustainability-carbon-network-duo",
+      "concept": "the globe spins slightly and a glowing meridian sweeps around it like a solar orbit",
+      "topic": "green energy & sustainability",
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "global sustainability carbon network",
+      "stockTitle": "Global sustainability network globe icon with data links on soft pastel background. Carbon footprint and supply chain concept. Modern flat duotone 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T04:51:40.263Z",
+      "run": "10"
+    },
+    {
+      "id": "green-energy-efficiency-growth-chart-animation",
+      "concept": "a sweeping trendline draws itself dynamically, leaving a trail of glowing ecological sparkles",
+      "topic": "green energy & sustainability",
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "green energy efficiency analytics chart",
+      "stockTitle": "Modern flat duotone green energy efficiency growth chart icon animation on soft pastel background. ESG analytics and sustainable investment concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T04:51:40.263Z",
+      "run": "10"
+    },
+    {
+      "id": "eco-friendly-cloud-data-storage-icon-animation",
+      "concept": "the cloud puffs upward with an elastic spring while a checkmark icon stamp-animates inside",
+      "topic": "green energy & sustainability",
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "eco friendly cloud data storage",
+      "stockTitle": "Glowing neon line eco friendly cloud data storage icon animation on black background. green energy & sustainability concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-10-02T04:51:40.263Z",
+      "run": "10"
     }
   ],
   "version": 1
