@@ -187,7 +187,7 @@ jobs:
           // Grain halus = dithering untuk mencegah banding pada gradient gelap (penyebab reject umum)
           const grainTiles = new Map<number, HTMLCanvasElement>();
           export function drawGrain(ctx: CanvasRenderingContext2D, w: number, h: number, frame: number, amount = 0.02) {
-            const k = frame % 8;
+            const k = 0; // grain statis: noise yang berubah tiap frame membengkakkan bitrate
             let tile = grainTiles.get(k);
             if (!tile) {
               tile = document.createElement('canvas');
@@ -1508,7 +1508,8 @@ jobs:
             --codec=h264 \
             --concurrency=2 \
             --jpeg-quality=92 \
-            --crf=14 \
+            --crf=18 \
+            --x264-preset=slow \
             --pixel-format=yuv420p
 
       - name: Upload rendered video
