@@ -304,6 +304,41 @@
       "codeMode": "custom",
       "renderedAt": "2026-10-02T03:41:03.744Z",
       "run": "9"
+    },
+    {
+      "id": "neural-obsidian-pulse",
+      "type": "neural-network",
+      "concept": "ISOLATION vs CONNECTION — isolated points of dark consciousness merge through synchronized light streams.",
+      "renderedAt": "2026-10-02T04:06:25.009Z",
+      "run": "10"
+    },
+    {
+      "id": "amber-dust-vortex",
+      "type": "particle-morph",
+      "concept": "ORDER vs CHAOS — scattered particulate dust instantly forms structured spiral arms before dispersing.",
+      "renderedAt": "2026-10-02T04:06:25.009Z",
+      "run": "10"
+    },
+    {
+      "id": "emerald-stream-dynamics",
+      "type": "data-flow",
+      "concept": "SPEED vs STILLNESS — blistering streams of green light cut through immutable, frozen obsidian strata.",
+      "renderedAt": "2026-10-02T04:06:25.009Z",
+      "run": "10"
+    },
+    {
+      "id": "moss-root-awakening",
+      "type": "organic-growth",
+      "concept": "GROWTH vs DECAY — decaying bark surfaces are aggressively reclaimed by luminous, fast-growing moss.",
+      "renderedAt": "2026-10-02T04:06:25.009Z",
+      "run": "10"
+    },
+    {
+      "id": "plum-prism-unfolding",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — paper-thin translucent facets endure extreme geometric transformations without breaking.",
+      "renderedAt": "2026-10-02T04:06:25.009Z",
+      "run": "10"
     }
   ],
   "version": 1
