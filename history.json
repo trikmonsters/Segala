@@ -249,6 +249,61 @@
       "codeMode": "template",
       "renderedAt": "2026-10-02T03:28:17.478Z",
       "run": "8"
+    },
+    {
+      "id": "quantum-cloud-database-server-particles",
+      "concept": "Three stacked database disks illuminate sequentially from bottom to top like server blades, sending vertical particle streams upwards that ignite the cloud silhouette.",
+      "topic": "cloud computing & data storage",
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "cloud database server",
+      "stockTitle": "Glowing quantum particle cloud database server animation on black background. Stacked server disks and data network concept. 4K video motion graphic, loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:41:03.744Z",
+      "run": "9"
+    },
+    {
+      "id": "quantum-cloud-security-lock-animation-black",
+      "concept": "A loose cloud particle cloud rapidly condenses inward, locking into a solid padlock shackle with a shockwave ripple of light that pulses outward.",
+      "topic": "cloud computing & data storage",
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "cloud backup lock",
+      "stockTitle": "Glowing quantum point-cloud particles condense to form a secure padlock shackle and cloud icon on pure black background. Cybersecurity data encryption concept, 4K video motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:41:03.744Z",
+      "run": "9"
+    },
+    {
+      "id": "quantum-cloud-global-network-animation",
+      "concept": "A spinning particle globe materializes inside the cloud contour, firing rapid interconnected light arcs across continents before dissolving back into swirling nebulas.",
+      "topic": "cloud computing & data storage",
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "global cloud network",
+      "stockTitle": "Glowing quantum point-cloud global network animation on pure black background. International data routing, enterprise cloud computing, and telecommunications concept. 4K video motion graphic, seamless",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:41:03.744Z",
+      "run": "9"
+    },
+    {
+      "id": "quantum-cloud-particles-gear",
+      "concept": "Two counter-rotating particle gears lock together inside the cloud outline, accelerating smoothly until their teeth emit bright spark arcs.",
+      "topic": "cloud computing & data storage",
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "cloud data processing gear",
+      "stockTitle": "Glowing quantum particle cloud computing gear system animation on pure black background. Automated workflow, backend infrastructure concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:41:03.744Z",
+      "run": "9"
+    },
+    {
+      "id": "quantum-cloud-analytics-chart",
+      "concept": "Rising bar chart columns morph out of cloud vapor, topped by a glowing trendline that shoots a bright energy node through each peak point.",
+      "topic": "cloud computing & data storage",
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "cloud analytics growth chart",
+      "stockTitle": "Glowing quantum point-cloud data analytics growth chart animation on pure black background. Bar chart pillars emerging from cloud mist, tech business intelligence motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:41:03.744Z",
+      "run": "9"
     }
   ],
   "version": 1
