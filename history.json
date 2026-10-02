@@ -394,6 +394,41 @@
       "codeMode": "template",
       "renderedAt": "2026-10-02T04:51:40.263Z",
       "run": "10"
+    },
+    {
+      "id": "abyssal-monolith-link",
+      "type": "neural-network",
+      "concept": "ISOLATION vs CONNECTION — Deep-sea obsidian pillars bridging a massive void through hyper-detailed filaments of glowing indigo light.",
+      "renderedAt": "2026-10-02T14:35:37.894Z",
+      "run": "11"
+    },
+    {
+      "id": "copper-matrix-resonance",
+      "type": "particle-morph",
+      "concept": "ORDER vs CHAOS — Wild copper micro-dust organizing rapidly into an immaculate, microscopic circuit layout.",
+      "renderedAt": "2026-10-02T14:35:37.894Z",
+      "run": "11"
+    },
+    {
+      "id": "glacial-basalt-conduit",
+      "type": "data-flow",
+      "concept": "SPEED vs STILLNESS — Ultra-velocity data ribbons cutting through ancient, frozen basalt slabs.",
+      "renderedAt": "2026-10-02T14:35:37.894Z",
+      "run": "11"
+    },
+    {
+      "id": "charcoal-heartwood-reclaim",
+      "type": "organic-growth",
+      "concept": "GROWTH vs DECAY — Living bioluminescent moss reanimating a decaying, charcoal-black petrified wood stump.",
+      "renderedAt": "2026-10-02T14:35:37.894Z",
+      "run": "11"
+    },
+    {
+      "id": "geodesic-crystalline-fold",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — Translucent violet facets folding under extreme pressure without fracturing to form a robust shield.",
+      "renderedAt": "2026-10-02T14:35:37.894Z",
+      "run": "11"
     }
   ],
   "version": 1
