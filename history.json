@@ -194,6 +194,61 @@
       "concept": "FRAGILITY vs STRENGTH — paper-thin glass planes withstand violent geometric folding without shattering.",
       "renderedAt": "2026-10-01T21:05:40.452Z",
       "run": "9"
+    },
+    {
+      "id": "isometric-data-security-shield-animation",
+      "concept": "Modular isometric blocks drop into place with elastic snapping, building a solid shield face that emits a glowing deflection shockwave across the grid.",
+      "topic": "cybersecurity & privacy",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "data protection shield",
+      "stockTitle": "3d isometric data security shield animation on light pastel background. Modular privacy protection symbol and digital defense concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:28:17.478Z",
+      "run": "8"
+    },
+    {
+      "id": "isometric-cloud-database-security-animation",
+      "concept": "The central cloud block splits open vertically to insert a core database pillar before snap-closing with a glowing perimeter seal.",
+      "topic": "cybersecurity & privacy",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "cloud backup database",
+      "stockTitle": "Isometric cloud database security animation on soft pastel background. Automated cloud backup vault symbol, data protection concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:28:17.478Z",
+      "run": "8"
+    },
+    {
+      "id": "isometric-encrypted-document-folder-vault",
+      "concept": "A glowing document block slides into the folder core, triggering side panels to fold upward and lock with an elastic block key mechanism.",
+      "topic": "cybersecurity & privacy",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "encrypted file folder",
+      "stockTitle": "Isometric encrypted document folder animation on light background. 3D secure file storage, confidential data privacy concept. Clean motion graphic with soft pastel shading, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:28:17.478Z",
+      "run": "8"
+    },
+    {
+      "id": "isometric-biometric-mobile-lock",
+      "concept": "The phone screen tiles elevate into cascading block steps that realign into a central 3D padlock that snaps shut with a bright pulse.",
+      "topic": "cybersecurity & privacy",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "biometric mobile lock",
+      "stockTitle": "Isometric smartphone security lock animation on soft light gray background. Biometric mobile authentication concept, 2FA app feature. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-10-02T03:28:17.478Z",
+      "run": "8"
+    },
+    {
+      "id": "isometric-threat-scanner-database-animation",
+      "concept": "A floating isometric magnifying lens sweeps across the dataset, causing warning-red blocks to pop, sanitize, and rebuild as pristine teal blocks.",
+      "topic": "cybersecurity & privacy",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "network security threat scanner",
+      "stockTitle": "Glowing neon line network security threat scanner icon animation on black background. cybersecurity & privacy concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-10-02T03:28:17.478Z",
+      "run": "8"
     }
   ],
   "version": 1
