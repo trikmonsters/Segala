@@ -534,6 +534,41 @@
       "concept": "ORDER vs CHAOS — Rigid plum origami folds unravel into fluid chaotic ripples before locking into an crystalline matrix.",
       "renderedAt": "2026-10-03T13:09:43.975Z",
       "run": "14"
+    },
+    {
+      "id": "mercury-synapse-drift",
+      "type": "neural-network",
+      "concept": "SPEED vs STILLNESS — Immutable mercury spheres anchor hyper-velocity cyan synapse threads across deep space.",
+      "renderedAt": "2026-10-03T19:06:58.061Z",
+      "run": "15"
+    },
+    {
+      "id": "swarming-brass-lattice",
+      "type": "particle-morph",
+      "concept": "ORGANIC vs MECHANICAL — Rigid clockwork brass dust dissolves into organic flocking movement before crystallizing into a biological lattice.",
+      "renderedAt": "2026-10-03T19:06:58.061Z",
+      "run": "15"
+    },
+    {
+      "id": "carbon-circuit-synthesis",
+      "type": "data-flow",
+      "concept": "GROWTH vs DECAY — Eroding carbon plates release glowing emerald data currents that fuse structural fractures with crystalline logic.",
+      "renderedAt": "2026-10-03T19:06:58.061Z",
+      "run": "15"
+    },
+    {
+      "id": "quartz-mycorrhizal-network",
+      "type": "organic-growth",
+      "concept": "ISOLATION vs CONNECTION — Isolated quartz mineral cores bridge abyssal dark soil using vibrant, glowing mycorrhizal tendrils.",
+      "renderedAt": "2026-10-03T19:06:58.061Z",
+      "run": "15"
+    },
+    {
+      "id": "rose-filament-braid",
+      "type": "geometric-transform",
+      "concept": "FRAGILITY vs STRENGTH — Delicate rose-gold silk filaments spin under torsional stress to build an impenetrable geodesic violet armor.",
+      "renderedAt": "2026-10-03T19:06:58.061Z",
+      "run": "15"
     }
   ],
   "version": 1
