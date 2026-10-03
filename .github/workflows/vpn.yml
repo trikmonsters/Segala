@@ -1,7 +1,7 @@
-name: dola.com Scrape with ProtonVPN + Tilion Fortress
+name: dola.com Screenshot - VPN + Playwright Only
 
 on:
-  workflow_dispatch:  # 手动触发，方便调试
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -25,103 +25,77 @@ jobs:
       - name: Connect to ProtonVPN
         run: |
           sudo wg-quick up wg0
-          echo "✅ VPN 已连接"
-          echo "当前公网 IP:"
-          curl -s ifconfig.me || curl -s ipinfo.io/ip
-
-      - name: Verify VPN is Active
-        run: |
-          sudo wg show
-          VPN_IP=$(curl -s ifconfig.me)
-          echo "正在使用的 IP: $VPN_IP"
+          echo "✅ VPN terhubung"
+          curl -s ifconfig.me
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 关键修正：安装 tilion-fortress 和 playwright
-      - name: Install Tilion Fortress + Playwright
+      - name: Install Playwright
         run: |
-          pip install tilion-fortress playwright
+          pip install playwright
           playwright install chromium
 
-      # 关键修正：从 tilion_fortress 导入 Fortress
-      - name: Scrape dola.com & Screenshot
+      - name: Screenshot dola.com
         run: |
           python - <<'PYEOF'
           import asyncio
-          from tilion_fortress import Fortress
           from playwright.async_api import async_playwright
 
           async def main():
-              # 1. 启动 Tilion Fortress 隐身引擎
-              f = Fortress()
-              await f.start()
-              print(f"[+] Fortress CDP: {f.cdp_url}")
-
-              # 2. Playwright 通过 CDP 连接到 Fortress
               async with async_playwright() as p:
-                  browser = await p.chromium.connect_over_cdp(f.cdp_url)
+                  # 使用普通 Chromium，无任何 stealth 修改
+                  browser = await p.chromium.launch(headless=True)
                   page = await browser.new_page()
 
-                  # 3. 打开目标网站
-                  print("[+] 正在打开 https://dola.com...")
+                  print("[+] Membuka https://dola.com...")
                   response = await page.goto("https://dola.com", wait_until="domcontentloaded", timeout=60000)
 
-                  print(f"[+] HTTP 状态码: {response.status if response else '无响应'}")
+                  status = response.status if response else 'No response'
+                  print(f"[+] HTTP Status: {status}")
 
-                  # 4. 等待挑战（如有）完成
                   await page.wait_for_timeout(5000)
 
-                  # 5. 全页截图
-                  screenshot_path = "dola_screenshot.png"
-                  await page.screenshot(path=screenshot_path, full_page=True)
-                  print(f"[+] 截图已保存: {screenshot_path}")
+                  # 截图
+                  await page.screenshot(path="dola_screenshot.png", full_page=True)
+                  print("[+] Screenshot saved")
 
-                  # 6. 简单检测是否被屏蔽
-                  content = await page.content()
+                  # 检测是否被屏蔽
                   title = await page.title()
-                  print(f"[+] 页面标题: {title}")
+                  content = await page.content()
+                  print(f"[+] Title: {title}")
 
-                  blocked_keywords = ["access denied", "blocked", "cloudflare", "captcha", "forbidden", "403"]
-                  title_lower = title.lower()
-                  content_lower = content.lower()
-                  is_blocked = any(kw in title_lower or kw in content_lower for kw in blocked_keywords)
+                  blocked_kw = ["access denied", "blocked", "cloudflare", "captcha", "forbidden", "403", "just a moment"]
+                  is_blocked = any(kw in title.lower() or kw in content.lower() for kw in blocked_kw)
+
+                  with open("block_status.txt", "w") as f:
+                      f.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
+                      f.write(f"title={title}\n")
+                      f.write(f"http_status={status}\n")
 
                   if is_blocked:
-                      print("[!] 可能仍被屏蔽")
+                      print("[!] KEMUNGKINAN MASIH TERBLOCK")
                   else:
-                      print("[✓] 页面显示正常")
-
-                  with open("block_status.txt", "w") as f_out:
-                      f_out.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
-                      f_out.write(f"title={title}\n")
-                      f_out.write(f"http_status={response.status if response else 'unknown'}\n")
+                      print("[✓] Halaman terlihat NORMAL")
 
                   await browser.close()
-              await f.close()
 
           asyncio.run(main())
           PYEOF
 
       - name: Disconnect VPN
         if: always()
-        run: |
-          sudo wg-quick down wg0 2>/dev/null || true
-          echo "🔌 VPN 已断开"
+        run: sudo wg-quick down wg0 2>/dev/null || true
 
-      - name: Upload Screenshot to Release (no zip)
+      - name: Upload Screenshot to Release
         if: always()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dola-screenshot-${{ github.run_number }}
-          name: "dola.com Screenshot #${{ github.run_number }}"
+          tag_name: dola-playwright-${{ github.run_number }}
+          name: "dola.com Playwright #${{ github.run_number }}"
           body_path: block_status.txt
           files: dola_screenshot.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Print Block Status
-        if: always()
-        run: cat block_status.txt
