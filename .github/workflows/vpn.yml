@@ -1,4 +1,4 @@
-name: Dola AI Video Generation with Captcha Solver
+name: Dola AI Video Generation with Botright Captcha Solver
 
 on:
   workflow_dispatch:
@@ -25,9 +25,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install Botright + Playwright
         run: |
-          pip install playwright no_puzzle_captcha opencv-python
+          pip install botright playwright
           playwright install chromium
           playwright install-deps chromium
 
@@ -48,7 +48,7 @@ jobs:
           curl -s ifconfig.me
 
       # ============================================
-      # FASE 3: PLAYWRIGHT - GENERATE VIDEO + SOLVE CAPTCHA
+      # FASE 3: BOTRIGHT - GENERATE VIDEO
       # ============================================
 
       - name: Generate AI Video on Dola
@@ -59,8 +59,7 @@ jobs:
           import asyncio
           import json
           import os
-          import random
-          from no_puzzle_captcha import PuzzleCaptchaSolver
+          import botright
           from playwright.async_api import async_playwright
 
           TARGET_URL = "https://www.dola.com/chat/38417995536110865"
@@ -72,113 +71,17 @@ jobs:
               "suitable for TikTok/Reels."
           )
 
-          async def solve_captcha(page):
-              """Deteksi dan selesaikan puzzle captcha jika muncul."""
-              # Cek apakah popup verifikasi muncul
-              verify_modal = page.locator("text=Verify to continue")
-              if await verify_modal.count() == 0:
-                  return True  # Tidak ada captcha
-
-              print("[!] Captcha terdeteksi, mencoba menyelesaikan...")
-
-              try:
-                  # Ambil gambar background dan puzzle
-                  # Sesuaikan selector ini dengan halaman Dola
-                  bg_element = page.locator(".captcha-bg, canvas").first
-                  slider_element = page.locator(".captcha-slide, .puzzle-piece").first
-
-                  if await bg_element.count() == 0:
-                      print("[!] Background image tidak ditemukan")
-                      return False
-
-                  # Screenshot elemen gambar
-                  await bg_element.screenshot(path="captcha_bg.png")
-
-                  if await slider_element.count() > 0:
-                      await slider_element.screenshot(path="captcha_puzzle.png")
-                  else:
-                      # Jika puzzle piece tidak terpisah, coba ambil dari canvas
-                      print("[!] Puzzle element tidak terpisah, coba metode alternatif")
-                      return False
-
-                  # Selesaikan dengan no_puzzle_captcha
-                  solver = PuzzleCaptchaSolver()
-                  result = solver.handle_file("captcha_bg.png", "captcha_puzzle.png")
-                  print(f"[+] Posisi celah ditemukan: x={result.x}, y={result.y}")
-
-                  # Cari slider handle untuk drag
-                  slider_handle = page.locator(".slider-handle, .captcha-slider").first
-                  if await slider_handle.count() == 0:
-                      print("[!] Slider handle tidak ditemukan")
-                      return False
-
-                  box = await slider_handle.bounding_box()
-                  if not box:
-                      print("[!] Tidak bisa mendapatkan posisi slider")
-                      return False
-
-                  # Simulasi drag manusiawi
-                  start_x = box["x"] + box["width"] / 2
-                  start_y = box["y"] + box["height"] / 2
-                  distance = result.x
-
-                  # Mouse down di slider
-                  await page.mouse.move(start_x, start_y)
-                  await page.mouse.down()
-
-                  # Gerakan bertahap dengan variasi
-                  steps = 30
-                  for i in range(steps):
-                      progress = (i + 1) / steps
-                      # Easing function untuk gerakan lebih natural
-                      eased = 1 - pow(1 - progress, 3)
-                      current_x = start_x + (distance * eased) + random.uniform(-1, 1)
-                      current_y = start_y + random.uniform(-1, 1)
-                      await page.mouse.move(current_x, current_y)
-                      await asyncio.sleep(random.uniform(0.01, 0.03))
-
-                  # Gerakan akhir
-                  await page.mouse.move(start_x + distance, start_y)
-                  await asyncio.sleep(0.1)
-                  await page.mouse.up()
-
-                  # Tunggu verifikasi selesai
-                  await page.wait_for_timeout(3000)
-
-                  # Cek apakah masih ada modal verifikasi
-                  still_verify = await page.locator("text=Verify to continue").count() > 0
-                  if not still_verify:
-                      print("[✓] Captcha berhasil diselesaikan!")
-                      return True
-                  else:
-                      print("[!] Captcha masih muncul, mungkin gagal")
-                      return False
-
-              except Exception as e:
-                  print(f"[!] Error saat menyelesaikan captcha: {e}")
-                  return False
-
           async def main():
+              # 1. Gunakan Botright sebagai pengganti Playwright biasa
+              botright_client = await botright.Botright(headless=True)
+              browser = await botright_client.new_browser()
+              page = await browser.new_page()
+
+              # 2. Inject cookie dari Secret
               raw_cookies = os.environ.get("DOLA_COOKIES", "").strip()
-              cookies = []
               if raw_cookies:
                   try:
                       cookies = json.loads(raw_cookies)
-                      print(f"[+] Parse {len(cookies)} cookie")
-                  except json.JSONDecodeError as e:
-                      print(f"[!] Gagal parse JSON: {e}")
-
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(headless=True)
-                  context = await browser.new_context(
-                      viewport={"width": 1280, "height": 720},
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                 "Chrome/120.0.0.0 Safari/537.36"
-                  )
-
-                  # Inject cookie
-                  if cookies:
                       normalized = []
                       for c in cookies:
                           if "name" in c and "value" in c:
@@ -197,99 +100,99 @@ jobs:
                               if c.get("httpOnly") is not None:
                                   cookie["httpOnly"] = c["httpOnly"]
                               normalized.append(cookie)
-                      await context.add_cookies(normalized)
+                      await page.context.add_cookies(normalized)
                       print(f"[+] {len(normalized)} cookie disuntikkan")
+                  except json.JSONDecodeError as e:
+                      print(f"[!] Gagal parse JSON: {e}")
 
-                  page = await context.new_page()
+              # 3. Buka URL target
+              print(f"[+] Membuka {TARGET_URL}...")
+              response = await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+              print(f"[+] HTTP Status: {response.status if response else 'No response'}")
 
-                  # Buka URL target
-                  print(f"[+] Membuka {TARGET_URL}...")
-                  response = await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
-                  print(f"[+] HTTP Status: {response.status if response else 'No response'}")
+              # 4. Tunggu captcha muncul (jika ada)
+              await page.wait_for_timeout(8000)
 
-                  await page.wait_for_timeout(10000)
+              # 5. Botright menyelesaikan captcha secara otomatis
+              # Botright memiliki fungsi solve_captcha yang memproses semua jenis captcha
+              try:
+                  await page.solve_captcha()
+                  print("[✓] Captcha diselesaikan dengan Botright")
+              except Exception as e:
+                  print(f"[!] Botright captcha error: {e}")
+                  # Coba deteksi manual jika gagal
+                  captcha_present = await page.locator("text=Verify to continue").count() > 0
+                  if captcha_present:
+                      print("[!] Captcha masih ada setelah percobaan Botright")
 
-                  # Cek login
-                  has_login_button = await page.locator("text=Log In").count() > 0
-                  if has_login_button:
-                      print("[!] Tombol 'Log In' masih terlihat → cookie tidak valid")
-                  else:
-                      print("[✓] Sudah login")
+              await page.wait_for_timeout(3000)
 
-                  # Coba selesaikan captcha jika muncul
-                  captcha_solved = await solve_captcha(page)
+              # 6. Cari kotak input dan isi prompt
+              input_selectors = [
+                  "textarea",
+                  "div[contenteditable='true']",
+                  "textarea[placeholder*='Message']",
+                  "textarea[placeholder*='帮你']",
+              ]
 
-                  if not captcha_solved:
-                      print("[!] Captcha gagal diselesaikan, screenshot debug...")
-                      await page.screenshot(path="dola_debug.png", full_page=True)
+              input_el = None
+              used_selector = None
+              for sel in input_selectors:
+                  try:
+                      cnt = await page.locator(sel).count()
+                      if cnt > 0:
+                          input_el = page.locator(sel).first
+                          used_selector = sel
+                          print(f"[+] Kotak input: {sel}")
+                          break
+                  except Exception:
+                      pass
 
-                  # Cari kotak input
-                  input_selectors = [
-                      "textarea",
-                      "div[contenteditable='true']",
-                      "textarea[placeholder*='Message']",
-                      "textarea[placeholder*='帮你']",
-                  ]
-
-                  input_el = None
-                  used_selector = None
-                  for sel in input_selectors:
-                      try:
-                          cnt = await page.locator(sel).count()
-                          if cnt > 0:
-                              input_el = page.locator(sel).first
-                              used_selector = sel
-                              print(f"[+] Kotak input: {sel}")
-                              break
-                      except Exception:
-                          pass
-
-                  if input_el is None:
-                      print("[!] Kotak input TIDAK ditemukan")
-                      await page.screenshot(path="dola_debug.png", full_page=True)
-                      await browser.close()
-                      return
-
-                  # Isi prompt
-                  print("[+] Mengisi prompt...")
-                  await input_el.click()
-                  await input_el.fill(PROMPT)
-                  await page.wait_for_timeout(1000)
-
-                  # Kirim
-                  print("[+] Mengirim prompt...")
-                  await page.keyboard.press("Enter")
-
-                  # Tunggu generate video (5 menit)
-                  print("[+] Menunggu 5 menit untuk generate video...")
-                  await page.wait_for_timeout(300000)
-
-                  # Screenshot hasil
-                  await page.screenshot(path="dola_video_result.png", full_page=True)
-                  print("[+] Screenshot hasil disimpan")
-
-                  # Simpan status
-                  title = await page.title()
-                  content = await page.content()
-                  content_lower = content.lower()
-
-                  has_video = await page.locator("video").count() > 0
-                  has_error = any(kw in content_lower for kw in [
-                      "error", "failed", "gagal", "coba lagi", "try again"
-                  ])
-
-                  with open("result_status.txt", "w") as f:
-                      f.write(f"target_url={TARGET_URL}\n")
-                      f.write(f"input_selector={used_selector}\n")
-                      f.write(f"captcha_solved={'YES' if captcha_solved else 'NO'}\n")
-                      f.write(f"video_found={'YES' if has_video else 'NO'}\n")
-                      f.write(f"error_detected={'YES' if has_error else 'NO'}\n")
-                      f.write(f"title={title}\n")
-
-                  print(f"[+] Video ditemukan: {has_video}")
-                  print(f"[+] Error terdeteksi: {has_error}")
-
+              if input_el is None:
+                  print("[!] Kotak input TIDAK ditemukan")
+                  await page.screenshot(path="dola_debug.png", full_page=True)
                   await browser.close()
+                  await botright_client.close()
+                  return
+
+              print("[+] Mengisi prompt...")
+              await input_el.click()
+              await input_el.fill(PROMPT)
+              await page.wait_for_timeout(1000)
+
+              print("[+] Mengirim prompt...")
+              await page.keyboard.press("Enter")
+
+              # 7. Tunggu generate video (5 menit)
+              print("[+] Menunggu 5 menit untuk generate video...")
+              await page.wait_for_timeout(300000)
+
+              # 8. Screenshot hasil
+              await page.screenshot(path="dola_video_result.png", full_page=True)
+              print("[+] Screenshot hasil disimpan")
+
+              # 9. Simpan status
+              title = await page.title()
+              content = await page.content()
+              content_lower = content.lower()
+
+              has_video = await page.locator("video").count() > 0
+              has_error = any(kw in content_lower for kw in [
+                  "error", "failed", "gagal", "coba lagi", "try again"
+              ])
+
+              with open("result_status.txt", "w") as f:
+                  f.write(f"target_url={TARGET_URL}\n")
+                  f.write(f"input_selector={used_selector}\n")
+                  f.write(f"video_found={'YES' if has_video else 'NO'}\n")
+                  f.write(f"error_detected={'YES' if has_error else 'NO'}\n")
+                  f.write(f"title={title}\n")
+
+              print(f"[+] Video ditemukan: {has_video}")
+              print(f"[+] Error terdeteksi: {has_error}")
+
+              await browser.close()
+              await botright_client.close()
 
           asyncio.run(main())
           PYEOF
@@ -312,8 +215,6 @@ jobs:
           files: |
             dola_video_result.png
             dola_debug.png
-            captcha_bg.png
-            captcha_puzzle.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
