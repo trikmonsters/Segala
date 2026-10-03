@@ -1,4 +1,4 @@
-name: dola.com Screenshot - Install First, VPN Later
+name: dola.com Screenshot with Cookie Login
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================
-      # FASE 1: INSTALL SEMUA DULU (pakai koneksi GHA biasa)
+      # FASE 1: INSTALL SEMUA DULU
       # ============================================
 
       - name: Install WireGuard
@@ -29,11 +29,10 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium
-          # Install dependency sistem untuk Chromium
           playwright install-deps chromium
 
       # ============================================
-      # FASE 2: BARU CONNECT VPN
+      # FASE 2: CONNECT VPN
       # ============================================
 
       - name: Setup WireGuard Config
@@ -46,51 +45,105 @@ jobs:
         run: |
           sudo wg-quick up wg0
           echo "✅ VPN terhubung"
-          echo "IP publik saat ini:"
-          curl -s ifconfig.me || curl -s ipinfo.io/ip
-
-      - name: Verify VPN is Active
-        run: |
-          sudo wg show
-          VPN_IP=$(curl -s ifconfig.me)
-          echo "IP yang digunakan saat ini: $VPN_IP"
+          curl -s ifconfig.me
 
       # ============================================
-      # FASE 3: JALANKAN PLAYWRIGHT (lewat VPN)
+      # FASE 3: PLAYWRIGHT + COOKIE LOGIN
       # ============================================
 
-      - name: Screenshot dola.com
+      - name: Screenshot dola.com with Cookie
+        env:
+          DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
         run: |
           python - <<'PYEOF'
           import asyncio
+          import json
+          import os
           from playwright.async_api import async_playwright
 
           async def main():
+              # 1. Parse cookie dari Secret
+              raw_cookies = os.environ.get("DOLA_COOKIES", "").strip()
+              if not raw_cookies:
+                  print("[!] DOLA_COOKIES kosong, lanjut tanpa login")
+                  cookies = []
+              else:
+                  try:
+                      cookies = json.loads(raw_cookies)
+                      print(f"[+] Berhasil parse {len(cookies)} cookie")
+                  except json.JSONDecodeError as e:
+                      print(f"[!] Gagal parse JSON cookie: {e}")
+                      print("[!] Pastikan format DOLA_COOKIES adalah JSON array")
+                      cookies = []
+
               async with async_playwright() as p:
                   browser = await p.chromium.launch(headless=True)
-                  page = await browser.new_page()
+                  context = await browser.new_context(
+                      viewport={"width": 1280, "height": 720},
+                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                 "Chrome/120.0.0.0 Safari/537.36"
+                  )
 
+                  # 2. Inject cookie sebelum navigasi
+                  if cookies:
+                      # Playwright butuh field: name, value, domain, path
+                      # Cookie dari browser extension biasanya sudah punya field ini
+                      normalized = []
+                      for c in cookies:
+                          if "name" in c and "value" in c:
+                              cookie = {
+                                  "name": c["name"],
+                                  "value": c["value"],
+                                  "domain": c.get("domain", ".dola.com"),
+                                  "path": c.get("path", "/"),
+                              }
+                              # sameSite hanya boleh Strict/Lax/None
+                              if c.get("sameSite") in ("Strict", "Lax", "None"):
+                                  cookie["sameSite"] = c["sameSite"]
+                              if "expires" in c and isinstance(c["expires"], (int, float)):
+                                  cookie["expires"] = c["expires"]
+                              if c.get("secure") is not None:
+                                  cookie["secure"] = c["secure"]
+                              if c.get("httpOnly") is not None:
+                                  cookie["httpOnly"] = c["httpOnly"]
+                              normalized.append(cookie)
+
+                      await context.add_cookies(normalized)
+                      print(f"[+] {len(normalized)} cookie disuntikkan ke context")
+
+                  page = await context.new_page()
+
+                  # 3. Buka dola.com
                   print("[+] Membuka https://dola.com...")
                   response = await page.goto(
                       "https://dola.com",
                       wait_until="domcontentloaded",
                       timeout=60000
                   )
-
                   status = response.status if response else 'No response'
                   print(f"[+] HTTP Status: {status}")
 
                   await page.wait_for_timeout(5000)
 
-                  # Screenshot full page
+                  # 4. Screenshot
                   await page.screenshot(path="dola_screenshot.png", full_page=True)
                   print("[+] Screenshot disimpan")
 
-                  # Deteksi blokir
+                  # 5. Deteksi status login & blokir
                   title = await page.title()
                   content = await page.content()
                   print(f"[+] Title: {title}")
 
+                  # Cek elemen yang menandakan sudah login
+                  logged_in = False
+                  login_indicators = ["logout", "sign out", "profile", "avatar", "account"]
+                  content_lower = content.lower()
+                  if any(kw in content_lower for kw in login_indicators):
+                      logged_in = True
+                      print("[✓] Kemungkinan sudah login")
+
+                  # Cek blokir wilayah
                   blocked_kw = [
                       "not available in this country",
                       "access denied",
@@ -100,19 +153,22 @@ jobs:
                       "just a moment"
                   ]
                   is_blocked = any(
-                      kw in title.lower() or kw in content.lower()
+                      kw in title.lower() or kw in content_lower
                       for kw in blocked_kw
                   )
 
                   with open("block_status.txt", "w") as f:
                       f.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
+                      f.write(f"logged_in={'YES' if logged_in else 'NO'}\n")
                       f.write(f"title={title}\n")
                       f.write(f"http_status={status}\n")
 
                   if is_blocked:
-                      print("[!] KEMUNGKINAN MASIH TERBLOCK")
+                      print("[!] MASIH TERBLOCK")
+                  elif logged_in:
+                      print("[✓] Halaman normal & sudah login")
                   else:
-                      print("[✓] Halaman terlihat NORMAL")
+                      print("[?] Halaman normal tapi belum login")
 
                   await browser.close()
 
@@ -131,13 +187,13 @@ jobs:
         if: always()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dola-screenshot-${{ github.run_number }}
-          name: "dola.com Screenshot #${{ github.run_number }}"
+          tag_name: dola-cookie-${{ github.run_number }}
+          name: "dola.com Cookie Test #${{ github.run_number }}"
           body_path: block_status.txt
           files: dola_screenshot.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Print Block Status
+      - name: Print Status
         if: always()
         run: cat block_status.txt
