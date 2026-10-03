@@ -1,4 +1,4 @@
-name: dola.com Screenshot - VPN + Playwright Only
+name: dola.com Screenshot - Install First, VPN Later
 
 on:
   workflow_dispatch:
@@ -11,10 +11,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ============================================
+      # FASE 1: INSTALL SEMUA DULU (pakai koneksi GHA biasa)
+      # ============================================
+
       - name: Install WireGuard
         run: |
           sudo apt-get update
           sudo apt-get install -y wireguard resolvconf
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright
+          playwright install chromium
+          # Install dependency sistem untuk Chromium
+          playwright install-deps chromium
+
+      # ============================================
+      # FASE 2: BARU CONNECT VPN
+      # ============================================
 
       - name: Setup WireGuard Config
         run: |
@@ -26,17 +46,18 @@ jobs:
         run: |
           sudo wg-quick up wg0
           echo "✅ VPN terhubung"
-          curl -s ifconfig.me
+          echo "IP publik saat ini:"
+          curl -s ifconfig.me || curl -s ipinfo.io/ip
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Playwright
+      - name: Verify VPN is Active
         run: |
-          pip install playwright
-          playwright install chromium
+          sudo wg show
+          VPN_IP=$(curl -s ifconfig.me)
+          echo "IP yang digunakan saat ini: $VPN_IP"
+
+      # ============================================
+      # FASE 3: JALANKAN PLAYWRIGHT (lewat VPN)
+      # ============================================
 
       - name: Screenshot dola.com
         run: |
@@ -46,29 +67,42 @@ jobs:
 
           async def main():
               async with async_playwright() as p:
-                  # 使用普通 Chromium，无任何 stealth 修改
                   browser = await p.chromium.launch(headless=True)
                   page = await browser.new_page()
 
                   print("[+] Membuka https://dola.com...")
-                  response = await page.goto("https://dola.com", wait_until="domcontentloaded", timeout=60000)
+                  response = await page.goto(
+                      "https://dola.com",
+                      wait_until="domcontentloaded",
+                      timeout=60000
+                  )
 
                   status = response.status if response else 'No response'
                   print(f"[+] HTTP Status: {status}")
 
                   await page.wait_for_timeout(5000)
 
-                  # 截图
+                  # Screenshot full page
                   await page.screenshot(path="dola_screenshot.png", full_page=True)
-                  print("[+] Screenshot saved")
+                  print("[+] Screenshot disimpan")
 
-                  # 检测是否被屏蔽
+                  # Deteksi blokir
                   title = await page.title()
                   content = await page.content()
                   print(f"[+] Title: {title}")
 
-                  blocked_kw = ["access denied", "blocked", "cloudflare", "captcha", "forbidden", "403", "just a moment"]
-                  is_blocked = any(kw in title.lower() or kw in content.lower() for kw in blocked_kw)
+                  blocked_kw = [
+                      "not available in this country",
+                      "access denied",
+                      "blocked",
+                      "captcha",
+                      "forbidden",
+                      "just a moment"
+                  ]
+                  is_blocked = any(
+                      kw in title.lower() or kw in content.lower()
+                      for kw in blocked_kw
+                  )
 
                   with open("block_status.txt", "w") as f:
                       f.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
@@ -85,6 +119,10 @@ jobs:
           asyncio.run(main())
           PYEOF
 
+      # ============================================
+      # FASE 4: CLEANUP & UPLOAD
+      # ============================================
+
       - name: Disconnect VPN
         if: always()
         run: sudo wg-quick down wg0 2>/dev/null || true
@@ -93,9 +131,13 @@ jobs:
         if: always()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dola-playwright-${{ github.run_number }}
-          name: "dola.com Playwright #${{ github.run_number }}"
+          tag_name: dola-screenshot-${{ github.run_number }}
+          name: "dola.com Screenshot #${{ github.run_number }}"
           body_path: block_status.txt
           files: dola_screenshot.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print Block Status
+        if: always()
+        run: cat block_status.txt
