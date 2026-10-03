@@ -1,8 +1,6 @@
-name: Auto Stock 4K Generator (Concept Assets)
+name: Auto Stock 4K Generator (Concept Assets, 1 ratio per topic)
 
 on:
-  schedule:
-    - cron: '0 */8 * * *'   # 3x sehari
   workflow_dispatch:
 
 permissions:
@@ -14,7 +12,7 @@ concurrency:
 
 env:
   # Daftar model Gemini (dicoba berurutan). Override lewat repo Variables: GEMINI_MODELS
-  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
+  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite' }}
 
 jobs:
   # ══════════════════════════════════════════════════════════
@@ -24,7 +22,7 @@ jobs:
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     outputs:
       comps: ${{ steps.comps.outputs.list }}
     steps:
@@ -225,6 +223,41 @@ jobs:
           export function shade(hex: string, t: number): string {
             return t < 0 ? mixHex(hex, '#000000', -t) : mixHex(hex, '#ffffff', t);
           }
+
+          // ── Warna: kontras & keterbacaan garis (WCAG) ──
+          export function luminance(hex: string): number {
+            const [r, g, b] = hexToRgb(hex).map(v => {
+              const c = v / 255;
+              return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          }
+          // rasio kontras 1..21 (garis hero >= 4.5, elemen pendukung >= 3.5)
+          export function contrast(a: string, b: string): number {
+            const x = luminance(a), y = luminance(b);
+            return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+          }
+          // Geser warna fg (ke putih atau hitam, mana yang lebih kontras terhadap bg) sampai kontras >= min
+          export function ensureContrast(fg: string, bg: string, min = 3.5): string {
+            const toward = contrast('#ffffff', bg) >= contrast('#000000', bg) ? '#ffffff' : '#000000';
+            let c = fg;
+            for (let i = 0; i < 40 && contrast(c, bg) < min; i++) c = mixHex(c, toward, 0.08);
+            return c;
+          }
+
+          // ── Toolkit gerak kreatif ──
+          export const easeOutElastic = (t: number) => {
+            if (t <= 0) return 0;
+            if (t >= 1) return 1;
+            return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;
+          };
+          // siklus ke-k dalam satu loop: kembalikan 0..1 yang berulang k kali per loop
+          export const cycle = (phase: number, k = 1) => (phase * k) % 1;
+          // stagger: progres lokal (0..1) elemen ke-i dari n; spread = seberapa lebar jeda antar elemen (0..0.9)
+          export const stagger = (p: number, i: number, n: number, spread = 0.5) => {
+            const start = n > 1 ? (i / (n - 1)) * spread : 0;
+            return seg(p, start, start + (1 - spread));
+          };
           EOF
 
           cat > src/lib/shapes.ts <<'EOF'
@@ -306,7 +339,7 @@ jobs:
           }
 
           // n titik merata sepanjang garis (untuk efek partikel yang membentuk ikon)
-          export function samplePoly(p: Poly, n: number): Pt[] {
+          export function samplePoly(p: Poly, n: number, inclusive = false): Pt[] {
             const pts = p.closed ? [...p.pts, p.pts[0]] : p.pts;
             const segs: number[] = [];
             let total = 0;
@@ -319,11 +352,37 @@ jobs:
             if (total === 0 || n <= 0) return out;
             let si = 0, acc = 0;
             for (let k = 0; k < n; k++) {
-              const target = (k / n) * total;
+              const target = (k / (inclusive ? Math.max(1, n - 1) : n)) * total;
               while (si < segs.length - 1 && acc + segs[si] < target) { acc += segs[si]; si++; }
               const f = segs[si] ? (target - acc) / segs[si] : 0;
               out.push([lerp(pts[si][0], pts[si + 1][0], f), lerp(pts[si][1], pts[si + 1][1], f)]);
             }
+            return out;
+          }
+
+          // Morph satu bentuk ke bentuk lain (t 0..1). Gunakan untuk transformasi ikon yang bermakna (cloud -> lock).
+          export function morphPoly(a: Poly, b: Poly, t: number, n = 96): Poly {
+            const closed = !!(a.closed && b.closed);
+            const A = samplePoly(a, n, !closed);
+            let B = samplePoly(b, n, !closed);
+            if (closed) { // putar titik awal B agar jarak total ke A minimal (mencegah puntiran)
+              let best = 0, bestD = Infinity;
+              for (let sh = 0; sh < n; sh++) {
+                let d = 0;
+                for (let i = 0; i < n; i += 4) {
+                  const q = B[(i + sh) % n];
+                  d += Math.hypot(A[i][0] - q[0], A[i][1] - q[1]);
+                }
+                if (d < bestD) { bestD = d; best = sh; }
+              }
+              B = B.map((_, i) => B[(i + best) % n]);
+            }
+            return { pts: A.map(([x, y], i) => [lerp(x, B[i][0], t), lerp(y, B[i][1], t)] as Pt), closed };
+          }
+          export function morphPolys(A: Poly[], B: Poly[], t: number, n = 96): Poly[] {
+            const count = Math.max(A.length, B.length);
+            const out: Poly[] = [];
+            for (let i = 0; i < count; i++) out.push(morphPoly(A[i % A.length], B[i % B.length], t, n));
             return out;
           }
 
@@ -530,7 +589,7 @@ jobs:
 
               // cahaya berjalan sepanjang garis ikon
               const t0 = phase, t1 = phase + 0.14;
-              const lit = (a: number, b: number) => neon(ctx, polys, colors.secondary, lw * 1.15, a, b, 1.1);
+              const lit = (a: number, b: number) => neon(ctx, polys, colors.accent, lw * 1.15, a, b, 1.1);
               if (t1 <= 1) lit(t0, t1); else { lit(t0, 1); lit(0, t1 - 1); }
 
               // ikon lencana
@@ -558,7 +617,7 @@ jobs:
           import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
           import { drawGrain, drawVignette, mixHex } from './kit';
 
-          export type Colors = { primary: string; secondary: string; bg: string };
+          export type Colors = { primary: string; secondary: string; accent: string; bg: string };
 
           export type DrawState = {
             w: number;
@@ -569,6 +628,7 @@ jobs:
             phase: number;      // 0..1, posisi loop (satu-satunya sumber waktu)
             seconds: number;    // durasi loop dalam detik
             portrait: boolean;
+            ratio: '16:9' | '9:16';
             colors: Colors;
           };
 
@@ -609,6 +669,7 @@ jobs:
                 phase: frame / durationInFrames,
                 seconds: durationInFrames / fps,
                 portrait: height > width,
+              ratio: width / height > 1.2 ? '16:9' : width / height < 0.8 ? '9:16',
                 colors,
               };
 
@@ -641,12 +702,17 @@ jobs:
           import os from 'os';
           import path from 'path';
 
-          const [id, colorsJson, framesStr, finish = 'full'] = process.argv.slice(2);
+          // argumen: id colorsJson frames finish width height [stillsDir]
+          const [id, colorsJson, framesStr, finish = 'full', widthStr, heightStr, stillsDirArg] = process.argv.slice(2);
           const colors = JSON.parse(colorsJson);
           const frames = parseInt(framesStr, 10);
-          const MAX_FRAME_SECONDS = 18; // satu frame 4K; 450 frame / concurrency 2 masih muat di timeout render
+          const width = parseInt(widthStr, 10);
+          const height = parseInt(heightStr, 10);
+          const MAX_FRAME_SECONDS = 18; // satu frame 4K; ~360-450 frame / concurrency 2 masih muat di timeout render
           const entryFile = path.resolve('src/_validate-entry.tsx');
-          const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'val-'));
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'val-'));
+          const stillsDir = stillsDirArg ? path.resolve(stillsDirArg) : tmpDir;
+          fs.mkdirSync(stillsDir, { recursive: true });
 
           const entry = `import React from 'react';
           import { registerRoot, Composition } from 'remotion';
@@ -655,21 +721,14 @@ jobs:
           const colors = ${JSON.stringify(colors)};
           const Comp: React.FC = () => <CanvasScene draw={draw} colors={colors} finish="${finish}" />;
           registerRoot(() => (
-            <>
-              <Composition id="t-land" component={Comp} durationInFrames={${frames}} fps={30} width={3840} height={2160} />
-              <Composition id="t-port" component={Comp} durationInFrames={${frames}} fps={30} width={2160} height={3840} />
-            </>
+            <Composition id="t" component={Comp} durationInFrames={${frames}} fps={30} width={${width}} height={${height}} />
           ));
           `;
 
-          async function still(serveUrl, compId, frame, scale, name) {
-            const composition = await R.selectComposition({ serveUrl, id: compId });
+          async function still(serveUrl, frame, scale, output) {
+            const composition = await R.selectComposition({ serveUrl, id: 't' });
             const t0 = Date.now();
-            await R.renderStill({
-              composition, serveUrl, frame, scale,
-              output: path.join(outDir, name),
-              imageFormat: 'jpeg', jpegQuality: 70,
-            });
+            await R.renderStill({ composition, serveUrl, frame, scale, output, imageFormat: 'jpeg', jpegQuality: 80 });
             return (Date.now() - t0) / 1000;
           }
 
@@ -679,15 +738,14 @@ jobs:
             if (R.ensureBrowser) await R.ensureBrowser();
             const serveUrl = await bundle({ entryPoint: entryFile });
 
-            for (const f of [0, Math.floor(frames / 2), frames - 1]) {
-              await still(serveUrl, 't-land', f, 0.25, `l${f}.jpg`);
-            }
-            await still(serveUrl, 't-port', Math.floor(frames / 3), 0.25, 'p.jpg');
+            // still kecil untuk dinilai Art Director (a=awal, b=tengah, c=akhir) — nama diurutkan alfabet
+            const picks = [['a_first', 0], ['b_mid', Math.floor(frames / 2)], ['c_last', frames - 1]];
+            for (const [name, f] of picks) await still(serveUrl, f, 0.25, path.join(stillsDir, `${name}.jpg`));
 
-            const secs = await still(serveUrl, 't-land', Math.floor(frames / 2), 1, 'full.jpg');
+            const secs = await still(serveUrl, Math.floor(frames / 3), 1, path.join(tmpDir, 'full.jpg'));
             if (secs > MAX_FRAME_SECONDS) {
               throw new Error(
-                `Terlalu berat: 1 frame 4K butuh ${secs.toFixed(1)}s (maks ${MAX_FRAME_SECONDS}s). ` +
+                `Terlalu berat: 1 frame ${width}x${height} butuh ${secs.toFixed(1)}s (maks ${MAX_FRAME_SECONDS}s). ` +
                 `Kurangi jumlah path/noise call, gunakan getBuffer() resolusi rendah untuk field, hindari shadowBlur.`
               );
             }
@@ -697,7 +755,7 @@ jobs:
             code = 1;
           } finally {
             fs.rmSync(entryFile, { force: true });
-            fs.rmSync(outDir, { recursive: true, force: true });
+            fs.rmSync(tmpDir, { recursive: true, force: true });
           }
           process.exit(code);
           EOF
@@ -722,23 +780,33 @@ jobs:
           cat > generator/gen.mjs <<'GENEOF'
           import { GoogleGenAI } from "@google/genai";
           import fs from "fs";
+          import path from "path";
           import { spawnSync } from "child_process";
 
           const ROOT = "..";
           const HISTORY_PATH = `${ROOT}/history.json`;
+          const CLIENT_PATH = `${ROOT}/client-data.json`;   // opsional: data klien (kegunaan, fungsi, target, platform)
           const RP = `${ROOT}/remotion-project`;
           const OUTPUT_PATH = `${RP}/video-ideas.json`;
           const CUSTOM_DIR = `${RP}/src/custom`;
+          const STILLS_ROOT = path.resolve(ROOT, "stills");
           const RUN = process.env.GITHUB_RUN_NUMBER || String(Date.now());
           const TODAY = new Date().toISOString().slice(0, 10);
           const COUNT = 5;                 // jumlah aset dalam satu SERIES
           const ATTEMPTS_PER_MODEL = 2;
           const CODE_ATTEMPTS = 3;
+          const CRITIQUE_MIN = 7;          // skor Art Director minimum (1-10)
           const FENCE = "```";
           const HEX = /^#[0-9a-fA-F]{6}$/;
           const ALLOWED_IMPORTS = ["../lib/kit", "../lib/shapes", "../lib/CanvasScene"];
           const ICON_NAMES = ["folder", "document", "cross", "cloud", "shield", "lock", "heart", "ecg", "phone", "magnifier",
             "gear", "chart", "database", "check", "user", "envelope", "globe", "chip", "bolt"];
+
+          // Satu rasio per series — AI yang memilih. Hapus "1:1" dari sini bila Adobe Stock tidak menerimanya untuk Anda.
+          const RATIOS = {
+            "16:9": { key: "16x9", width: 3840, height: 2160 },
+            "9:16": { key: "9x16", width: 2160, height: 3840 },
+          };
 
           const MODELS = (process.env.GEMINI_MODELS || "").split(",").map(s => s.trim()).filter(Boolean);
           const ai = process.env.GEMINI_API_KEY
@@ -749,9 +817,10 @@ jobs:
           const previousIds = history.rendered.map(r => r.id);
           const shipped = history.rendered.slice(-80)
             .map(r => `  - ${r.topic ? r.topic + " | " : ""}${r.subject || r.concept}`);
+          const CLIENT = fs.existsSync(CLIENT_PATH) ? JSON.parse(fs.readFileSync(CLIENT_PATH, "utf8")) : null;
 
           // ═══════════════════════════════════════════════════════════
-          // BANKS — dipilih SCRIPT (bukan LLM) agar tiap run beda topik & gaya
+          // BANKS — dipilih SCRIPT (bukan LLM) agar tiap run beda topik, gaya, dan gaya gerak
           // ═══════════════════════════════════════════════════════════
           const DOMAINS = [
             "healthcare & telemedicine", "medical records & health data", "cloud computing & data storage",
@@ -781,13 +850,26 @@ jobs:
           };
 
           const STYLES = [
-            { name: "neon line icons with a dim always-visible base, a travelling light trace, layered glow and pulse rings (kit: neon())", background: "black" },
+            { name: "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())", background: "black" },
             { name: "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())", background: "black" },
             { name: "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())", background: "light-soft" },
             { name: "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())", background: "chroma-green" },
             { name: "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes", background: "dark-gradient" },
             { name: "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow", background: "dark-gradient" },
             { name: "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)", background: "light-soft" },
+          ];
+
+          // Gaya gerak (dipilih script agar tiap series punya "bahasa gerak" berbeda)
+          const MOTIONS = [
+            "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+            "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+            "meaningful shape morph: one icon fluidly transforms into the icon of the next idea (morphPolys) and returns",
+            "orbital choreography: satellites travel on arcs and elegant ellipses, handing energy to the hero at precise beats",
+            "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+            "liquid wobble: outlines breathe with low-amplitude travelling sine waves; hero settles with damped follow-through",
+            "scan-and-reveal: a light bar sweeps the hero, revealing details layer by layer, then dissolves back",
+            "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+            "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
           ];
 
           const shuffle = arr => {
@@ -799,16 +881,87 @@ jobs:
             return a;
           };
           const recentSet = key => new Set(history.rendered.slice(-20).map(r => r[key]).filter(Boolean));
-
-          function pickStyle() {
-            const used = recentSet("style");
-            const free = STYLES.filter(s => !used.has(s.name));
-            return shuffle(free.length ? free : STYLES)[0];
+          function pickFrom(bank, key, getName = x => x) {
+            const used = recentSet(key);
+            const free = bank.filter(x => !used.has(getName(x)));
+            return shuffle(free.length ? free : bank)[0];
           }
+          const pickStyle = () => pickFrom(STYLES, "style", s => s.name);
+          const pickMotion = () => pickFrom(MOTIONS, "motion");
           function pickDomains(n) {
+            if (CLIENT && Array.isArray(CLIENT.domains) && CLIENT.domains.length) return CLIENT.domains.slice(0, Math.max(n, 1));
             const used = recentSet("topic");
             const free = DOMAINS.filter(d => !used.has(d));
             return shuffle(free.length >= n ? free : DOMAINS).slice(0, n);
+          }
+
+          // ═══════════════════════════════════════════════════════════
+          // WARNA — teori warna + kontras otomatis (garis harus selalu terbaca)
+          // ═══════════════════════════════════════════════════════════
+          const hexToRgb = h => { const n = parseInt(h.replace("#", ""), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+          const rgbToHex = ([r, g, b]) => "#" + [r, g, b].map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+          const mixC = (a, b, t) => { const A = hexToRgb(a), B = hexToRgb(b); return rgbToHex(A.map((v, i) => v + (B[i] - v) * t)); };
+          const lum = h => {
+            const [r, g, b] = hexToRgb(h).map(v => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          };
+          const contrastR = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+          function rgbToHsl(hex) {
+            const [r, g, b] = hexToRgb(hex).map(v => v / 255);
+            const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+            let h = 0, s = 0;
+            if (d) {
+              s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+              if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+              else if (mx === g) h = (b - r) / d + 2;
+              else h = (r - g) / d + 4;
+              h *= 60;
+            }
+            return [h, s, l];
+          }
+          function hslToHex(h, s, l) {
+            h = ((h % 360) + 360) % 360;
+            const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+            let r = 0, g = 0, b = 0;
+            if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+            else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+            return rgbToHex([(r + m) * 255, (g + m) * 255, (b + m) * 255]);
+          }
+          const hueDiff = (a, b) => { const d = Math.abs(rgbToHsl(a)[0] - rgbToHsl(b)[0]) % 360; return d > 180 ? 360 - d : d; };
+          // Geser KECERAHAN (HSL) agar hue & saturasi tetap — warna tidak jadi abu-abu kusam
+          function shiftL(c, dir, step = 0.025) {
+            const [h, sat, l] = rgbToHsl(c);
+            return hslToHex(h, sat, Math.max(0, Math.min(1, l + dir * step)));
+          }
+          function ensureC(fg, bg, min) {
+            const dir = contrastR("#ffffff", bg) >= contrastR("#000000", bg) ? 1 : -1;
+            let c = fg;
+            for (let i = 0; i < 60 && contrastR(c, bg) < min; i++) c = shiftL(c, dir);
+            return c;
+          }
+          const offGreen = c => { const [h, s, l] = rgbToHsl(c); return (s > 0.2 && h >= 70 && h <= 200) ? hslToHex(215, Math.max(s, 0.5), l) : c; };
+
+          // Memperbaiki palet dari AI: bg sesuai mode, kontras garis, tidak mirip, tidak "bertabrakan", aman untuk chroma key
+          function fixPalette(st, bgMode) {
+            const notes = [];
+            let bg = st.bgColor;
+            if (bgMode === "dark-gradient") for (let i = 0; i < 40 && lum(bg) > 0.05; i++) bg = shiftL(bg, -1);
+            if (bgMode === "light-soft") for (let i = 0; i < 40 && lum(bg) < 0.6; i++) bg = shiftL(bg, 1);
+
+            let p = st.primaryColor, s = st.secondaryColor;
+            let a = HEX.test(st.accentColor || "") ? st.accentColor : (() => { const [h, sat, l] = rgbToHsl(s); return hslToHex(h + 35, Math.min(sat, 0.75), Math.min(0.7, l + 0.1)); })();
+            if (bgMode === "chroma-green") { p = offGreen(p); s = offGreen(s); a = offGreen(a); }
+
+            const [hp, sp] = rgbToHsl(p), [hs, ss, ls] = rgbToHsl(s);
+            if (hueDiff(p, s) < 20 && Math.abs(lum(p) - lum(s)) < 0.12) {          // terlalu mirip → pisahkan
+              s = hslToHex(hs + 40, ss, ls); notes.push("secondary diputar +40° (terlalu mirip primary)");
+            }
+            const dh = hueDiff(p, s), [, sp2] = rgbToHsl(p), [h2, ss2, ls2] = rgbToHsl(s);
+            if (dh >= 110 && sp2 > 0.6 && ss2 > 0.6) {                  // jenuh & berjauhan di roda warna (komplementer/triadik) → redam (getar/vibrating)
+              s = hslToHex(h2, 0.5, ls2); notes.push("secondary diredam (komplementer jenuh bertabrakan)");
+            }
+            p = ensureC(p, bg, 4.5); s = ensureC(s, bg, 3.5); a = ensureC(a, bg, 3.5);
+            return { primaryColor: p, secondaryColor: s, accentColor: a, bgColor: bg, notes };
           }
 
           // ═══════════════════════════════════════════════════════════
@@ -824,70 +977,111 @@ jobs:
 
           Candidate topic domains: ${domains.join(" | ")}.
 
-          For EACH domain return (plain text, concise, max 500 words in total):
+          For EACH domain return (plain text, concise, max 550 words in total):
            - 5 specific high-intent buyer search phrases (concrete nouns such as "medical record folder icon", not vague themes)
-             with a relative demand label (high / medium) and the typical use case;
+             with a relative demand label (high / medium);
+           - the typical USE CASES, FUNCTIONS and TARGET PLATFORMS of those buyers (presentations, YouTube explainers, TikTok/Reels,
+             app promos, web hero sections, ads ...) and therefore which VIDEO ASPECT RATIO (16:9 or 9:16) they need;
            - what looks saturated (generic clip-art, same flat style) vs. what is under-served.
           Then add 3 emerging visual styles buyers/designers currently want, and seasonal/industry hooks for the next 90 days.
           Do NOT invent numeric search volumes — say so if no numbers were found. Name the sources you relied on.`;
           }
 
-          function seriesPrompt(style, domains, brief) {
+          function clientBlock() {
+            if (!CLIENT) return "(no client data supplied — rely on the research)";
+            return JSON.stringify(CLIENT, null, 2);
+          }
+
+          function seriesPrompt(style, motion, domains, brief) {
             const B = BACKGROUNDS[style.background];
             return `You are the head of creative of a top-tier Adobe Stock motion-graphics studio. Your assets are FUNCTIONAL:
           an editor must instantly know what each one is for (explainer videos, corporate decks, app promos, social ads, UI demos,
           overlays) and must be able to find it with a plain search phrase. Think: "neon line medical-record folder icon on black",
           "3D cloud storage animation", "telemedicine video-call concept", "green-screen 3D box with folders".
-          Buyers license CONSISTENT SETS, so you will design ONE SERIES of ${COUNT} assets sharing topic, style, palette and motion language.
+          Buyers license CONSISTENT SETS, so you design ONE SERIES of ${COUNT} assets sharing topic, style, palette, format and motion language.
+          You are the brain of this pipeline: every decision below (topic, aspect ratio, colour, motion) must be justified by DATA.
 
           TODAY: ${TODAY}
 
-          ═══ 1. MARKET INTELLIGENCE ═══
+          ═══ 1. DATA ═══
+          MARKET RESEARCH:
           ${brief || "(no live research available — rely on your own knowledge of what buyers search for)"}
+
+          CLIENT DATA (authoritative when present — use cases, functions, target audience, platforms, brand tone):
+          ${clientBlock()}
 
           ═══ 2. CHOOSE THE TOPIC ═══
           Candidate domains: ${domains.join(" | ")}
           Pick the ONE domain with the strongest buyer demand where this treatment can still feel fresh.
           Honesty rule: you have NO real search-volume numbers; estimate demand and state your evidence.
 
-          ═══ 3. ASSIGNED STYLE (mandatory) ═══
+          ═══ 3. FORMAT — YOU DECIDE THE ASPECT RATIO (one per series) ═══
+          Allowed: "16:9" (3840x2160), "9:16" (2160x3840), "1:1" (2160x2160).
+          Choose the ONE ratio that matches how the buyers of this topic will really use the assets, based on the use cases, functions,
+          target audience and platforms in the data above. Typical logic: 16:9 = presentations, explainers, YouTube, corporate/web hero,
+          broadcast, landscape edits and overlays; 9:16 = TikTok/Reels/Shorts/Stories, mobile app promo, phone-first ads;
+          1:1 = social feed posts/ads, carousels, in-app tiles. Stock marketplaces are dominated by landscape demand, so choose another
+          ratio only when your use-case data clearly supports it. Explain the decision.
+
+          ═══ 4. ASSIGNED STYLE & MOTION (mandatory) ═══
           Style     : ${style.name}
           Background: ${style.background} — ${B.rule}
-          Refine it into a precise signature look for THIS series (palette, line weight, tempo, easing, signature motion).
+          Motion DNA: ${motion}
+          Refine them into a precise signature look and motion language for THIS series.
 
-          ═══ 4. THE ${COUNT} SUBJECTS ═══
-          Each subject = a SPECIFIC noun concept a buyer would type ("medical record folder", "online payment shield",
-          "cloud backup upload", "delivery tracking pin"), never a vague theme. Together they must cover the topic broadly.
-           - Legibility first: recognisable within one second at thumbnail size, single clear hero object, centred.
-           - Then mind-blowing: ONE memorable "wow beat" per subject — a surprising but logical, satisfying animated moment that
-             still reads as the subject (e.g. the folder opens and a heartbeat line draws itself through its pages; the cloud rains
-             data cubes that stack into a padlock). Clever metaphors must never hide what the asset is.
+          ═══ 5. COLOUR SYSTEM — designed, never guessed ═══
+           1. MEANING first: choose colours for what the topic should make people feel and trust. Guide: healthcare → teal/cyan (calm, clean,
+              trust) + a warm coral/amber accent (human care); finance/payments → deep blue (trust) + gold/amber (value); security/privacy →
+              blue/indigo + signal green only as a small "safe" accent; cloud/data/AI → blue-violet + cyan; energy/sustainability → green +
+              warm amber; logistics/e-commerce → blue + orange accent (movement/action); education → blue/violet + yellow accent;
+              legal/insurance → navy + muted teal/gold. Adapt to the client's brand tone if given.
+           2. HARMONY: use ONE named scheme — analogous, muted split-complementary, muted triadic, or monochromatic + one accent — and say why.
+           3. 60-30-10: background ≈ 60% (neutral), primary ≈ 30% (hero lines/fills), secondary + accent ≈ 10% (highlights, secondary actions).
+           4. NO CLASH: never put two highly saturated complementary hues side by side at equal weight (red/green, orange/blue vibrate).
+              Mute one or separate them with neutral space. No muddy mixes, no rainbow.
+           5. LINES MUST READ: primary vs background contrast ≥ 4.5:1, secondary and accent ≥ 3.5:1. On dark backgrounds use bright tints;
+              on light backgrounds use deep saturated tones. Glow/halo uses the SAME hue as its line.
+           6. Chroma-green background: no green or green-tinted colours anywhere; everything must contrast clearly with the green.
+
+          ═══ 6. THE ${COUNT} SUBJECTS ═══
+          Each subject = a SPECIFIC noun concept a buyer would type ("medical record folder", "online payment shield", "cloud backup upload",
+          "delivery tracking pin"), never a vague theme. Together they cover the topic broadly.
+           - Legibility first: recognisable within one second at thumbnail size, single clear hero, centred, composed for the chosen ratio.
+           - Then mind-blowing: ONE memorable "wow beat" per subject, expressed as a creative piece of ANIMATION (anticipation, overshoot,
+             stagger, morph, orbit, reveal, follow-through, secondary action) — not just a glowing outline. Each subject's wow beat must use a
+             DIFFERENT mechanism within the series while sharing the Motion DNA. It must still read as the subject.
            - Each subject lists 1–2 icon names it could be built from, chosen from: ${ICON_NAMES.join(", ")}.
 
-          ═══ 5. PREMIUM BAR ═══
-          Crisp and clean; consistent line weight and palette across the series (max 3 hues + neutrals, modern/muted, no pure primaries);
-          smooth eased motion; no flicker; no clutter; seamless loop of 10–15 s; works in 16:9 and 9:16.
-          No text, letters, numbers, people/faces, brand logos or trademarks, no medical or financial claims.
+          ═══ 7. PREMIUM BAR ═══
+          Crisp and clean; consistent line weight and palette across the series; smooth eased motion; no flicker; no clutter; seamless loop
+          of 10–15 s. No text, letters, numbers, people/faces, brand logos or trademarks, no medical or financial claims.
 
-          ═══ 6. ALREADY SHIPPED — do not repeat ═══
+          ═══ 8. ALREADY SHIPPED — do not repeat ═══
           ${shipped.length ? shipped.join("\n") : "  (none yet)"}
 
           ═══ OUTPUT ═══ Output ONLY valid JSON:
           {
             "seriesName": "short internal name",
             "topic": "the chosen domain, copied exactly from the candidates",
-            "topicEvidence": "why buyers want this now, citing the research",
+            "topicEvidence": "why buyers want this now, citing the data",
+            "format": {
+              "aspectRatio": "16:9 | 9:16 | 1:1",
+              "reasoning": "which use cases / functions / audience / platforms from the data justify this ratio",
+              "platforms": ["main platforms or placements"], "targetAudience": "who buys and uses it"
+            },
             "buyerUseCases": ["3-5 concrete uses"],
             "style": {
               "look": "precise signature look of this series",
-              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "bgColor": "#rrggbb",
-              "lineWeight": "e.g. 3-4 units", "motionLanguage": "tempo, easing, signature motion",
+              "harmony": "named colour scheme and why it fits the topic's meaning",
+              "colorMeaning": "what the colours communicate",
+              "primaryColor": "#rrggbb", "secondaryColor": "#rrggbb", "accentColor": "#rrggbb", "bgColor": "#rrggbb",
+              "lineWeight": "e.g. 3-4 units", "motionLanguage": "tempo, easing, signature motion (refine the Motion DNA)",
               "durationSeconds": 12
             },
             "subjects": [ exactly ${COUNT} x {
               "subject": "specific noun concept", "buyerSearchPhrase": "exact phrase a buyer would type",
-              "useCase": "who uses it and for what", "metaphorTwist": "the fresh angle", "wowBeat": "the memorable animated moment",
-              "iconHints": ["1-2 icon names"]
+              "useCase": "who uses it and for what", "metaphorTwist": "the fresh angle",
+              "wowBeat": "the memorable ANIMATED moment, named mechanism included", "iconHints": ["1-2 icon names"]
             } ]
           }
           Colours are 6-digit hex.`;
@@ -895,25 +1089,27 @@ jobs:
 
           function subjectPrompt(plan, subj, siblings) {
             const B = BACKGROUNDS[plan.style.background];
-            const sib = siblings.length ? siblings.map(s => `  - ${s.subject}`).join("\n") : "  (none yet)";
+            const sib = siblings.length ? siblings.map(s => `  - ${s.subject} :: ${s.concept}`).join("\n") : "  (none yet)";
             return `You are an Adobe Stock metadata and creative director. Write the listing and the creative spec for ONE asset of a series.
 
           SERIES: ${plan.seriesName} | topic: ${plan.topic}
+          FORMAT: ${plan.format.ratio} (${plan.format.width}x${plan.format.height}) — ${plan.format.reasoning}
           STYLE : ${plan.style.look}
+          MOTION LANGUAGE: ${plan.style.motionLanguage}
           BACKGROUND: ${plan.style.background} — ${B.rule}
           SUBJECT: ${subj.subject}
           BUYER SEARCH PHRASE: ${subj.buyerSearchPhrase}
           USE CASE: ${subj.useCase}
           TWIST: ${subj.metaphorTwist}
           WOW BEAT: ${subj.wowBeat}
-          Already in this series:
+          Already in this series (use a different animation mechanism from these):
           ${sib}
 
           Write like top-selling listings: a descriptive sentence-style title packed with the terms buyers type, for example
           "Glowing neon line medical record folder icon animation on black background. Patient file symbol, health data concept.
-          4K video motion graphic, seamless loop." (adapt to YOUR subject and background — never copy this sentence).
-          For chroma-key backgrounds include the words chroma key, green screen, green background naturally.
-          No brand names, no "AI generated".
+          4K video motion graphic, seamless loop." (adapt to YOUR subject, background and format — never copy this sentence).
+          For chroma-key backgrounds include chroma key, green screen, green background naturally. For vertical or square formats mention
+          it (vertical video, square). No brand names, no "AI generated".
 
           Output ONLY valid JSON:
           {
@@ -929,9 +1125,11 @@ jobs:
             "keywords": ["30-49 terms, MOST important first; first 10 = strongest buyer search terms; include icon, animation, motion graphics, 4K, loop, concept; no brand names"],
             "iconHints": ["1-2 names from: ${ICON_NAMES.join(", ")}"],
             "visualSpec": {
-              "composition": "layout of the hero and supporting elements (works in landscape and portrait)",
-              "storyboard": ["beat 1: ...", "beat 2: ...", "beat 3: ..."],
-              "wowBeat": "the memorable animated moment, precisely staged",
+              "composition": "layout of hero and supporting elements, composed natively for ${plan.format.ratio}",
+              "storyboard": ["0.0-3.0 s: ... (easing, principle)", "3.0-7.0 s: ...", "7.0-12.0 s: ... returns to the starting pose"],
+              "animationPrinciples": ["e.g. anticipation, overshoot, stagger, follow-through, secondary action, arcs, morph"],
+              "wowBeat": "the memorable animated moment, precisely staged with timing and easing",
+              "colorRoles": "which palette colour does what (primary = hero lines, secondary = supporting, accent = single focal highlight)",
               "lightingNotes": ""
             }
           }
@@ -939,12 +1137,16 @@ jobs:
           }
 
           const KIT_DOC = `── from '../lib/kit' ──
-          TAU, clamp(v,a,b), lerp(a,b,t), smoothstep(a,b,x), easeInOut(t), easeOutCubic(t), easeOutBack(t)
-          seg(phase,a,b)        // 0 before a, 1 after b — stage beats inside the loop
+          TAU, clamp(v,a,b), lerp(a,b,t), smoothstep(a,b,x), easeInOut(t), easeOutCubic(t), easeOutBack(t), easeOutElastic(t)
+          seg(phase,a,b)        // 0 before a, 1 after b — stage beats inside a cycle
+          cycle(phase,k=1)      // 0..1 repeating k times per loop (k integer => seamless)
+          stagger(p,i,n,spread=0.5) // local progress of element i of n when p runs 0..1 (cascade / domino)
           breathe(phase,k=1)    // 0..1..0, k whole cycles per loop
           mulberry32(seed)      // seeded random 0..1
           noise(x,y,z=0,w=0), loopNoise(x,y,phase,r=1), fbm(x,y,phase,oct=4,r=1), curl(x,y,phase,oct=3,r=1)   // loopNoise/fbm/curl loop perfectly
           hexToRgb(hex), rgba(hex,alpha), mixHex(a,b,t), shade(hex,t)   // shade: t<0 darker, t>0 lighter
+          luminance(hex), contrast(a,b) // WCAG contrast ratio 1..21
+          ensureContrast(fg,bg,min=3.5) // nudges fg until it reads against bg — use on ANY colour you derive
           getBuffer(key,w,h)    // cached offscreen canvas {canvas, ctx}; not cleared automatically
           ── from '../lib/shapes' ──
           type Pt=[number,number]; type Poly={pts:Pt[]; closed?:boolean}
@@ -952,7 +1154,8 @@ jobs:
             ellipseArcP(cx,cy,rx,ry,a0,a1), circleP(cx,cy,r), rectP(x,y,w,h), roundRectP(x,y,w,h,r), bezierP(p0,p1,p2,p3): Pt[]
           ICONS[name]() -> Poly[]   names: ${ICON_NAMES.join(", ")}
           place(polys,cx,cy,scale,rot=0): Poly[]     // unit coords -> pixels (scale = half-size in px)
-          polyLen(poly), samplePoly(poly,n): Pt[]    // n evenly spaced points along a line (particle assembly)
+          morphPolys(A: Poly[], B: Poly[], t): Poly[] // shape tween between two icons (t 0..1), e.g. cloud -> lock
+          polyLen(poly), samplePoly(poly,n,inclusive=false): Pt[]   // n evenly spaced points along a line (particle assembly)
           strokePoly(ctx,poly,t0=0,t1=1), pathPoly(ctx,poly,t0,t1), fillPoly(ctx,poly)   // t0..t1 = portion of the line drawn (draw-on / traces)
           neon(ctx,polys,color,width,t0=0,t1=1,intensity=1)   // layered-glow neon lines (no shadowBlur)
           glowDot(ctx,x,y,r,color,alpha=1)                    // soft light blob
@@ -963,7 +1166,7 @@ jobs:
           import { ICONS, place, neon, glowDot } from '../lib/shapes';
           import type { DrawFn } from '../lib/CanvasScene';
 
-          // EXAMPLE ONLY — structure, API use and loop discipline. Do NOT copy its look or composition.
+          // EXAMPLE ONLY — structure, API use and loop discipline. Do NOT copy its look, composition or motion.
           export const draw: DrawFn = (ctx, s) => {
             const { cx, cy, u, phase, colors, w, h } = s;
             const m = Math.min(w, h);
@@ -973,33 +1176,49 @@ jobs:
             neon(ctx, folder, colors.primary, 3 * u, 0, 1, 0.45);            // dim base: ALWAYS fully visible, so frame 0 is recognisable
 
             const t = (phase * 2) % 1;                                        // 2 laps per loop (integer => seamless)
-            neon(ctx, folder, colors.secondary, 3.4 * u, t, Math.min(1, t + 0.2), 1.2);   // travelling bright trace
+            neon(ctx, folder, colors.accent, 3.4 * u, t, Math.min(1, t + 0.2), 1.2);   // travelling bright trace
 
             const k = 1 + 0.08 * breathe(phase, 2);
             neon(ctx, place(ICONS.cross(), cx, cy + m * 0.04, m * 0.09 * k), colors.secondary, 3 * u);
           };`;
 
-          function codePrompt(idea, plan, prevCode, error) {
+          const MOTION_TOOLBOX = `Creative animation toolbox (use the principles that serve THIS asset; a loop must end in its starting pose):
+           - Anticipation → action → settle: pull back a little (negative offset), then easeOutBack / easeOutElastic, then rest.
+           - Stagger / cascade: stagger(p, i, n, 0.5) so parts activate one after another (domino, chain reaction).
+           - Meaningful morph: morphPolys(ICONS.a(), ICONS.b(), easeInOut(breathe(phase,1))) — one idea transforms into the next.
+           - Follow-through & overlap: child parts lag the parent (use phase offsets) and keep moving after the parent stops.
+           - Arcs, not straight lines: move along orbits / curves; vary tempo (fast action, slow settle, brief holds).
+           - Secondary action: small supporting motion (rings, sparks, data dots) timed to the main beat — never competing with it.
+           - Inside a cycle: const p = cycle(phase, 1); seg(p, a, b) stages beats; use easings per beat.`;
+
+          function codePrompt(idea, plan, prevCode, feedback) {
             const B = BACKGROUNDS[plan.style.background];
+            const f = plan.format;
+            const cc = idea.composition;
             const spec = {
               subject: idea.subject, title: idea.title, series: plan.seriesName, topic: plan.topic,
-              look: plan.style.look, lineWeight: plan.style.lineWeight, motionLanguage: plan.style.motionLanguage,
-              background: plan.style.background, backgroundRule: B.rule, palette: idea.composition,
+              canvas: `${f.ratio} = ${f.width}x${f.height}`, look: plan.style.look, lineWeight: plan.style.lineWeight,
+              motionLanguage: plan.style.motionLanguage, background: plan.style.background, backgroundRule: B.rule,
+              palette: { primary: cc.primaryColor, secondary: cc.secondaryColor, accent: cc.accentColor, bg: cc.bgColor },
+              colorHarmony: plan.style.harmony, colorMeaning: plan.style.colorMeaning,
               iconsAvailable: idea.iconHints, visualSpec: idea.visualSpec, noveltyHook: idea.noveltyHook,
             };
+            const safe = f.ratio === "9:16"
+              ? "Keep key content inside the central safe area (avoid the top ~12% and bottom ~20%: platform UI overlays) and stack elements vertically."
+              : f.ratio === "1:1" ? "Compose symmetrically inside a square; keep ~10% margins." : "Keep ~6% title-safe margins; use the horizontal space deliberately.";
             const repair = prevCode ? `
-          ═══ YOUR PREVIOUS ATTEMPT FAILED ═══
-          Error:
-          ${error}
+          ═══ YOUR PREVIOUS VERSION NEEDS CHANGES ═══
+          ${feedback}
 
           Previous code:
           ${FENCE}ts
           ${prevCode}
           ${FENCE}
-          Fix the problem and return the COMPLETE corrected file.
+          Fix every point and return the COMPLETE corrected file.
           ` : "";
             return `You are an elite motion designer and creative coder writing ONE Canvas 2D draw function for a premium 4K
-          stock-video motion-graphic asset. Remotion renders it frame by frame.
+          stock-video motion-graphic asset. Remotion renders it frame by frame. This code IS the product: it must be creative, beautiful,
+          precise and technically flawless.
 
           ═══ THE ASSET ═══
           ${JSON.stringify(spec, null, 2)}
@@ -1011,37 +1230,72 @@ jobs:
           The harness paints the background colour (and, for non-clean backgrounds, a soft backdrop, vignette and grain). Never fill the
           whole frame yourself.
 
-          State s: s.w, s.h (3840x2160 landscape or 2160x3840 portrait), s.cx, s.cy, s.u (unit scale ≈ min(w,h)/1000 — multiply EVERY
-          pixel size by it), s.phase (0..1 loop position — the ONLY time source), s.seconds, s.portrait, s.colors {primary, secondary, bg}.
+          State s: s.w, s.h (EXACTLY ${f.width}x${f.height}), s.cx, s.cy, s.u (unit scale ≈ min(w,h)/1000 — multiply EVERY pixel size by it),
+          s.phase (0..1 loop position — the ONLY time source), s.seconds, s.portrait, s.ratio, s.colors {primary, secondary, accent, bg}.
 
           KIT:
           ${KIT_DOC}
 
+          ${MOTION_TOOLBOX}
+
           ═══ NON-NEGOTIABLE RULES ═══
-          1. The subject must be IMMEDIATELY recognisable at thumbnail size: one clear hero object, centred, about 35–55% of min(w,h),
-             generous margins. Use ICONS where they fit, combine several, or build custom shapes with the constructors. Never let effects
-             hide the subject. No text, letters, numbers, people, faces or logos.
+          1. COMPOSE NATIVELY for ${f.ratio} (${f.width}x${f.height}) — this is the only format that will exist. ${safe}
+             The subject must be IMMEDIATELY recognisable at thumbnail size: one clear hero, centred, about 35–55% of min(w,h). Use ICONS where
+             they fit, combine several, or build custom shapes with the constructors. Effects must never hide the subject. No text, letters,
+             numbers, people, faces or logos.
           2. Obey the background rule exactly: ${B.rule}
-          3. Stay in the series style (palette from s.colors, the stated line weight and motion language). Premium finish: crisp edges,
-             consistent line weight, restrained glow, a clear luminance hierarchy, never clipped pure white.
-          4. Mind-blowing but legible: stage the WOW BEAT from the spec as a precise, satisfying animated moment (anticipation → action →
-             settle) with easing (easeOutBack, easeInOut, ...). One surprising idea executed perfectly beats many effects.
+          3. COLOUR DISCIPLINE (the palette was designed for meaning and harmony — do not break it):
+             - primary = hero lines/fills (~30% of visual weight); secondary = supporting elements; accent = ONE focal highlight (~10%).
+             - Do NOT invent new hues. Derive tints/shades only with mixHex/shade from s.colors, and run ensureContrast(color, s.colors.bg, 3.5)
+               on every derived colour you stroke or fill with.
+             - Lines must read clearly: hero strokes at alpha >= 0.85 and width >= 2.5*u; never thin, faint or grey-on-grey; outlines of filled
+               shapes must contrast with their fill. Halos use the same hue as their line. Avoid two saturated complementary colours touching.
+          4. ANIMATION IS THE STAR: stage the WOW BEAT from the spec as a precise, creative, satisfying piece of animation (use the toolbox:
+             anticipation, overshoot, stagger, morph, follow-through, arcs, secondary action). Vary tempo; include a brief hold so the eye rests.
+             Never just pulse or rotate everything uniformly. One surprising idea executed perfectly beats many effects.
           5. Deterministic: no Math.random, Date, performance, window, document, fetch, timers. Create const rnd = mulberry32(CONSTANT)
              INSIDE draw().
           6. SEAMLESS LOOP. Every moving quantity must return to its start value at phase = 1 (sin/cos(TAU*phase*k) with INTEGER k,
-             breathe(phase,k), loopNoise/fbm/curl, circular motion). Frame 0 must already show a complete, recognisable subject. Build-up
-             effects (draw-on, assembly) are allowed as a bright layer over an always-visible dim version, or if the piece un-builds to
-             exactly its starting state. No one-way drift or growth.
-          7. Works in landscape AND portrait: position relative to s.cx/s.cy and min(s.w,s.h); never rely on s.w alone.
-          8. Performance budget ≈ 10 s per 4K frame on a CPU: <= 400k path segments, <= 8000 particles, no per-pixel loops at full
+             breathe(phase,k), cycle(), loopNoise/fbm/curl, circular motion). Frame 0 must already show a complete, recognisable subject.
+             Build-up effects (draw-on, assembly) are allowed as a bright layer over an always-visible dim version, or if the piece
+             un-builds to exactly its starting pose. No one-way drift or growth.
+          7. Performance budget ≈ 10 s per 4K frame on a CPU: <= 400k path segments, <= 8000 particles, no per-pixel loops at full
              resolution, avoid shadowBlur.
-          9. Complete, runnable code. No placeholders, no TODOs. It must work the first time.
+          8. Complete, runnable code. No placeholders, no TODOs. It must work the first time.
 
           ═══ STRUCTURE EXAMPLE ═══
           ${FENCE}ts
           ${EXAMPLE}
           ${FENCE}
           ${repair}`;
+          }
+
+          function critiquePrompt(idea, plan) {
+            const cc = idea.composition;
+            return `You are a strict, experienced art director reviewing a motion-graphic asset for Adobe Stock before it ships.
+          You are shown 3 frames of the SAME animation (start, middle, end of a ${plan.format.ratio} loop). Compare them to judge the motion too:
+          frames that look identical mean weak or no animation.
+
+          ASSET: ${idea.subject} — ${idea.visualSpec?.wowBeat || idea.concept}
+          SERIES LOOK: ${plan.style.look}
+          BACKGROUND: ${plan.style.background}
+          PALETTE: primary ${cc.primaryColor}, secondary ${cc.secondaryColor}, accent ${cc.accentColor}, bg ${cc.bgColor}
+          (${plan.style.harmony || "harmony not specified"})
+
+          Score each 1-10 (be demanding; 7 = shippable, 9 = exceptional):
+           - legibility: is the subject recognisable within one second at thumbnail size, centred, well sized, composed natively for the ratio?
+           - lineVisibility: do lines/shapes read clearly against the background and against each other (contrast, thickness, no muddy overlaps)?
+           - colorHarmony: are the colours harmonious, meaningful for the topic, and free of clashing/vibrating pairs?
+           - composition: balance, margins, hierarchy, a clear focal point, no clutter.
+           - polish: crispness, consistency of line weight, premium finish, no artefacts.
+           - motion: do the frames show a real, creative animation (not a trivial pulse/rotation)?
+
+          Output ONLY valid JSON:
+          { "scores": { "legibility": 0, "lineVisibility": 0, "colorHarmony": 0, "composition": 0, "polish": 0, "motion": 0 },
+            "overall": 0,
+            "issues": ["concrete problems you see"],
+            "fixes": ["concrete, code-level instructions to fix them (colours, sizes, alpha, positions, motion changes)"] }
+          "overall" = the LOWEST of the scores.`;
           }
 
           // ═══════════════════════════════════════════════════════════
@@ -1060,8 +1314,10 @@ jobs:
           const stripFence = t => String(t).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
           const cleanIcons = a => (Array.isArray(a) ? a : []).map(x => String(x).toLowerCase().trim()).filter(x => ICON_NAMES.includes(x)).slice(0, 2);
 
+          // prompt boleh berupa string atau array "parts" (teks + gambar)
           async function callModel({ prompt, parse, json = false, search = false, label, attempts = ATTEMPTS_PER_MODEL }) {
             if (!ai) return null;
+            const contents = typeof prompt === "string" ? prompt : [{ role: "user", parts: prompt }];
             for (const model of MODELS) {
               for (let a = 1; a <= attempts; a++) {
                 try {
@@ -1069,7 +1325,7 @@ jobs:
                   const config = { temperature: 1.0, topP: 0.95 };
                   if (search) config.tools = [{ googleSearch: {} }];
                   else if (json) config.responseMimeType = "application/json";
-                  const res = await ai.models.generateContent({ model, contents: prompt, config });
+                  const res = await ai.models.generateContent({ model, contents, config });
                   try {
                     return parse(res.text || "");
                   } catch (pe) {
@@ -1091,15 +1347,25 @@ jobs:
             const d = JSON.parse(stripFence(raw));
             if (!Array.isArray(d.subjects) || d.subjects.length !== COUNT) throw new Error(`need exactly ${COUNT} subjects`);
             if (!d.topic || typeof d.topic !== "string") throw new Error("missing topic");
+
+            const fm = d.format || {};
+            let ratio = String(fm.aspectRatio || "").replace(/\s/g, "");
+            if (!RATIOS[ratio]) { console.warn(`[WARN] rasio "${fm.aspectRatio}" tidak valid → 16:9`); ratio = "16:9"; }
+            d.format = { ratio, ...RATIOS[ratio], reasoning: String(fm.reasoning || "default landscape"),
+              platforms: Array.isArray(fm.platforms) ? fm.platforms : [], targetAudience: String(fm.targetAudience || "") };
+
             const st = d.style || {};
             for (const k of ["primaryColor", "secondaryColor"]) if (!HEX.test(st[k] || "")) throw new Error(`invalid style.${k}`);
             const B = BACKGROUNDS[styleAssign.background];
-            const bg = B.bg || st.bgColor;
-            if (!HEX.test(bg || "")) throw new Error("invalid style.bgColor");
+            const bg0 = B.bg || st.bgColor;
+            if (!HEX.test(bg0 || "")) throw new Error("invalid style.bgColor");
+            const pal = fixPalette({ ...st, bgColor: bg0 }, styleAssign.background);
+            if (pal.notes.length) console.log(`[PALETTE] ${pal.notes.join("; ")}`);
             d.style = {
-              ...st, bgColor: bg, background: styleAssign.background, finish: B.finish, assigned: styleAssign.name,
+              ...st, ...pal, background: styleAssign.background, finish: B.finish, assigned: styleAssign.name,
               durationSeconds: Math.min(15, Math.max(8, Math.round(Number(st.durationSeconds) || 12))),
             };
+
             const seen = new Set();
             for (const s of d.subjects) {
               for (const k of ["subject", "buyerSearchPhrase", "useCase", "wowBeat"])
@@ -1114,16 +1380,19 @@ jobs:
             return d;
           }
 
-          function composeKeywords(kws, bgMode) {
-            const extra = BG_KEYWORDS[bgMode] || [];
+          function composeKeywords(kws, bgMode, ratio) {
+            const extra = [...(BG_KEYWORDS[bgMode] || [])];
+            if (ratio === "9:16") extra.push("vertical video", "9:16");
+            if (ratio === "1:1") extra.push("square video", "1:1");
             const base = [...new Set(kws.map(k => String(k).toLowerCase().trim()).filter(Boolean))];
             return [...new Set([...base.slice(0, 5), ...extra, ...base.slice(5)])].slice(0, 49);
           }
 
           function baseComposition(plan) {
+            const s = plan.style;
             return {
-              primaryColor: plan.style.primaryColor, secondaryColor: plan.style.secondaryColor, bgColor: plan.style.bgColor,
-              durationSeconds: plan.style.durationSeconds,
+              primaryColor: s.primaryColor, secondaryColor: s.secondaryColor, accentColor: s.accentColor, bgColor: s.bgColor,
+              durationSeconds: s.durationSeconds,
             };
           }
 
@@ -1141,12 +1410,13 @@ jobs:
             d.subject = subj.subject;
             d.concept = subj.wowBeat;
             d.stockTitle = d.stockTitle.slice(0, 200);
-            d.keywords = composeKeywords(d.keywords, plan.style.background);
+            d.keywords = composeKeywords(d.keywords, plan.style.background, plan.format.ratio);
             d.iconHints = cleanIcons(d.iconHints).length ? cleanIcons(d.iconHints) : subj.iconHints;
             d.composition = baseComposition(plan);
+            d.format = plan.format;
             d.finish = plan.style.finish;
             d.background = plan.style.background;
-            d.creative = { topic: plan.topic, style: plan.style.assigned, series: plan.seriesName };
+            d.creative = { topic: plan.topic, style: plan.style.assigned, motion: plan.style.motionDna, series: plan.seriesName };
             return d;
           }
 
@@ -1187,43 +1457,80 @@ jobs:
             return code;
           }
 
+          function parseCritique(raw) {
+            const d = JSON.parse(stripFence(raw));
+            const sc = d.scores || {};
+            const vals = Object.values(sc).map(Number).filter(v => v >= 0 && v <= 10);
+            const overall = Number.isFinite(Number(d.overall)) && Number(d.overall) > 0 ? Number(d.overall) : (vals.length ? Math.min(...vals) : NaN);
+            if (!Number.isFinite(overall)) throw new Error("no score");
+            return { overall, scores: sc, issues: Array.isArray(d.issues) ? d.issues : [], fixes: Array.isArray(d.fixes) ? d.fixes : [] };
+          }
+
           // ── Validasi runtime (child process tanpa API key) ──
-          function runtimeValidate(id, colors, frames, finish) {
+          function runtimeValidate(idea, stillsDir) {
+            const c = idea.composition, f = idea.format;
+            const colors = { primary: c.primaryColor, secondary: c.secondaryColor, accent: c.accentColor, bg: c.bgColor };
+            const frames = Math.round(c.durationSeconds * 30);
+            fs.rmSync(stillsDir, { recursive: true, force: true });
             const env = { ...process.env };
             delete env.GEMINI_API_KEY;
-            const r = spawnSync("node", ["validate.mjs", id, JSON.stringify(colors), String(frames), finish], {
+            const r = spawnSync("node", ["validate.mjs", idea.id, JSON.stringify(colors), String(frames), idea.finish, String(f.width), String(f.height), stillsDir], {
               cwd: RP, env, encoding: "utf8", timeout: 10 * 60 * 1000,
             });
             if (r.status === 0) {
-              console.log(`[VALIDATE OK] ${id} ${(r.stdout || "").trim().slice(-120)}`);
+              console.log(`[VALIDATE OK] ${idea.id} ${(r.stdout || "").trim().slice(-120)}`);
               return null;
             }
             return ((r.stderr || "") + (r.stdout || "")).trim().slice(-1800) || "unknown validation error";
           }
 
+          // Art Director (Gemini multimodal) menilai still hasil render
+          async function critique(idea, plan, stillsDir) {
+            if (!ai || !fs.existsSync(stillsDir)) return null;
+            const files = fs.readdirSync(stillsDir).filter(f => f.endsWith(".jpg")).sort();
+            if (!files.length) return null;
+            const parts = [{ text: critiquePrompt(idea, plan) },
+              ...files.map(f => ({ inlineData: { mimeType: "image/jpeg", data: fs.readFileSync(path.join(stillsDir, f)).toString("base64") } }))];
+            return callModel({ prompt: parts, json: true, label: `art-director ${idea.id}`, attempts: 1, parse: parseCritique });
+          }
+
           async function buildCode(idea, plan) {
-            const c = idea.composition;
-            const colors = { primary: c.primaryColor, secondary: c.secondaryColor, bg: c.bgColor };
-            const frames = Math.round(c.durationSeconds * 30);
             const file = `${CUSTOM_DIR}/${idea.id}.ts`;
-            let prevCode = "", lastError = "";
+            const stillsDir = path.join(STILLS_ROOT, idea.id);
+            let prevCode = "", feedback = "", best = null, revisions = 0;
 
             for (let attempt = 1; attempt <= CODE_ATTEMPTS; attempt++) {
               const code = await callModel({
-                prompt: codePrompt(idea, plan, prevCode, lastError),
+                prompt: codePrompt(idea, plan, prevCode, feedback),
                 label: `code ${idea.id} #${attempt}`,
                 parse: parseCode,
               });
               if (!code) break;
               fs.writeFileSync(file, code);
-              const err = runtimeValidate(idea.id, colors, frames, idea.finish);
-              if (!err) return true;
-              console.warn(`[CODE FAIL] ${idea.id} #${attempt}: ${err.slice(0, 500)}`);
+
+              const err = runtimeValidate(idea, stillsDir);
+              if (err) {
+                console.warn(`[CODE FAIL] ${idea.id} #${attempt}: ${err.slice(0, 500)}`);
+                prevCode = code;
+                feedback = `The code failed technical validation:\n${err}`;
+                continue;
+              }
+
+              const crit = await critique(idea, plan, stillsDir);
+              const score = crit ? crit.overall : CRITIQUE_MIN;    // tidak ada penilaian → terima
+              console.log(`[ART DIRECTOR] ${idea.id} #${attempt}: ${crit ? `${score}/10 ${JSON.stringify(crit.scores)}` : "skipped"}`);
+              if (!best || score > best.score) best = { code, score };
+              if (score >= CRITIQUE_MIN || revisions >= 1 || attempt === CODE_ATTEMPTS) break;
+
+              revisions++;
               prevCode = code;
-              lastError = err;
+              feedback = `An art director reviewed rendered frames and scored it ${score}/10.\nISSUES:\n- ${crit.issues.join("\n- ")}\nREQUIRED FIXES:\n- ${crit.fixes.join("\n- ")}`;
             }
-            fs.rmSync(file, { force: true });
-            return false;
+
+            if (!best) { fs.rmSync(file, { force: true }); return false; }
+            fs.writeFileSync(file, best.code);                     // pastikan versi terbaik yang tersimpan
+            idea.artScore = best.score;
+            return true;
           }
 
           // ── Mode template (neon bawaan) — metadata dibuat jujur sesuai tampilan template ──
@@ -1232,9 +1539,11 @@ jobs:
             v.finish = "clean";
             v.background = "black";
             v.composition = { ...v.composition, bgColor: "#000000" };
-            const kws = (v.keywords || []).filter(k => !["chroma key", "green screen", "green background", "light background", "dark background"].includes(k));
-            v.keywords = composeKeywords(kws.length ? kws : ["icon", "animation", "motion graphics", "4K", "loop"], "black");
-            v.stockTitle = `Glowing neon line ${v.subject} icon animation on black background. ${v.creative?.topic || "Business"} concept symbol. 4K video motion graphic, seamless loop.`.slice(0, 200);
+            const drop = ["chroma key", "green screen", "green background", "light background", "dark background"];
+            const kws = (v.keywords || []).filter(k => !drop.includes(k));
+            v.keywords = composeKeywords(kws.length ? kws : ["icon", "animation", "motion graphics", "4K", "loop"], "black", v.format?.ratio);
+            const fmt = v.format?.ratio === "9:16" ? " Vertical video." : v.format?.ratio === "1:1" ? " Square video." : "";
+            v.stockTitle = `Glowing neon line ${v.subject} icon animation on black background. ${v.creative?.topic || "Business"} concept symbol.${fmt} 4K video motion graphic, seamless loop.`.slice(0, 200);
             return v;
           }
 
@@ -1250,8 +1559,8 @@ jobs:
                 "symbol", "technology", "business", "digital", "modern", "explainer", "presentation", "app", "video", "graphic", "element", "overlay"],
               iconHints: subj.iconHints,
               visualSpec: { composition: "hero icon centred", storyboard: [], wowBeat: subj.wowBeat },
-              composition: baseComposition(plan), finish: plan.style.finish, background: plan.style.background,
-              creative: { topic: plan.topic, style: plan.style.assigned, series: plan.seriesName },
+              composition: baseComposition(plan), format: plan.format, finish: plan.style.finish, background: plan.style.background,
+              creative: { topic: plan.topic, style: plan.style.assigned, motion: plan.style.motionDna, series: plan.seriesName },
             };
             return toTemplate(v);
           }
@@ -1259,10 +1568,12 @@ jobs:
           // ── Rencana statis bila AI sama sekali tidak tersedia ──
           function staticPlan() {
             const mk = (subject, phrase, icons, use) => ({ subject, buyerSearchPhrase: phrase, useCase: use, metaphorTwist: "", wowBeat: "light trace runs around the icon", iconHints: icons });
+            const pal = fixPalette({ primaryColor: "#22d3ee", secondaryColor: "#a78bfa", accentColor: "#fbbf24", bgColor: "#000000" }, "black");
             return {
               seriesName: `neon-series-${RUN}`, topic: "cloud computing & cybersecurity",
-              style: { look: "neon line icons on black", primaryColor: "#22d3ee", secondaryColor: "#a78bfa", bgColor: "#000000",
-                background: "black", finish: "clean", durationSeconds: 12, assigned: STYLES[0].name },
+              format: { ratio: "16:9", ...RATIOS["16:9"], reasoning: "default landscape (no AI decision available)", platforms: [], targetAudience: "" },
+              style: { look: "neon line icons on black", harmony: "analogous cool + warm accent", ...pal, background: "black", finish: "clean",
+                durationSeconds: 12, assigned: STYLES[0].name, motionDna: "light trace" },
               subjects: [
                 mk("cloud data storage", "cloud storage icon", ["cloud", "database"], "cloud computing explainers and SaaS promos"),
                 mk("cybersecurity shield", "cyber security shield icon", ["shield", "check"], "security and privacy videos"),
@@ -1280,7 +1591,10 @@ jobs:
               const tpl = videos.filter(v => !custom.includes(v));
               const tplDecl = tpl.map((v, i) =>
                 `const t${i} = makeNeonIconDraw(${JSON.stringify(v.iconHints && v.iconHints.length ? v.iconHints : ["cloud"])});`).join("\n");
-              const colorsOf = v => JSON.stringify({ primary: v.composition.primaryColor, secondary: v.composition.secondaryColor, bg: templateOnly || v.codeMode === "template" ? "#000000" : v.composition.bgColor });
+              const colorsOf = v => {
+                const c = v.composition, asTpl = templateOnly || v.codeMode === "template";
+                return JSON.stringify({ primary: c.primaryColor, secondary: c.secondaryColor, accent: c.accentColor, bg: asTpl ? "#000000" : c.bgColor });
+              };
               const entries = videos.map(v => {
                 const ci = custom.indexOf(v);
                 const draw = ci >= 0 ? `d${ci}` : `t${tpl.indexOf(v)}`;
@@ -1299,10 +1613,13 @@ jobs:
           // ═══════════════════════════════════════════════════════════
           async function main() {
             fs.mkdirSync(CUSTOM_DIR, { recursive: true });
+            fs.mkdirSync(STILLS_ROOT, { recursive: true });
             const videos = [];
             const style = pickStyle();
+            const motion = pickMotion();
             const domains = pickDomains(4);
-            console.log(`[PICK] style: ${style.name}\n[PICK] domains: ${domains.join(" | ")}`);
+            console.log(`[PICK] style: ${style.name}\n[PICK] motion: ${motion}\n[PICK] domains: ${domains.join(" | ")}`);
+            if (CLIENT) console.log("[CLIENT] client-data.json terbaca dan dipakai sebagai data utama");
 
             let plan = null, aiPlan = false;
             if (!ai) {
@@ -1314,12 +1631,14 @@ jobs:
               });
               console.log(brief ? `[RESEARCH OK] ${brief.length} chars` : "[RESEARCH] tidak tersedia — lanjut tanpa brief");
               plan = await callModel({
-                prompt: seriesPrompt(style, domains, brief || ""), json: true, label: "series plan",
+                prompt: seriesPrompt(style, motion, domains, brief || ""), json: true, label: "series plan",
                 parse: raw => parseSeries(raw, style),
               });
               aiPlan = !!plan;
+              if (plan) plan.style.motionDna = motion;
             }
             if (!plan) { console.warn("[FALLBACK] memakai rencana series statis"); plan = staticPlan(); }
+            console.log(`[PLAN] topic: ${plan.topic} | format: ${plan.format.ratio} (${plan.format.reasoning.slice(0, 160)})`);
 
             for (let i = 0; i < plan.subjects.length; i++) {
               const subj = plan.subjects[i];
@@ -1339,16 +1658,18 @@ jobs:
                 console.warn(`[TEMPLATE] kode AI gagal untuk ${idea.id} → template neon bawaan`);
                 toTemplate(idea);
               }
-              console.log(`[ASSET] ${idea.id} → ${idea.codeMode}`);
+              console.log(`[ASSET] ${idea.id} → ${idea.codeMode}${idea.artScore ? ` (art ${idea.artScore}/10)` : ""}`);
               videos.push(idea);
             }
 
             writeRegistries(videos);
-            fs.writeFileSync(OUTPUT_PATH, JSON.stringify({ series: { name: plan.seriesName, topic: plan.topic, style: plan.style }, videos }, null, 2));
+            fs.writeFileSync(OUTPUT_PATH, JSON.stringify({
+              series: { name: plan.seriesName, topic: plan.topic, format: plan.format, style: plan.style }, videos,
+            }, null, 2));
             console.log(`Selesai: ${videos.map(v => `${v.id}(${v.codeMode})`).join(", ")}`);
           }
 
-          export { staticCheck, parseCode, parseSeries, parseIdea, staticPlan, ideaFromSubject, toTemplate };
+          export { staticCheck, parseCode, parseSeries, parseIdea, parseCritique, fixPalette, staticPlan, ideaFromSubject, toTemplate };
           if (!process.env.GEN_NO_MAIN) await main();
           GENEOF
 
@@ -1368,27 +1689,19 @@ jobs:
           import { IDEAS } from './ideas';
           import { CUSTOM } from './registry';
 
-          const SIZES = [
-            { suffix: '16x9-4k', width: 3840, height: 2160 },
-            { suffix: '9x16-4k', width: 2160, height: 3840 },
-          ];
-
+          // Satu rasio per aset (ditentukan AI per series): id = <id>-<key>-4k
           export const RemotionRoot: React.FC = () => (
             <>
               {IDEAS.filter((idea: any) => CUSTOM[idea.id]).map((idea: any) => (
-                <React.Fragment key={idea.id}>
-                  {SIZES.map((sz) => (
-                    <Composition
-                      key={sz.suffix}
-                      id={`${idea.id}-${sz.suffix}`}
-                      component={CUSTOM[idea.id]}
-                      durationInFrames={Math.round(idea.duration * 30)}
-                      fps={30}
-                      width={sz.width}
-                      height={sz.height}
-                    />
-                  ))}
-                </React.Fragment>
+                <Composition
+                  key={idea.id}
+                  id={`${idea.id}-${idea.key}-4k`}
+                  component={CUSTOM[idea.id]}
+                  durationInFrames={Math.round(idea.duration * 30)}
+                  fps={30}
+                  width={idea.width}
+                  height={idea.height}
+                />
               ))}
             </>
           );
@@ -1411,6 +1724,9 @@ jobs:
           const ideas = data.videos.map(v => ({
             id: v.id,
             duration: v.composition.durationSeconds || 12,
+            key: v.format.key,
+            width: v.format.width,
+            height: v.format.height,
           }));
           fs.writeFileSync("src/ideas.ts",
             "export const IDEAS = " + JSON.stringify(ideas, null, 2) + ";\n");
@@ -1435,8 +1751,7 @@ jobs:
             const d = require('./video-ideas.json');
             const list = [];
             d.videos.forEach(v => {
-              list.push(v.id + '-16x9-4k');
-              list.push(v.id + '-9x16-4k');
+              list.push(v.id + '-' + v.format.key + '-4k');
             });
             if (list.length === 0) { console.error('Daftar komposisi kosong'); process.exit(1); }
             require('fs').writeFileSync('comps.json', JSON.stringify(list));
@@ -1570,11 +1885,11 @@ jobs:
           for (const f of files) {
             const v = ideas.find(x => f.startsWith(x.id + "-"));
             if (!v) continue;
-            const portrait = f.includes("-9x16-");
-            const extra = portrait ? ["vertical", "9:16", "portrait"] : ["horizontal", "16:9"];
+            const k9 = f.includes("-9x16-"), k1 = f.includes("-1x1-");
+            const extra = k9 ? ["vertical", "9:16", "portrait"] : k1 ? ["square", "1:1"] : ["horizontal", "16:9"];
             const base = (v.keywords || []).slice(0, 49 - extra.length);
             const kws = [...new Set([...base, ...extra])].slice(0, 49);
-            const title = ((v.stockTitle || v.title) + (portrait ? ", vertical 9:16" : "")).slice(0, 200);
+            const title = ((v.stockTitle || v.title) + (k9 ? ", vertical 9:16" : k1 ? ", square 1:1" : "")).slice(0, 200);
             rows.push([esc(f), esc(title), esc(kws.join(",")), "", ""].join(","));
           }
           fs.writeFileSync("final-output/adobe-stock-upload.csv", rows.join("\n") + "\n");
@@ -1611,6 +1926,9 @@ jobs:
               id: v.id,
               concept: v.concept || v.title,
               topic: v.creative && v.creative.topic,
+              motion: v.creative && v.creative.motion,
+              ratio: v.format && v.format.ratio,
+              artScore: v.artScore,
               style: v.creative && v.creative.style,
               subject: v.subject,
               stockTitle: v.stockTitle,
