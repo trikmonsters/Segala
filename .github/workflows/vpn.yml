@@ -1,0 +1,56 @@
+name: ProtonVPN WireGuard Connection
+
+on:
+  workflow_dispatch:  # Picu manual untuk pengujian
+  # schedule:
+  #   - cron: '0 */6 * * *'  # Buka komentar untuk dijalankan otomatis setiap 6 jam
+
+jobs:
+  connect-vpn:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install WireGuard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard resolvconf
+
+      - name: Setup WireGuard Configuration
+        run: |
+          # Menulis konfigurasi WireGuard Anda ke file
+          # Konfigurasi diambil dari Secrets, tidak akan bocor di log
+          sudo mkdir -p /etc/wireguard
+          echo "${{ secrets.WIREGUARD_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+
+      - name: Connect to ProtonVPN
+        run: |
+          sudo wg-quick up wg0
+          echo "✅ VPN terhubung"
+          echo "IP publik saat ini:"
+          curl -s ifconfig.me || curl -s ipinfo.io/ip
+
+      - name: Verify VPN Connection
+        run: |
+          # Periksa apakah IP sudah berubah (mengasumsikan IP asli GHA bukan IP ProtonVPN)
+          echo "Detail koneksi WireGuard:"
+          sudo wg show
+          
+          # Uji apakah bisa mengakses jaringan eksternal
+          ping -c 3 1.1.1.1 || echo "Ping gagal, tapi VPN mungkin masih berfungsi"
+
+      - name: Run Your Automation Task
+        run: |
+          # === Di sini Anda menulis logika otomasi yang sebenarnya ===
+          # Misalnya: curl API, git push, unduh data, dll.
+          echo "Melakukan tugas otomasi..."
+          # curl https://api.example.com/your-endpoint
+
+      - name: Cleanup (Disconnect VPN)
+        if: always()  # Pastikan terputus bahkan jika langkah sebelumnya gagal
+        run: |
+          sudo wg-quick down wg0 2>/dev/null || true
+          echo "🔌 VPN terputus"
