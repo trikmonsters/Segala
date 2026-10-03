@@ -980,4 +980,30 @@ jobs:
       # ===============================================================
       # 13. Render video 9:16
       # ===============================================================
-      - name: Render
+      - name: Render video
+        run: |
+          npx remotion render PremiumCinematic out/premium-cinematic-stickman.mp4 \
+            --codec=h264 \
+            --crf=15 \
+            --concurrency=2 \
+            --pixel-format=yuv420p
+
+      # ===============================================================
+      # 14. Upload ke GitHub Release (bukan artifact, bukan zip)
+      # ===============================================================
+      - name: Create Release & Upload MP4
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.title }} ${{ github.event.inputs.version }}
+          body: |
+            ## 🎬 Premium Cinematic Stickman
+
+            Video vertikal 9:16 (1080×1920), 12 detik, 30fps, H.264 CRF 15.
+            Siap upload ke TikTok / Instagram Reels / YouTube Shorts.
+
+            **Download:** lihat file MP4 di bawah.
+          files: out/premium-cinematic-stickman.mp4
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
