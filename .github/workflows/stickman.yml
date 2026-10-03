@@ -3,11 +3,19 @@ name: Render Premium Cinematic Stickman
 on:
   workflow_dispatch:
     inputs:
-      duration_seconds:
-        description: 'Durasi video (detik, 8-15)'
+      version:
+        description: 'Versi release (mis: v1.0.0)'
         required: true
-        default: '12'
+        default: 'v1.0.0'
         type: string
+      title:
+        description: 'Judul release'
+        required: true
+        default: 'Premium Cinematic Stickman'
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build-and-render:
@@ -39,7 +47,6 @@ jobs:
             "dependencies": {
               "@remotion/cli": "4.0.230",
               "@remotion/noise": "4.0.230",
-              "@remotion/shapes": "4.0.230",
               "react": "18.3.1",
               "react-dom": "18.3.1",
               "remotion": "4.0.230"
@@ -74,7 +81,7 @@ jobs:
           EOF
 
       # ===============================================================
-      # 3. remotion.config.ts (kualitas maksimal)
+      # 3. remotion.config.ts
       # ===============================================================
       - name: Create remotion.config.ts
         run: |
@@ -88,7 +95,6 @@ jobs:
           Config.setCrf(15);
           Config.setPixelFormat('yuv420p');
           Config.setColorSpace('bt709');
-          Config.setChromiumOpenGlRenderer('angle');
           EOF
 
       # ===============================================================
@@ -131,7 +137,7 @@ jobs:
           EOF
 
       # ===============================================================
-      # 6. src/theme.ts  (palet & konstanta)
+      # 6. src/theme.ts
       # ===============================================================
       - name: Create src/theme.ts
         run: |
@@ -147,17 +153,10 @@ jobs:
             champagne: '#E8D8B0',
             shadow: '#000000',
           } as const;
-
-          export const SIZES = {
-            width: 1080,
-            height: 1920,
-            fps: 30,
-            durationInFrames: 360,
-          } as const;
           EOF
 
       # ===============================================================
-      # 7. src/atoms.tsx  (komponen kecil reusable)
+      # 7. src/atoms.tsx  (background, particle, overlay)
       # ===============================================================
       - name: Create src/atoms.tsx
         run: |
@@ -167,7 +166,6 @@ jobs:
           import { noise2D } from '@remotion/noise';
           import { THEME } from './theme';
 
-          // ---------- CINEMATIC BACKGROUND ----------
           export const CinematicBackground: React.FC<{ intensity?: number }> = ({
             intensity = 1,
           }) => {
@@ -178,15 +176,12 @@ jobs:
 
             return (
               <AbsoluteFill style={{ background: THEME.ink }}>
-                {/* Base radial gold dari tengah */}
                 <AbsoluteFill
                   style={{
                     background: `radial-gradient(ellipse 75% 55% at 50% 42%, ${THEME.goldDeep}66 0%, transparent 68%)`,
                     opacity: intensity,
                   }}
                 />
-
-                {/* Layer bokeh gold */}
                 {Array.from({ length: 24 }).map((_, i) => {
                   const seed = i * 5.37;
                   const x = (Math.sin(seed) * 0.5 + 0.5) * 1080;
@@ -212,8 +207,6 @@ jobs:
                     />
                   );
                 })}
-
-                {/* Light sweep diagonal */}
                 <div
                   style={{
                     position: 'absolute',
@@ -227,8 +220,6 @@ jobs:
                     opacity: intensity,
                   }}
                 />
-
-                {/* Grid halus (texture premium) */}
                 <AbsoluteFill
                   style={{
                     backgroundImage:
@@ -241,12 +232,10 @@ jobs:
             );
           };
 
-          // ---------- GOLD PARTICLES ----------
           export const GoldParticles: React.FC<{ count?: number }> = ({
             count = 55,
           }) => {
             const frame = useCurrentFrame();
-
             return (
               <AbsoluteFill>
                 {Array.from({ length: count }).map((_, i) => {
@@ -261,12 +250,10 @@ jobs:
                   const opacity =
                     (0.35 + Math.abs(Math.sin(seed)) * 0.65) *
                     flicker *
-                    interpolate(
-                      y,
-                      [0, 200, 1700, 1920],
-                      [0, 1, 1, 0],
-                      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-                    );
+                    interpolate(y, [0, 200, 1700, 1920], [0, 1, 1, 0], {
+                      extrapolateLeft: 'clamp',
+                      extrapolateRight: 'clamp',
+                    });
                   return (
                     <div
                       key={`p-${i}`}
@@ -290,7 +277,6 @@ jobs:
             );
           };
 
-          // ---------- FILM GRAIN ----------
           export const FilmGrain: React.FC = () => {
             const frame = useCurrentFrame();
             const opacity = 0.055 + Math.abs(noise2D('grain', frame * 0.7, 0)) * 0.04;
@@ -307,71 +293,63 @@ jobs:
             );
           };
 
-          // ---------- LETTERBOX (bar hitam bioskop) ----------
           export const Letterbox: React.FC<{ barHeight?: number }> = ({
             barHeight = 90,
-          }) => {
-            return (
-              <>
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: barHeight,
-                    background: '#000',
-                    zIndex: 40,
-                  }}
-                />
-                <div
-                  style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    height: barHeight,
-                    background: '#000',
-                    zIndex: 40,
-                  }}
-                />
-              </>
-            );
-          };
+          }) => (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: barHeight,
+                  background: '#000',
+                  zIndex: 40,
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: barHeight,
+                  background: '#000',
+                  zIndex: 40,
+                }}
+              />
+            </>
+          );
 
-          // ---------- VIGNETTE + CHROMATIC EDGE ----------
-          export const VignetteLayer: React.FC = () => {
-            return (
-              <>
-                <AbsoluteFill
-                  style={{
-                    background:
-                      'radial-gradient(ellipse at center, transparent 42%, #000000dd 100%)',
-                    pointerEvents: 'none',
-                    zIndex: 30,
-                  }}
-                />
-                <AbsoluteFill
-                  style={{
-                    background:
-                      'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 20%, transparent 80%, rgba(0,0,0,0.45) 100%)',
-                    pointerEvents: 'none',
-                    zIndex: 31,
-                  }}
-                />
-              </>
-            );
-          };
+          export const VignetteLayer: React.FC = () => (
+            <>
+              <AbsoluteFill
+                style={{
+                  background:
+                    'radial-gradient(ellipse at center, transparent 42%, #000000dd 100%)',
+                  pointerEvents: 'none',
+                  zIndex: 30,
+                }}
+              />
+              <AbsoluteFill
+                style={{
+                  background:
+                    'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 20%, transparent 80%, rgba(0,0,0,0.45) 100%)',
+                  pointerEvents: 'none',
+                  zIndex: 31,
+                }}
+              />
+            </>
+          );
 
-          // ---------- LENS FLARE ----------
-          export const LensFlare: React.FC<{ x?: number; y?: number; size?: number }> = ({
-            x = 70,
-            y = 25,
-            size = 500,
-          }) => {
+          export const LensFlare: React.FC<{
+            x?: number;
+            y?: number;
+            size?: number;
+          }> = ({ x = 70, y = 25, size = 500 }) => {
             const frame = useCurrentFrame();
             const pulse = 0.9 + 0.1 * Math.sin(frame * 0.06);
-
             return (
               <div
                 style={{
@@ -394,7 +372,7 @@ jobs:
           EOF
 
       # ===============================================================
-      # 8. src/StickmanFigure.tsx  (karakter utama, premium)
+      # 8. src/StickmanFigure.tsx
       # ===============================================================
       - name: Create src/StickmanFigure.tsx
         run: |
@@ -431,20 +409,17 @@ jobs:
                     <stop offset="35%" stopColor={THEME.gold} />
                     <stop offset="100%" stopColor={THEME.goldDeep} />
                   </linearGradient>
-
                   <radialGradient id="headGrad" cx="0.35" cy="0.3">
                     <stop offset="0%" stopColor={THEME.goldBright} />
                     <stop offset="55%" stopColor={THEME.gold} />
                     <stop offset="100%" stopColor={THEME.goldDeep} />
                   </radialGradient>
-
                   <linearGradient id="bodySheen" x1="0" y1="0" x2="1" y2="0">
                     <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0" />
                     <stop offset="45%" stopColor="#FFFFFF" stopOpacity="0.55" />
                     <stop offset="55%" stopColor="#FFFFFF" stopOpacity="0.55" />
                     <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
                   </linearGradient>
-
                   <filter id="softGlow">
                     <feGaussianBlur stdDeviation="2.6" result="blur" />
                     <feMerge>
@@ -452,21 +427,8 @@ jobs:
                       <feMergeNode in="SourceGraphic" />
                     </feMerge>
                   </filter>
-
-                  <filter id="innerShadow">
-                    <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="b" />
-                    <feOffset dx="0" dy="3" />
-                    <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1" />
-                    <feFlood floodColor={THEME.ink} floodOpacity="0.7" />
-                    <feComposite in2="SourceGraphic" operator="in" />
-                    <feMerge>
-                      <feMergeNode in="SourceGraphic" />
-                      <feMergeNode />
-                    </feMerge>
-                  </filter>
                 </defs>
 
-                {/* Shadow di bawah karakter (ground shadow) */}
                 <ellipse
                   cx={0}
                   cy={210}
@@ -485,7 +447,6 @@ jobs:
                   filter="url(#softGlow)"
                   transform={`rotate(${headTilt} 0 -155)`}
                 >
-                  {/* Kepala */}
                   <circle
                     cx={0}
                     cy={-155}
@@ -494,7 +455,6 @@ jobs:
                     stroke={THEME.goldDeep}
                     strokeWidth={4}
                   />
-                  {/* Highlight atas kepala */}
                   <ellipse
                     cx={-14}
                     cy={-180}
@@ -504,41 +464,29 @@ jobs:
                     opacity={0.35}
                     stroke="none"
                   />
-
-                  {/* Mata glow */}
                   <circle cx={-19} cy={-165} r={6.5} fill={THEME.ink} stroke="none" />
                   <circle cx={19} cy={-165} r={6.5} fill={THEME.ink} stroke="none" />
                   <circle cx={-19} cy={-165} r={2.6} fill={THEME.goldBright} stroke="none" />
                   <circle cx={19} cy={-165} r={2.6} fill={THEME.goldBright} stroke="none" />
-
-                  {/* Mulut confident (slight smirk) */}
                   <path
                     d="M -22 -132 Q 0 -116 22 -132"
                     stroke={THEME.ink}
                     strokeWidth={4.5}
                     fill="none"
                   />
-
-                  {/* Badan */}
                   <line x1={0} y1={-100} x2={0} y2={72} />
-
-                  {/* Tangan */}
                   <g transform={`rotate(${armLeft} 0 -72)`}>
                     <line x1={0} y1={-72} x2={-88} y2={28} />
                   </g>
                   <g transform={`rotate(${armRight} 0 -72)`}>
                     <line x1={0} y1={-72} x2={88} y2={28} />
                   </g>
-
-                  {/* Kaki */}
                   <g transform={`rotate(${legLeft} 0 72)`}>
                     <line x1={0} y1={72} x2={-58} y2={190} />
                   </g>
                   <g transform={`rotate(${legRight} 0 72)`}>
                     <line x1={0} y1={72} x2={58} y2={190} />
                   </g>
-
-                  {/* Sheen overlay pada badan */}
                   <line
                     x1={0}
                     y1={-100}
@@ -555,7 +503,7 @@ jobs:
           EOF
 
       # ===============================================================
-      # 9. src/Typography.tsx  (kinetic typography + ornamen)
+      # 9. src/Typography.tsx
       # ===============================================================
       - name: Create src/Typography.tsx
         run: |
@@ -581,14 +529,11 @@ jobs:
           }) => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
-
             const chars = text.split('');
             const baseStyle: React.CSSProperties = {
               fontFamily:
                 variant === 'hero'
                   ? '"Times New Roman", Georgia, serif'
-                  : variant === 'sub'
-                  ? 'Inter, Helvetica, Arial, sans-serif'
                   : 'Inter, Helvetica, Arial, sans-serif',
               fontWeight: variant === 'hero' ? 900 : variant === 'sub' ? 700 : 500,
               fontSize: size,
@@ -738,7 +683,6 @@ jobs:
             Easing,
           } from 'remotion';
           import { noise2D } from '@remotion/noise';
-          import { THEME } from './theme';
           import {
             CinematicBackground,
             GoldParticles,
@@ -750,22 +694,7 @@ jobs:
           import { StickmanFigure } from './StickmanFigure';
           import { KineticText, GoldDivider, OrnamentCorner } from './Typography';
 
-          // =============================================================
-          // Helper: scene camera (shake + dolly) per segmen
-          // =============================================================
-          const useSceneCamera = () => {
-            const frame = useCurrentFrame();
-            const shakeX = noise2D('sx', frame * 0.05, 0) * 5;
-            const shakeY = noise2D('sy', frame * 0.05, 0) * 5;
-            const zoom = interpolate(frame, [0, 360], [1.09, 1.0], {
-              easing: Easing.bezier(0.4, 0, 0.2, 1),
-            });
-            return { shakeX, shakeY, zoom };
-          };
-
-          // =============================================================
-          // SCENE 1 (frame 0-90): Entrance, pose elegan
-          // =============================================================
+          // ---------------- SCENE 1: ENTRANCE (0-90) ----------------
           const Scene1: React.FC = () => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
@@ -780,7 +709,9 @@ jobs:
 
             return (
               <>
-                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                <AbsoluteFill
+                  style={{ justifyContent: 'center', alignItems: 'center' }}
+                >
                   <div
                     style={{
                       transform: `translateY(${translateY + breathe}px)`,
@@ -797,7 +728,6 @@ jobs:
                     />
                   </div>
                 </AbsoluteFill>
-
                 <AbsoluteFill
                   style={{
                     justifyContent: 'flex-start',
@@ -812,27 +742,25 @@ jobs:
             );
           };
 
-          // =============================================================
-          // SCENE 2 (frame 90-180): Flex kedua tangan (power pose)
-          // =============================================================
+          // ---------------- SCENE 2: FLEX (90-180) ----------------
           const Scene2: React.FC = () => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
-
             const flex = spring({
               frame: frame - 10,
               fps,
               config: { damping: 10, stiffness: 110 },
             });
             const glow = 0.4 + interpolate(flex, [0, 1], [0, 0.55]);
-
             const armLeft = -10 + interpolate(flex, [0, 1], [0, -135]);
             const armRight = 10 + interpolate(flex, [0, 1], [0, 135]);
             const bodyPulse = 1 + interpolate(flex, [0, 1], [0, 0.04]);
 
             return (
               <>
-                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                <AbsoluteFill
+                  style={{ justifyContent: 'center', alignItems: 'center' }}
+                >
                   <div style={{ transform: `scale(${bodyPulse})`, marginTop: 140 }}>
                     <StickmanFigure
                       armLeft={armLeft}
@@ -844,7 +772,6 @@ jobs:
                     />
                   </div>
                 </AbsoluteFill>
-
                 <AbsoluteFill
                   style={{
                     justifyContent: 'flex-start',
@@ -860,9 +787,7 @@ jobs:
             );
           };
 
-          // =============================================================
-          // SCENE 3 (frame 180-270): Tunjuk ke kamera (call out)
-          // =============================================================
+          // ---------------- SCENE 3: POINT (180-270) ----------------
           const Scene3: React.FC = () => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
@@ -871,13 +796,14 @@ jobs:
               fps,
               config: { damping: 11, stiffness: 130 },
             });
-
             const armRight = 10 + interpolate(point, [0, 1], [0, -75]);
             const headTilt = interpolate(point, [0, 1], [0, 7]);
 
             return (
               <>
-                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                <AbsoluteFill
+                  style={{ justifyContent: 'center', alignItems: 'center' }}
+                >
                   <div style={{ marginTop: 140 }}>
                     <StickmanFigure
                       armLeft={-20}
@@ -889,7 +815,6 @@ jobs:
                     />
                   </div>
                 </AbsoluteFill>
-
                 <AbsoluteFill
                   style={{
                     justifyContent: 'flex-start',
@@ -904,9 +829,7 @@ jobs:
             );
           };
 
-          // =============================================================
-          // SCENE 4 (frame 270-360): Brand end card
-          // =============================================================
+          // ---------------- SCENE 4: END CARD (270-360) ----------------
           const Scene4: React.FC = () => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
@@ -915,13 +838,14 @@ jobs:
               fps,
               config: { damping: 14, stiffness: 100 },
             });
-
             const armLeft = -20 * (1 - interpolate(rest, [0, 1], [0, 0.7]));
             const armRight = 20 * (1 - interpolate(rest, [0, 1], [0, 0.7]));
 
             return (
               <>
-                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                <AbsoluteFill
+                  style={{ justifyContent: 'center', alignItems: 'center' }}
+                >
                   <div
                     style={{
                       transform: `translateY(${interpolate(
@@ -947,7 +871,6 @@ jobs:
                     />
                   </div>
                 </AbsoluteFill>
-
                 <AbsoluteFill
                   style={{
                     justifyContent: 'flex-start',
@@ -969,9 +892,92 @@ jobs:
             );
           };
 
-          // =============================================================
-          // KOMPOSISI UTAMA
-          // =============================================================
+          // ---------------- KOMPOSISI UTAMA ----------------
           export const PremiumCinematic: React.FC = () => {
             const frame = useCurrentFrame();
-            const { shakeX, shakeY, zoom } = use
+            const shakeX = noise2D('sx', frame * 0.05, 0) * 5;
+            const shakeY = noise2D('sy', frame * 0.05, 0) * 5;
+            const zoom = interpolate(frame, [0, 360], [1.09, 1.0], {
+              easing: Easing.bezier(0.4, 0, 0.2, 1),
+            });
+
+            return (
+              <AbsoluteFill
+                style={{
+                  background: '#07070B',
+                  transform: `scale(${zoom}) translate(${shakeX}px, ${shakeY}px)`,
+                  overflow: 'hidden',
+                }}
+              >
+                <CinematicBackground />
+                <GoldParticles />
+
+                <Sequence from={0} durationInFrames={90}>
+                  <Scene1 />
+                </Sequence>
+                <Sequence from={90} durationInFrames={90}>
+                  <Scene2 />
+                </Sequence>
+                <Sequence from={180} durationInFrames={90}>
+                  <Scene3 />
+                </Sequence>
+                <Sequence from={270} durationInFrames={90}>
+                  <Scene4 />
+                </Sequence>
+
+                <LensFlare x={72} y={22} size={520} />
+                <FilmGrain />
+
+                {/* Ornamen sudut muncul di scene 4 */}
+                <Sequence from={280}>
+                  <OrnamentCorner delay={0} position="tl" />
+                  <OrnamentCorner delay={8} position="tr" />
+                  <OrnamentCorner delay={16} position="bl" />
+                  <OrnamentCorner delay={24} position="br" />
+                </Sequence>
+
+                <Letterbox barHeight={90} />
+                <VignetteLayer />
+
+                {/* Footer kredit kecil */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 120,
+                    width: '100%',
+                    textAlign: 'center',
+                    fontFamily: 'Inter, Helvetica, Arial, sans-serif',
+                    fontSize: 22,
+                    letterSpacing: 8,
+                    color: '#D4AF37',
+                    opacity: interpolate(frame, [0, 30], [0, 1], {
+                      extrapolateRight: 'clamp',
+                    }),
+                    textTransform: 'uppercase',
+                    fontWeight: 500,
+                    zIndex: 45,
+                  }}
+                >
+                  · CINEMATIC · MINDSET · 2026 ·
+                </div>
+              </AbsoluteFill>
+            );
+          };
+          EOF
+
+      # ===============================================================
+      # 11. Install dependencies
+      # ===============================================================
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # ===============================================================
+      # 12. Type check (mencegah error bundling)
+      # ===============================================================
+      - name: Type check
+        run: npx tsc --noEmit
+
+      # ===============================================================
+      # 13. Render video 9:16
+      # ===============================================================
+      - name: Render
