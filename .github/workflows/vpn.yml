@@ -1,14 +1,12 @@
-name: ProtonVPN WireGuard Connection
+name: dola.com Scrape with ProtonVPN + Tilion Fortress
 
 on:
-  workflow_dispatch:  # Picu manual untuk pengujian
-  # schedule:
-  #   - cron: '0 */6 * * *'  # Buka komentar untuk dijalankan otomatis setiap 6 jam
+  workflow_dispatch:
 
 jobs:
-  connect-vpn:
+  scrape:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,10 +16,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wireguard resolvconf
 
-      - name: Setup WireGuard Configuration
+      - name: Setup WireGuard Config
         run: |
-          # Menulis konfigurasi WireGuard Anda ke file
-          # Konfigurasi diambil dari Secrets, tidak akan bocor di log
           sudo mkdir -p /etc/wireguard
           echo "${{ secrets.WIREGUARD_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
           sudo chmod 600 /etc/wireguard/wg0.conf
@@ -33,24 +29,100 @@ jobs:
           echo "IP publik saat ini:"
           curl -s ifconfig.me || curl -s ipinfo.io/ip
 
-      - name: Verify VPN Connection
+      - name: Verify VPN is Active
         run: |
-          # Periksa apakah IP sudah berubah (mengasumsikan IP asli GHA bukan IP ProtonVPN)
-          echo "Detail koneksi WireGuard:"
           sudo wg show
-          
-          # Uji apakah bisa mengakses jaringan eksternal
-          ping -c 3 1.1.1.1 || echo "Ping gagal, tapi VPN mungkin masih berfungsi"
+          VPN_IP=$(curl -s ifconfig.me)
+          echo "IP yang digunakan saat ini: $VPN_IP"
+          if echo "$VPN_IP" | grep -qE "^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."; then
+            echo "⚠️ Peringatan: IP masih terlihat seperti IP internal, VPN mungkin tidak aktif"
+          fi
 
-      - name: Run Your Automation Task
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Tilion Fortress + Playwright
         run: |
-          # === Di sini Anda menulis logika otomasi yang sebenarnya ===
-          # Misalnya: curl API, git push, unduh data, dll.
-          echo "Melakukan tugas otomasi..."
-          # curl https://api.example.com/your-endpoint
+          pip install tilion-fortress playwright
+          playwright install chromium
 
-      - name: Cleanup (Disconnect VPN)
-        if: always()  # Pastikan terputus bahkan jika langkah sebelumnya gagal
+      - name: Scrape dola.com & Screenshot
+        run: |
+          python - <<'PYEOF'
+          import asyncio
+          from tilion_fortress import Fortress
+          from playwright.async_api import async_playwright
+
+          async def main():
+              # 1. Mulai mesin stealth Tilion Fortress
+              f = Fortress()
+              await f.start()
+              print(f"[+] Fortress CDP: {f.cdp_url}")
+
+              # 2. Playwright terhubung ke Fortress melalui CDP
+              async with async_playwright() as p:
+                  browser = await p.chromium.connect_over_cdp(f.cdp_url)
+                  page = await browser.new_page()
+
+                  # 3. Buka target
+                  print("[+] Membuka https://dola.com...")
+                  response = await page.goto("https://dola.com", wait_until="domcontentloaded", timeout=60000)
+
+                  print(f"[+] HTTP Status: {response.status if response else 'No response'}")
+
+                  # 4. Tunggu tantangan (jika ada) selesai
+                  await page.wait_for_timeout(5000)
+
+                  # 5. Screenshot full page
+                  screenshot_path = "dola_screenshot.png"
+                  await page.screenshot(path=screenshot_path, full_page=True)
+                  print(f"[+] Screenshot disimpan: {screenshot_path}")
+
+                  # 6. Deteksi sederhana apakah terblokir
+                  content = await page.content()
+                  title = await page.title()
+                  print(f"[+] Judul halaman: {title}")
+
+                  blocked_keywords = ["access denied", "blocked", "cloudflare", "captcha", "forbidden", "403"]
+                  title_lower = title.lower()
+                  content_lower = content.lower()
+                  is_blocked = any(kw in title_lower or kw in content_lower for kw in blocked_keywords)
+
+                  if is_blocked:
+                      print("[!] Kemungkinan MASIH TERBLOKIR")
+                  else:
+                      print("[✓] Halaman terlihat NORMAL")
+
+                  with open("block_status.txt", "w") as f_out:
+                      f_out.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
+                      f_out.write(f"title={title}\n")
+                      f_out.write(f"http_status={response.status if response else 'unknown'}\n")
+
+                  await browser.close()
+              await f.close()
+
+          asyncio.run(main())
+          PYEOF
+
+      - name: Disconnect VPN
+        if: always()
         run: |
           sudo wg-quick down wg0 2>/dev/null || true
           echo "🔌 VPN terputus"
+
+      - name: Upload Screenshot to Release (no zip)
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dola-screenshot-${{ github.run_number }}
+          name: "dola.com Screenshot #${{ github.run_number }}"
+          body_path: block_status.txt
+          files: dola_screenshot.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print Block Status
+        if: always()
+        run: cat block_status.txt
