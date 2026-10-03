@@ -1,10 +1,10 @@
-name: dola.com Screenshot with Cookie Login (Fixed)
+name: Dola AI Video Generation
 
 on:
   workflow_dispatch:
 
 jobs:
-  scrape:
+  generate-video:
     runs-on: ubuntu-latest
 
     steps:
@@ -48,10 +48,10 @@ jobs:
           curl -s ifconfig.me
 
       # ============================================
-      # FASE 3: PLAYWRIGHT + COOKIE LOGIN
+      # FASE 3: PLAYWRIGHT - GENERATE VIDEO
       # ============================================
 
-      - name: Screenshot dola.com with Cookie
+      - name: Generate AI Video on Dola
         env:
           DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
         run: |
@@ -61,18 +61,24 @@ jobs:
           import os
           from playwright.async_api import async_playwright
 
+          TARGET_URL = "https://www.dola.com/chat/38417995536110865"
+          PROMPT = (
+              "A funny video of a kitten being scolded by its mother cat. "
+              "The mother cat looks stern and scolds the kitten, while the kitten "
+              "looks guilty and cute with big eyes. Natural lighting, stable exposure, "
+              "realistic style, 15 seconds duration, 9:16 vertical aspect ratio, "
+              "suitable for TikTok/Reels."
+          )
+
           async def main():
               raw_cookies = os.environ.get("DOLA_COOKIES", "").strip()
-              if not raw_cookies:
-                  print("[!] DOLA_COOKIES kosong")
-                  cookies = []
-              else:
+              cookies = []
+              if raw_cookies:
                   try:
                       cookies = json.loads(raw_cookies)
-                      print(f"[+] Berhasil parse {len(cookies)} cookie")
+                      print(f"[+] Parse {len(cookies)} cookie")
                   except json.JSONDecodeError as e:
                       print(f"[!] Gagal parse JSON: {e}")
-                      cookies = []
 
               async with async_playwright() as p:
                   browser = await p.chromium.launch(headless=True)
@@ -83,7 +89,7 @@ jobs:
                                  "Chrome/120.0.0.0 Safari/537.36"
                   )
 
-                  # 1. Inject cookie SEBELUM navigasi
+                  # 1. Inject cookie sebelum navigasi
                   if cookies:
                       normalized = []
                       for c in cookies:
@@ -103,103 +109,103 @@ jobs:
                               if c.get("httpOnly") is not None:
                                   cookie["httpOnly"] = c["httpOnly"]
                               normalized.append(cookie)
-
                       await context.add_cookies(normalized)
                       print(f"[+] {len(normalized)} cookie disuntikkan")
-                      # Print nama cookie untuk debug (tanpa value)
-                      print(f"[+] Nama cookie: {[c['name'] for c in normalized]}")
 
                   page = await context.new_page()
 
-                  # 2. Buka dola.com
-                  print("[+] Membuka https://dola.com...")
-                  response = await page.goto(
-                      "https://dola.com",
-                      wait_until="domcontentloaded",
-                      timeout=60000
-                  )
-                  status = response.status if response else 'No response'
-                  print(f"[+] HTTP Status: {status}")
+                  # 2. Buka URL target
+                  print(f"[+] Membuka {TARGET_URL}...")
+                  response = await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+                  print(f"[+] HTTP Status: {response.status if response else 'No response'}")
 
-                  # 3. JEDA 15 DETIK - biarkan session ter-load penuh
-                  print("[+] Menunggu 15 detik agar session ter-load...")
-                  await page.wait_for_timeout(15000)
+                  # 3. Jeda agar session + UI chat siap
+                  print("[+] Menunggu 10 detik...")
+                  await page.wait_for_timeout(10000)
 
-                  # 4. Tunggu network idle (semua request selesai)
-                  try:
-                      await page.wait_for_load_state("networkidle", timeout=30000)
-                      print("[+] Network idle tercapai")
-                  except Exception as e:
-                      print(f"[!] Network idle timeout: {e}")
-
-                  # 5. Screenshot
-                  await page.screenshot(path="dola_screenshot.png", full_page=True)
-                  print("[+] Screenshot disimpan")
-
-                  # 6. Deteksi login yang BENAR
-                  title = await page.title()
-                  content = await page.content()
-                  print(f"[+] Title: {title}")
-
-                  # Cek apakah tombol "Log In" MASIH ada di halaman
-                  # Jika ada, berarti BELUM login
+                  # 4. Cek apakah benar-benar sudah login (tombol Log In tidak ada)
                   has_login_button = await page.locator("text=Log In").count() > 0
+                  if has_login_button:
+                      print("[!] Tombol 'Log In' masih terlihat → cookie tidak valid")
+                  else:
+                      print("[✓] Sudah login")
 
-                  # Cek elemen yang menandakan sudah login
-                  # (avatar, menu profil, tombol logout, dll)
-                  logged_in_indicators = [
-                      "[data-testid*='avatar']",
-                      "[class*='avatar']",
-                      "text=Log out",
-                      "text=Sign out",
-                      "text=Settings",
-                      "text=My Account"
+                  # 5. Cari kotak input chat
+                  # Coba beberapa selector umum
+                  input_selectors = [
+                      "textarea",
+                      "div[contenteditable='true']",
+                      "textarea[placeholder*='Message']",
+                      "textarea[placeholder*='帮你']",
+                      "textarea[placeholder*='ask']",
                   ]
-                  logged_in_signals = 0
-                  for sel in logged_in_indicators:
+
+                  input_el = None
+                  used_selector = None
+                  for sel in input_selectors:
                       try:
                           cnt = await page.locator(sel).count()
                           if cnt > 0:
-                              logged_in_signals += cnt
+                              input_el = page.locator(sel).first
+                              used_selector = sel
+                              print(f"[+] Kotak input ditemukan: {sel} (count={cnt})")
+                              break
                       except Exception:
                           pass
 
-                  # Logika final
-                  if has_login_button:
-                      actually_logged_in = False
-                      print("[!] Tombol 'Log In' MASIH terlihat → BELUM login")
-                  elif logged_in_signals > 0:
-                      actually_logged_in = True
-                      print(f"[✓] Ditemukan {logged_in_signals} indikator login")
-                  else:
-                      actually_logged_in = False
-                      print("[?] Tidak ada tombol Log In, tapi tidak ada indikator login jelas")
+                  if input_el is None:
+                      print("[!] Kotak input TIDAK ditemukan. Ambil screenshot debug...")
+                      await page.screenshot(path="dola_debug.png", full_page=True)
+                      await browser.close()
+                      return
 
-                  # Deteksi blokir wilayah
-                  blocked_kw = [
-                      "not available in this country",
-                      "access denied",
-                      "captcha",
-                      "just a moment"
-                  ]
-                  is_blocked = any(
-                      kw in title.lower() or kw in content.lower()
-                      for kw in blocked_kw
-                  )
+                  # 6. Isi prompt
+                  print("[+] Mengisi prompt...")
+                  try:
+                      await input_el.click()
+                      await input_el.fill(PROMPT)
+                  except Exception as e:
+                      print(f"[!] fill() gagal: {e}, coba type()...")
+                      await input_el.click()
+                      await input_el.type(PROMPT, delay=30)
 
-                  with open("block_status.txt", "w") as f:
-                      f.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
-                      f.write(f"logged_in={'YES' if actually_logged_in else 'NO'}\n")
-                      f.write(f"login_button_visible={'YES' if has_login_button else 'NO'}\n")
+                  # Verifikasi isi
+                  await page.wait_for_timeout(1000)
+                  print("[+] Prompt terisi")
+
+                  # 7. Kirim
+                  print("[+] Mengirim prompt (Enter)...")
+                  await page.keyboard.press("Enter")
+
+                  # 8. Tunggu generate video selesai
+                  # Generate video biasanya butuh 2-5 menit
+                  print("[+] Menunggu 5 menit untuk generate video...")
+                  await page.wait_for_timeout(300000)
+
+                  # 9. Screenshot hasil
+                  await page.screenshot(path="dola_video_result.png", full_page=True)
+                  print("[+] Screenshot hasil disimpan")
+
+                  # 10. Simpan status
+                  title = await page.title()
+                  content = await page.content()
+                  content_lower = content.lower()
+
+                  # Deteksi hasil video (ada tag video / download button)
+                  has_video = await page.locator("video").count() > 0
+                  has_error = any(kw in content_lower for kw in [
+                      "error", "failed", "gagal", "coba lagi", "try again"
+                  ])
+
+                  with open("result_status.txt", "w") as f:
+                      f.write(f"target_url={TARGET_URL}\n")
+                      f.write(f"input_selector={used_selector}\n")
+                      f.write(f"video_found={'YES' if has_video else 'NO'}\n")
+                      f.write(f"error_detected={'YES' if has_error else 'NO'}\n")
                       f.write(f"title={title}\n")
-                      f.write(f"http_status={status}\n")
 
-                  if is_blocked:
-                      print("[!] TERBLOCK WILAYAH")
-                  elif actually_logged_in:
-                      print("[✓] SUKSES: sudah login")
-                  else:
-                      print("[!] GAGAL: belum login, cookie tidak valid / expired")
+                  print(f"[+] Video ditemukan: {has_video}")
+                  print(f"[+] Error terdeteksi: {has_error}")
 
                   await browser.close()
 
@@ -214,17 +220,19 @@ jobs:
         if: always()
         run: sudo wg-quick down wg0 2>/dev/null || true
 
-      - name: Upload Screenshot to Release
+      - name: Upload Result to Release
         if: always()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: dola-cookie-${{ github.run_number }}
-          name: "dola.com Cookie Test #${{ github.run_number }}"
-          body_path: block_status.txt
-          files: dola_screenshot.png
+          tag_name: dola-video-${{ github.run_number }}
+          name: "Dola AI Video #${{ github.run_number }}"
+          body_path: result_status.txt
+          files: |
+            dola_video_result.png
+            dola_debug.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Print Status
+      - name: Print Result Status
         if: always()
-        run: cat block_status.txt
+        run: cat result_status.txt 2>/dev/null || echo "Status file tidak ditemukan"
