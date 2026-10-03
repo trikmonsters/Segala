@@ -1,4 +1,4 @@
-name: dola.com Screenshot with Cookie Login
+name: dola.com Screenshot with Cookie Login (Fixed)
 
 on:
   workflow_dispatch:
@@ -62,18 +62,16 @@ jobs:
           from playwright.async_api import async_playwright
 
           async def main():
-              # 1. Parse cookie dari Secret
               raw_cookies = os.environ.get("DOLA_COOKIES", "").strip()
               if not raw_cookies:
-                  print("[!] DOLA_COOKIES kosong, lanjut tanpa login")
+                  print("[!] DOLA_COOKIES kosong")
                   cookies = []
               else:
                   try:
                       cookies = json.loads(raw_cookies)
                       print(f"[+] Berhasil parse {len(cookies)} cookie")
                   except json.JSONDecodeError as e:
-                      print(f"[!] Gagal parse JSON cookie: {e}")
-                      print("[!] Pastikan format DOLA_COOKIES adalah JSON array")
+                      print(f"[!] Gagal parse JSON: {e}")
                       cookies = []
 
               async with async_playwright() as p:
@@ -85,10 +83,8 @@ jobs:
                                  "Chrome/120.0.0.0 Safari/537.36"
                   )
 
-                  # 2. Inject cookie sebelum navigasi
+                  # 1. Inject cookie SEBELUM navigasi
                   if cookies:
-                      # Playwright butuh field: name, value, domain, path
-                      # Cookie dari browser extension biasanya sudah punya field ini
                       normalized = []
                       for c in cookies:
                           if "name" in c and "value" in c:
@@ -98,7 +94,6 @@ jobs:
                                   "domain": c.get("domain", ".dola.com"),
                                   "path": c.get("path", "/"),
                               }
-                              # sameSite hanya boleh Strict/Lax/None
                               if c.get("sameSite") in ("Strict", "Lax", "None"):
                                   cookie["sameSite"] = c["sameSite"]
                               if "expires" in c and isinstance(c["expires"], (int, float)):
@@ -110,11 +105,13 @@ jobs:
                               normalized.append(cookie)
 
                       await context.add_cookies(normalized)
-                      print(f"[+] {len(normalized)} cookie disuntikkan ke context")
+                      print(f"[+] {len(normalized)} cookie disuntikkan")
+                      # Print nama cookie untuk debug (tanpa value)
+                      print(f"[+] Nama cookie: {[c['name'] for c in normalized]}")
 
                   page = await context.new_page()
 
-                  # 3. Buka dola.com
+                  # 2. Buka dola.com
                   print("[+] Membuka https://dola.com...")
                   response = await page.goto(
                       "https://dola.com",
@@ -124,51 +121,85 @@ jobs:
                   status = response.status if response else 'No response'
                   print(f"[+] HTTP Status: {status}")
 
-                  await page.wait_for_timeout(5000)
+                  # 3. JEDA 15 DETIK - biarkan session ter-load penuh
+                  print("[+] Menunggu 15 detik agar session ter-load...")
+                  await page.wait_for_timeout(15000)
 
-                  # 4. Screenshot
+                  # 4. Tunggu network idle (semua request selesai)
+                  try:
+                      await page.wait_for_load_state("networkidle", timeout=30000)
+                      print("[+] Network idle tercapai")
+                  except Exception as e:
+                      print(f"[!] Network idle timeout: {e}")
+
+                  # 5. Screenshot
                   await page.screenshot(path="dola_screenshot.png", full_page=True)
                   print("[+] Screenshot disimpan")
 
-                  # 5. Deteksi status login & blokir
+                  # 6. Deteksi login yang BENAR
                   title = await page.title()
                   content = await page.content()
                   print(f"[+] Title: {title}")
 
-                  # Cek elemen yang menandakan sudah login
-                  logged_in = False
-                  login_indicators = ["logout", "sign out", "profile", "avatar", "account"]
-                  content_lower = content.lower()
-                  if any(kw in content_lower for kw in login_indicators):
-                      logged_in = True
-                      print("[✓] Kemungkinan sudah login")
+                  # Cek apakah tombol "Log In" MASIH ada di halaman
+                  # Jika ada, berarti BELUM login
+                  has_login_button = await page.locator("text=Log In").count() > 0
 
-                  # Cek blokir wilayah
+                  # Cek elemen yang menandakan sudah login
+                  # (avatar, menu profil, tombol logout, dll)
+                  logged_in_indicators = [
+                      "[data-testid*='avatar']",
+                      "[class*='avatar']",
+                      "text=Log out",
+                      "text=Sign out",
+                      "text=Settings",
+                      "text=My Account"
+                  ]
+                  logged_in_signals = 0
+                  for sel in logged_in_indicators:
+                      try:
+                          cnt = await page.locator(sel).count()
+                          if cnt > 0:
+                              logged_in_signals += cnt
+                      except Exception:
+                          pass
+
+                  # Logika final
+                  if has_login_button:
+                      actually_logged_in = False
+                      print("[!] Tombol 'Log In' MASIH terlihat → BELUM login")
+                  elif logged_in_signals > 0:
+                      actually_logged_in = True
+                      print(f"[✓] Ditemukan {logged_in_signals} indikator login")
+                  else:
+                      actually_logged_in = False
+                      print("[?] Tidak ada tombol Log In, tapi tidak ada indikator login jelas")
+
+                  # Deteksi blokir wilayah
                   blocked_kw = [
                       "not available in this country",
                       "access denied",
-                      "blocked",
                       "captcha",
-                      "forbidden",
                       "just a moment"
                   ]
                   is_blocked = any(
-                      kw in title.lower() or kw in content_lower
+                      kw in title.lower() or kw in content.lower()
                       for kw in blocked_kw
                   )
 
                   with open("block_status.txt", "w") as f:
                       f.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
-                      f.write(f"logged_in={'YES' if logged_in else 'NO'}\n")
+                      f.write(f"logged_in={'YES' if actually_logged_in else 'NO'}\n")
+                      f.write(f"login_button_visible={'YES' if has_login_button else 'NO'}\n")
                       f.write(f"title={title}\n")
                       f.write(f"http_status={status}\n")
 
                   if is_blocked:
-                      print("[!] MASIH TERBLOCK")
-                  elif logged_in:
-                      print("[✓] Halaman normal & sudah login")
+                      print("[!] TERBLOCK WILAYAH")
+                  elif actually_logged_in:
+                      print("[✓] SUKSES: sudah login")
                   else:
-                      print("[?] Halaman normal tapi belum login")
+                      print("[!] GAGAL: belum login, cookie tidak valid / expired")
 
                   await browser.close()
 
