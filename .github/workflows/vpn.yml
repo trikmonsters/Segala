@@ -1,7 +1,7 @@
 name: dola.com Scrape with ProtonVPN + Tilion Fortress
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发，方便调试
 
 jobs:
   scrape:
@@ -25,29 +25,28 @@ jobs:
       - name: Connect to ProtonVPN
         run: |
           sudo wg-quick up wg0
-          echo "✅ VPN terhubung"
-          echo "IP publik saat ini:"
+          echo "✅ VPN 已连接"
+          echo "当前公网 IP:"
           curl -s ifconfig.me || curl -s ipinfo.io/ip
 
       - name: Verify VPN is Active
         run: |
           sudo wg show
           VPN_IP=$(curl -s ifconfig.me)
-          echo "IP yang digunakan saat ini: $VPN_IP"
-          if echo "$VPN_IP" | grep -qE "^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."; then
-            echo "⚠️ Peringatan: IP masih terlihat seperti IP internal, VPN mungkin tidak aktif"
-          fi
+          echo "正在使用的 IP: $VPN_IP"
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # 关键修正：安装 tilion-fortress 和 playwright
       - name: Install Tilion Fortress + Playwright
         run: |
           pip install tilion-fortress playwright
           playwright install chromium
 
+      # 关键修正：从 tilion_fortress 导入 Fortress
       - name: Scrape dola.com & Screenshot
         run: |
           python - <<'PYEOF'
@@ -56,34 +55,34 @@ jobs:
           from playwright.async_api import async_playwright
 
           async def main():
-              # 1. Mulai mesin stealth Tilion Fortress
+              # 1. 启动 Tilion Fortress 隐身引擎
               f = Fortress()
               await f.start()
               print(f"[+] Fortress CDP: {f.cdp_url}")
 
-              # 2. Playwright terhubung ke Fortress melalui CDP
+              # 2. Playwright 通过 CDP 连接到 Fortress
               async with async_playwright() as p:
                   browser = await p.chromium.connect_over_cdp(f.cdp_url)
                   page = await browser.new_page()
 
-                  # 3. Buka target
-                  print("[+] Membuka https://dola.com...")
+                  # 3. 打开目标网站
+                  print("[+] 正在打开 https://dola.com...")
                   response = await page.goto("https://dola.com", wait_until="domcontentloaded", timeout=60000)
 
-                  print(f"[+] HTTP Status: {response.status if response else 'No response'}")
+                  print(f"[+] HTTP 状态码: {response.status if response else '无响应'}")
 
-                  # 4. Tunggu tantangan (jika ada) selesai
+                  # 4. 等待挑战（如有）完成
                   await page.wait_for_timeout(5000)
 
-                  # 5. Screenshot full page
+                  # 5. 全页截图
                   screenshot_path = "dola_screenshot.png"
                   await page.screenshot(path=screenshot_path, full_page=True)
-                  print(f"[+] Screenshot disimpan: {screenshot_path}")
+                  print(f"[+] 截图已保存: {screenshot_path}")
 
-                  # 6. Deteksi sederhana apakah terblokir
+                  # 6. 简单检测是否被屏蔽
                   content = await page.content()
                   title = await page.title()
-                  print(f"[+] Judul halaman: {title}")
+                  print(f"[+] 页面标题: {title}")
 
                   blocked_keywords = ["access denied", "blocked", "cloudflare", "captcha", "forbidden", "403"]
                   title_lower = title.lower()
@@ -91,9 +90,9 @@ jobs:
                   is_blocked = any(kw in title_lower or kw in content_lower for kw in blocked_keywords)
 
                   if is_blocked:
-                      print("[!] Kemungkinan MASIH TERBLOKIR")
+                      print("[!] 可能仍被屏蔽")
                   else:
-                      print("[✓] Halaman terlihat NORMAL")
+                      print("[✓] 页面显示正常")
 
                   with open("block_status.txt", "w") as f_out:
                       f_out.write(f"status={'BLOCKED' if is_blocked else 'OK'}\n")
@@ -110,7 +109,7 @@ jobs:
         if: always()
         run: |
           sudo wg-quick down wg0 2>/dev/null || true
-          echo "🔌 VPN terputus"
+          echo "🔌 VPN 已断开"
 
       - name: Upload Screenshot to Release (no zip)
         if: always()
