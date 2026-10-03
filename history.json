@@ -499,6 +499,41 @@
       "concept": "FRAGILITY vs STRENGTH — Extremely delicate translucent facets endure violent folding dynamics without shattering.",
       "renderedAt": "2026-10-03T03:51:47.406Z",
       "run": "13"
+    },
+    {
+      "id": "cobalt-mycelium-scaffold",
+      "type": "neural-network",
+      "concept": "ORGANIC vs MECHANICAL — Bioluminescent fungal hyphae weave through precision-etched brass clockwork gears.",
+      "renderedAt": "2026-10-03T13:09:43.975Z",
+      "run": "14"
+    },
+    {
+      "id": "terracotta-dust-lattice",
+      "type": "particle-morph",
+      "concept": "ISOLATION vs CONNECTION — Dispersed particles of warm mineral dust unite into an interconnected acoustic matrix.",
+      "renderedAt": "2026-10-03T13:09:43.975Z",
+      "run": "14"
+    },
+    {
+      "id": "aeon-strata-luminescence",
+      "type": "data-flow",
+      "concept": "GROWTH vs DECAY — Eroding slate canyon walls decay outward as glowing aquamarine data streams deposit new mineral layers.",
+      "renderedAt": "2026-10-03T13:09:43.975Z",
+      "run": "14"
+    },
+    {
+      "id": "lichen-chronometer-pulse",
+      "type": "organic-growth",
+      "concept": "SPEED vs STILLNESS — Stationary obsidian stone stands still as hyper-accelerated lichen patterns rush across its surface.",
+      "renderedAt": "2026-10-03T13:09:43.975Z",
+      "run": "14"
+    },
+    {
+      "id": "amethyst-pleat-shatter",
+      "type": "geometric-transform",
+      "concept": "ORDER vs CHAOS — Rigid plum origami folds unravel into fluid chaotic ripples before locking into an crystalline matrix.",
+      "renderedAt": "2026-10-03T13:09:43.975Z",
+      "run": "14"
     }
   ],
   "version": 1
