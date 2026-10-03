@@ -1,18 +1,18 @@
-name: Render Premium Stickman Cinematic
+name: Render Premium Cinematic Stickman
 
 on:
   workflow_dispatch:
     inputs:
       duration_seconds:
-        description: 'Durasi video (detik, 6-15)'
+        description: 'Durasi video (detik, 8-15)'
         required: true
-        default: '10'
+        default: '12'
         type: string
 
 jobs:
   build-and-render:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -30,18 +30,16 @@ jobs:
         run: |
           cat > package.json << 'EOF'
           {
-            "name": "premium-stickman",
+            "name": "premium-cinematic-stickman",
             "version": "1.0.0",
             "private": true,
             "scripts": {
-              "render": "remotion render PremiumStickman out/premium.mp4"
+              "render": "remotion render PremiumCinematic out/premium.mp4"
             },
             "dependencies": {
               "@remotion/cli": "4.0.230",
-              "@remotion/google-fonts": "4.0.230",
-              "@remotion/shapes": "4.0.230",
               "@remotion/noise": "4.0.230",
-              "@remotion/paths": "4.0.230",
+              "@remotion/shapes": "4.0.230",
               "react": "18.3.1",
               "react-dom": "18.3.1",
               "remotion": "4.0.230"
@@ -76,7 +74,7 @@ jobs:
           EOF
 
       # ===============================================================
-      # 3. remotion.config.ts
+      # 3. remotion.config.ts (kualitas maksimal)
       # ===============================================================
       - name: Create remotion.config.ts
         run: |
@@ -84,12 +82,13 @@ jobs:
           import { Config } from '@remotion/cli/config';
 
           Config.setVideoImageFormat('jpeg');
-          Config.setJpegQuality(95);
+          Config.setJpegQuality(98);
           Config.setOverwriteOutput(true);
           Config.setCodec('h264');
-          Config.setCrf(16);
+          Config.setCrf(15);
           Config.setPixelFormat('yuv420p');
           Config.setColorSpace('bt709');
+          Config.setChromiumOpenGlRenderer('angle');
           EOF
 
       # ===============================================================
@@ -106,21 +105,21 @@ jobs:
           EOF
 
       # ===============================================================
-      # 5. src/Root.tsx  (10 detik @ 30fps = 300 frame, 9:16)
+      # 5. src/Root.tsx  (12s @ 30fps = 360 frame, 1080x1920)
       # ===============================================================
       - name: Create src/Root.tsx
         run: |
           cat > src/Root.tsx << 'EOF'
           import { Composition } from 'remotion';
-          import { PremiumStickman } from './PremiumStickman';
+          import { PremiumCinematic } from './PremiumCinematic';
 
           export const RemotionRoot: React.FC = () => {
             return (
               <>
                 <Composition
-                  id="PremiumStickman"
-                  component={PremiumStickman}
-                  durationInFrames={300}
+                  id="PremiumCinematic"
+                  component={PremiumCinematic}
+                  durationInFrames={360}
                   fps={30}
                   width={1080}
                   height={1920}
@@ -132,90 +131,83 @@ jobs:
           EOF
 
       # ===============================================================
-      # 6. src/PremiumStickman.tsx
-      #    - Cinematic stickman (SVG dengan gradient + glow)
-      #    - Particle gold floating
-      #    - Kinetic typography premium
-      #    - Camera shake + zoom (dolly)
-      #    - Vignette + film grain + light sweep
+      # 6. src/theme.ts  (palet & konstanta)
       # ===============================================================
-      - name: Create src/PremiumStickman.tsx
+      - name: Create src/theme.ts
         run: |
-          cat > src/PremiumStickman.tsx << 'EOF'
-          import React, { useMemo } from 'react';
-          import {
-            AbsoluteFill,
-            interpolate,
-            spring,
-            useCurrentFrame,
-            useVideoConfig,
-            Sequence,
-            Easing,
-            random,
-          } from 'remotion';
-          import { noise2D } from '@remotion/noise';
-
-          // =============================================================
-          // KONFIGURASI TEMA PREMIUM
-          // =============================================================
-          const THEME = {
+          cat > src/theme.ts << 'EOF'
+          export const THEME = {
             gold: '#D4AF37',
             goldLight: '#F5E6A8',
+            goldBright: '#FFE9A0',
             goldDeep: '#8B6914',
-            ink: '#0A0A0F',
-            inkSoft: '#14141C',
+            ink: '#07070B',
+            inkSoft: '#12121A',
             cream: '#F5F0E1',
-            accent: '#C9A227',
-          };
+            champagne: '#E8D8B0',
+            shadow: '#000000',
+          } as const;
 
-          // =============================================================
-          // BACKGROUND: gradient mesh + bokeh + light sweep
-          // =============================================================
-          const CinematicBackground: React.FC = () => {
+          export const SIZES = {
+            width: 1080,
+            height: 1920,
+            fps: 30,
+            durationInFrames: 360,
+          } as const;
+          EOF
+
+      # ===============================================================
+      # 7. src/atoms.tsx  (komponen kecil reusable)
+      # ===============================================================
+      - name: Create src/atoms.tsx
+        run: |
+          cat > src/atoms.tsx << 'EOF'
+          import React from 'react';
+          import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion';
+          import { noise2D } from '@remotion/noise';
+          import { THEME } from './theme';
+
+          // ---------- CINEMATIC BACKGROUND ----------
+          export const CinematicBackground: React.FC<{ intensity?: number }> = ({
+            intensity = 1,
+          }) => {
             const frame = useCurrentFrame();
-
-            // Slow drift light sweep
-            const sweepX = interpolate(frame, [0, 300], [-30, 130]);
+            const sweepX = interpolate(frame, [0, 360], [-40, 140], {
+              extrapolateRight: 'clamp',
+            });
 
             return (
               <AbsoluteFill style={{ background: THEME.ink }}>
-                {/* Radial gradient utama - gold glow dari tengah belakang */}
+                {/* Base radial gold dari tengah */}
                 <AbsoluteFill
                   style={{
-                    background: `radial-gradient(ellipse 70% 55% at 50% 45%, ${THEME.goldDeep}55 0%, transparent 70%)`,
+                    background: `radial-gradient(ellipse 75% 55% at 50% 42%, ${THEME.goldDeep}66 0%, transparent 68%)`,
+                    opacity: intensity,
                   }}
                 />
 
-                {/* Radial vignette dark */}
-                <AbsoluteFill
-                  style={{
-                    background:
-                      'radial-gradient(ellipse at center, transparent 30%, #000000 100%)',
-                    opacity: 0.85,
-                  }}
-                />
-
-                {/* Bokeh gold lembut - parallax */}
-                {Array.from({ length: 18 }).map((_, i) => {
-                  const seed = i * 7.3;
-                  const x = random(`bx-${i}`) * 1080;
-                  const y = random(`by-${i}`) * 1920;
-                  const size = 60 + random(`bs-${i}`) * 220;
-                  const drift = Math.sin(frame * 0.012 + seed) * 60;
-                  const opacity = 0.04 + random(`bo-${i}`) * 0.09;
+                {/* Layer bokeh gold */}
+                {Array.from({ length: 24 }).map((_, i) => {
+                  const seed = i * 5.37;
+                  const x = (Math.sin(seed) * 0.5 + 0.5) * 1080;
+                  const y = (Math.cos(seed * 1.7) * 0.5 + 0.5) * 1920;
+                  const size = 80 + Math.abs(Math.sin(seed * 2.1)) * 260;
+                  const drift = Math.sin(frame * 0.008 + seed) * 80;
+                  const opacity =
+                    (0.03 + Math.abs(Math.cos(seed)) * 0.07) * intensity;
                   return (
                     <div
-                      key={i}
+                      key={`bokeh-${i}`}
                       style={{
                         position: 'absolute',
                         left: x + drift,
-                        top: y + drift * 0.4,
+                        top: y + drift * 0.3,
                         width: size,
                         height: size,
                         borderRadius: '50%',
-                        background: `radial-gradient(circle, ${THEME.gold} 0%, transparent 70%)`,
+                        background: `radial-gradient(circle, ${THEME.gold} 0%, transparent 72%)`,
                         opacity,
-                        filter: 'blur(20px)',
+                        filter: 'blur(28px)',
                       }}
                     />
                   );
@@ -225,38 +217,50 @@ jobs:
                 <div
                   style={{
                     position: 'absolute',
-                    top: '-50%',
+                    top: '-60%',
                     left: `${sweepX}%`,
-                    width: '40%',
-                    height: '200%',
-                    background: `linear-gradient(90deg, transparent, ${THEME.goldLight}22, transparent)`,
-                    transform: 'rotate(15deg)',
-                    filter: 'blur(40px)',
+                    width: '42%',
+                    height: '220%',
+                    background: `linear-gradient(90deg, transparent 0%, ${THEME.goldBright}1f 45%, transparent 100%)`,
+                    transform: 'rotate(14deg)',
+                    filter: 'blur(48px)',
+                    opacity: intensity,
+                  }}
+                />
+
+                {/* Grid halus (texture premium) */}
+                <AbsoluteFill
+                  style={{
+                    backgroundImage:
+                      'linear-gradient(rgba(212,175,55,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(212,175,55,0.035) 1px, transparent 1px)',
+                    backgroundSize: '90px 90px',
+                    opacity: 0.6 * intensity,
                   }}
                 />
               </AbsoluteFill>
             );
           };
 
-          // =============================================================
-          // PARTICLE GOLD FLOATING (motion premium)
-          // =============================================================
-          const GoldParticles: React.FC = () => {
+          // ---------- GOLD PARTICLES ----------
+          export const GoldParticles: React.FC<{ count?: number }> = ({
+            count = 55,
+          }) => {
             const frame = useCurrentFrame();
-            const count = 40;
 
             return (
               <AbsoluteFill>
                 {Array.from({ length: count }).map((_, i) => {
-                  const baseX = random(`px-${i}`) * 1080;
-                  const baseY = random(`py-${i}`) * 1920;
-                  const speed = 0.4 + random(`ps-${i}`) * 1.6;
-                  const size = 2 + random(`pz-${i}`) * 5;
+                  const seed = i * 3.19;
+                  const baseX = (Math.sin(seed) * 0.5 + 0.5) * 1080;
+                  const baseY = (Math.cos(seed * 1.3) * 0.5 + 0.5) * 1920;
+                  const speed = 0.3 + Math.abs(Math.sin(seed * 0.7)) * 1.8;
+                  const size = 2 + Math.abs(Math.cos(seed)) * 5;
                   const y = (baseY - frame * speed) % 1920;
-                  const xWobble =
-                    Math.sin(frame * 0.03 + i) * 40;
+                  const xWobble = Math.sin(frame * 0.025 + i) * 45;
+                  const flicker = 0.5 + 0.5 * Math.sin(frame * 0.15 + i);
                   const opacity =
-                    (0.3 + random(`po-${i}`) * 0.7) *
+                    (0.35 + Math.abs(Math.sin(seed)) * 0.65) *
+                    flicker *
                     interpolate(
                       y,
                       [0, 200, 1700, 1920],
@@ -265,7 +269,7 @@ jobs:
                     );
                   return (
                     <div
-                      key={i}
+                      key={`p-${i}`}
                       style={{
                         position: 'absolute',
                         left: baseX + xWobble,
@@ -275,8 +279,8 @@ jobs:
                         borderRadius: '50%',
                         background: THEME.goldLight,
                         boxShadow: `0 0 ${size * 4}px ${THEME.gold}, 0 0 ${
-                          size * 8
-                        }px ${THEME.gold}66`,
+                          size * 10
+                        }px ${THEME.gold}55`,
                         opacity,
                       }}
                     />
@@ -286,120 +290,295 @@ jobs:
             );
           };
 
-          // =============================================================
-          // STICKMAN PREMIUM
-          // - Gradien gold pada garis tubuh
-          // - Glow lembut
-          // - Detail: mata glow, aksen
-          // =============================================================
-          const PremiumStickman: React.FC<{
+          // ---------- FILM GRAIN ----------
+          export const FilmGrain: React.FC = () => {
+            const frame = useCurrentFrame();
+            const opacity = 0.055 + Math.abs(noise2D('grain', frame * 0.7, 0)) * 0.04;
+            return (
+              <AbsoluteFill
+                style={{
+                  backgroundImage:
+                    'url("data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22140%22 height=%22140%22><filter id=%22n%22><feTurbulence type=%22fractalNoise%22 baseFrequency=%220.9%22 numOctaves=%222%22/></filter><rect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23n)%22/></svg>")',
+                  opacity,
+                  mixBlendMode: 'overlay',
+                  pointerEvents: 'none',
+                }}
+              />
+            );
+          };
+
+          // ---------- LETTERBOX (bar hitam bioskop) ----------
+          export const Letterbox: React.FC<{ barHeight?: number }> = ({
+            barHeight = 90,
+          }) => {
+            return (
+              <>
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: barHeight,
+                    background: '#000',
+                    zIndex: 40,
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: barHeight,
+                    background: '#000',
+                    zIndex: 40,
+                  }}
+                />
+              </>
+            );
+          };
+
+          // ---------- VIGNETTE + CHROMATIC EDGE ----------
+          export const VignetteLayer: React.FC = () => {
+            return (
+              <>
+                <AbsoluteFill
+                  style={{
+                    background:
+                      'radial-gradient(ellipse at center, transparent 42%, #000000dd 100%)',
+                    pointerEvents: 'none',
+                    zIndex: 30,
+                  }}
+                />
+                <AbsoluteFill
+                  style={{
+                    background:
+                      'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 20%, transparent 80%, rgba(0,0,0,0.45) 100%)',
+                    pointerEvents: 'none',
+                    zIndex: 31,
+                  }}
+                />
+              </>
+            );
+          };
+
+          // ---------- LENS FLARE ----------
+          export const LensFlare: React.FC<{ x?: number; y?: number; size?: number }> = ({
+            x = 70,
+            y = 25,
+            size = 500,
+          }) => {
+            const frame = useCurrentFrame();
+            const pulse = 0.9 + 0.1 * Math.sin(frame * 0.06);
+
+            return (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${x}%`,
+                  top: `${y}%`,
+                  width: size * pulse,
+                  height: size * pulse,
+                  transform: 'translate(-50%, -50%)',
+                  background: `radial-gradient(circle, ${THEME.goldBright}aa 0%, ${THEME.gold}44 30%, transparent 70%)`,
+                  filter: 'blur(18px)',
+                  opacity: 0.55,
+                  pointerEvents: 'none',
+                  zIndex: 25,
+                  mixBlendMode: 'screen',
+                }}
+              />
+            );
+          };
+          EOF
+
+      # ===============================================================
+      # 8. src/StickmanFigure.tsx  (karakter utama, premium)
+      # ===============================================================
+      - name: Create src/StickmanFigure.tsx
+        run: |
+          cat > src/StickmanFigure.tsx << 'EOF'
+          import React from 'react';
+          import { THEME } from './theme';
+
+          export const StickmanFigure: React.FC<{
             armLeft: number;
             armRight: number;
             legLeft: number;
             legRight: number;
             headTilt: number;
             glow: number;
-          }> = ({ armLeft, armRight, legLeft, legRight, headTilt, glow }) => {
+            scale?: number;
+          }> = ({ armLeft, armRight, legLeft, legRight, headTilt, glow, scale = 1 }) => {
+            const glowAlpha = Math.round(glow * 220)
+              .toString(16)
+              .padStart(2, '0');
+
             return (
               <svg
-                viewBox="-140 -220 280 440"
-                width={520}
-                height={820}
+                viewBox="-160 -240 320 480"
+                width={560 * scale}
+                height={880 * scale}
                 style={{
                   overflow: 'visible',
-                  filter: `drop-shadow(0 0 24px ${THEME.gold}${Math.round(
-                    glow * 200
-                  )
-                    .toString(16)
-                    .padStart(2, '0')}) drop-shadow(0 0 60px ${THEME.gold}66)`,
+                  filter: `drop-shadow(0 0 24px ${THEME.gold}${glowAlpha}) drop-shadow(0 0 70px ${THEME.gold}66) drop-shadow(0 30px 40px rgba(0,0,0,0.55))`,
                 }}
               >
                 <defs>
                   <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={THEME.goldLight} />
-                    <stop offset="50%" stopColor={THEME.gold} />
+                    <stop offset="0%" stopColor={THEME.goldBright} />
+                    <stop offset="35%" stopColor={THEME.gold} />
                     <stop offset="100%" stopColor={THEME.goldDeep} />
                   </linearGradient>
-                  <radialGradient id="headGrad" cx="0.4" cy="0.35">
-                    <stop offset="0%" stopColor={THEME.goldLight} />
-                    <stop offset="60%" stopColor={THEME.gold} />
+
+                  <radialGradient id="headGrad" cx="0.35" cy="0.3">
+                    <stop offset="0%" stopColor={THEME.goldBright} />
+                    <stop offset="55%" stopColor={THEME.gold} />
                     <stop offset="100%" stopColor={THEME.goldDeep} />
                   </radialGradient>
+
+                  <linearGradient id="bodySheen" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0" />
+                    <stop offset="45%" stopColor="#FFFFFF" stopOpacity="0.55" />
+                    <stop offset="55%" stopColor="#FFFFFF" stopOpacity="0.55" />
+                    <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+                  </linearGradient>
+
                   <filter id="softGlow">
-                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feGaussianBlur stdDeviation="2.6" result="blur" />
                     <feMerge>
                       <feMergeNode in="blur" />
                       <feMergeNode in="SourceGraphic" />
                     </feMerge>
                   </filter>
+
+                  <filter id="innerShadow">
+                    <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="b" />
+                    <feOffset dx="0" dy="3" />
+                    <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1" />
+                    <feFlood floodColor={THEME.ink} floodOpacity="0.7" />
+                    <feComposite in2="SourceGraphic" operator="in" />
+                    <feMerge>
+                      <feMergeNode in="SourceGraphic" />
+                      <feMergeNode />
+                    </feMerge>
+                  </filter>
                 </defs>
+
+                {/* Shadow di bawah karakter (ground shadow) */}
+                <ellipse
+                  cx={0}
+                  cy={210}
+                  rx={120}
+                  ry={16}
+                  fill={THEME.shadow}
+                  opacity={0.55}
+                  style={{ filter: 'blur(10px)' }}
+                />
 
                 <g
                   stroke="url(#bodyGrad)"
-                  strokeWidth={11}
+                  strokeWidth={12}
                   strokeLinecap="round"
                   fill="none"
                   filter="url(#softGlow)"
+                  transform={`rotate(${headTilt} 0 -155)`}
                 >
-                  {/* Kepala dengan gradien */}
+                  {/* Kepala */}
                   <circle
                     cx={0}
-                    cy={-150}
-                    r={52}
+                    cy={-155}
+                    r={54}
                     fill="url(#headGrad)"
                     stroke={THEME.goldDeep}
                     strokeWidth={4}
                   />
+                  {/* Highlight atas kepala */}
+                  <ellipse
+                    cx={-14}
+                    cy={-180}
+                    rx={20}
+                    ry={10}
+                    fill="#FFFFFF"
+                    opacity={0.35}
+                    stroke="none"
+                  />
 
                   {/* Mata glow */}
-                  <circle cx={-18} cy={-160} r={6} fill={THEME.ink} stroke="none" />
-                  <circle cx={18} cy={-160} r={6} fill={THEME.ink} stroke="none" />
-                  <circle cx={-18} cy={-160} r={2.5} fill={THEME.goldLight} stroke="none" />
-                  <circle cx={18} cy={-160} r={2.5} fill={THEME.goldLight} stroke="none" />
+                  <circle cx={-19} cy={-165} r={6.5} fill={THEME.ink} stroke="none" />
+                  <circle cx={19} cy={-165} r={6.5} fill={THEME.ink} stroke="none" />
+                  <circle cx={-19} cy={-165} r={2.6} fill={THEME.goldBright} stroke="none" />
+                  <circle cx={19} cy={-165} r={2.6} fill={THEME.goldBright} stroke="none" />
 
-                  {/* Mulut confident */}
+                  {/* Mulut confident (slight smirk) */}
                   <path
-                    d="M -20 -128 Q 0 -114 20 -128"
+                    d="M -22 -132 Q 0 -116 22 -132"
                     stroke={THEME.ink}
-                    strokeWidth={4}
+                    strokeWidth={4.5}
                     fill="none"
                   />
 
                   {/* Badan */}
-                  <line x1={0} y1={-95} x2={0} y2={70} />
+                  <line x1={0} y1={-100} x2={0} y2={72} />
 
-                  {/* Tangan kiri */}
-                  <g transform={`rotate(${armLeft} 0 -70)`}>
-                    <line x1={0} y1={-70} x2={-85} y2={25} />
+                  {/* Tangan */}
+                  <g transform={`rotate(${armLeft} 0 -72)`}>
+                    <line x1={0} y1={-72} x2={-88} y2={28} />
                   </g>
-                  {/* Tangan kanan */}
-                  <g transform={`rotate(${armRight} 0 -70)`}>
-                    <line x1={0} y1={-70} x2={85} y2={25} />
+                  <g transform={`rotate(${armRight} 0 -72)`}>
+                    <line x1={0} y1={-72} x2={88} y2={28} />
                   </g>
 
-                  {/* Kaki kiri */}
-                  <g transform={`rotate(${legLeft} 0 70)`}>
-                    <line x1={0} y1={70} x2={-55} y2={185} />
+                  {/* Kaki */}
+                  <g transform={`rotate(${legLeft} 0 72)`}>
+                    <line x1={0} y1={72} x2={-58} y2={190} />
                   </g>
-                  {/* Kaki kanan */}
-                  <g transform={`rotate(${legRight} 0 70)`}>
-                    <line x1={0} y1={70} x2={55} y2={185} />
+                  <g transform={`rotate(${legRight} 0 72)`}>
+                    <line x1={0} y1={72} x2={58} y2={190} />
                   </g>
+
+                  {/* Sheen overlay pada badan */}
+                  <line
+                    x1={0}
+                    y1={-100}
+                    x2={0}
+                    y2={72}
+                    stroke="url(#bodySheen)"
+                    strokeWidth={5}
+                    opacity={0.5}
+                  />
                 </g>
               </svg>
             );
           };
+          EOF
 
-          // =============================================================
-          // KINETIC TYPOGRAPHY PREMIUM
-          // =============================================================
-          const KineticText: React.FC<{
+      # ===============================================================
+      # 9. src/Typography.tsx  (kinetic typography + ornamen)
+      # ===============================================================
+      - name: Create src/Typography.tsx
+        run: |
+          cat > src/Typography.tsx << 'EOF'
+          import React from 'react';
+          import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
+          import { THEME } from './theme';
+
+          export const KineticText: React.FC<{
             text: string;
             delay: number;
             size?: number;
             letterSpacing?: number;
             variant?: 'hero' | 'sub' | 'tag';
-          }> = ({ text, delay, size = 130, letterSpacing = -2, variant = 'hero' }) => {
+            stagger?: number;
+          }> = ({
+            text,
+            delay,
+            size = 130,
+            letterSpacing = -2,
+            variant = 'hero',
+            stagger = 2,
+          }) => {
             const frame = useCurrentFrame();
             const { fps } = useVideoConfig();
 
@@ -408,43 +587,58 @@ jobs:
               fontFamily:
                 variant === 'hero'
                   ? '"Times New Roman", Georgia, serif'
+                  : variant === 'sub'
+                  ? 'Inter, Helvetica, Arial, sans-serif'
                   : 'Inter, Helvetica, Arial, sans-serif',
-              fontWeight: variant === 'hero' ? 900 : 600,
+              fontWeight: variant === 'hero' ? 900 : variant === 'sub' ? 700 : 500,
               fontSize: size,
               letterSpacing,
-              lineHeight: 0.95,
+              lineHeight: 0.92,
               color: THEME.cream,
               textTransform: 'uppercase',
             };
 
             return (
-              <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  flexWrap: 'wrap',
+                  textAlign: 'center',
+                }}
+              >
                 {chars.map((c, i) => {
                   const s = spring({
-                    frame: frame - delay - i * 2,
+                    frame: frame - delay - i * stagger,
                     fps,
                     config: { damping: 12, stiffness: 120 },
                   });
-                  const y = interpolate(s, [0, 1], [60, 0]);
-                  const o = interpolate(s, [0, 0.6], [0, 1], {
+                  const y = interpolate(s, [0, 1], [70, 0]);
+                  const o = interpolate(s, [0, 0.55], [0, 1], {
                     extrapolateLeft: 'clamp',
                     extrapolateRight: 'clamp',
                   });
-                  const blur = interpolate(s, [0, 1], [12, 0]);
+                  const blur = interpolate(s, [0, 1], [14, 0]);
+                  const rot = interpolate(s, [0, 1], [8, 0]);
                   return (
                     <span
                       key={i}
                       style={{
                         ...baseStyle,
                         display: 'inline-block',
-                        transform: `translateY(${y}px)`,
+                        transform: `translateY(${y}px) rotate(${rot}deg)`,
                         opacity: o,
                         filter: `blur(${blur}px)`,
-                        color: variant === 'hero' ? THEME.cream : THEME.gold,
+                        color:
+                          variant === 'hero'
+                            ? THEME.cream
+                            : variant === 'sub'
+                            ? THEME.gold
+                            : THEME.champagne,
                         textShadow:
                           variant === 'hero'
-                            ? `0 0 40px ${THEME.gold}44`
-                            : 'none',
+                            ? `0 0 50px ${THEME.gold}55, 0 2px 8px rgba(0,0,0,0.6)`
+                            : `0 0 30px ${THEME.gold}33`,
                       }}
                     >
                       {c === ' ' ? '\u00A0' : c}
@@ -455,10 +649,7 @@ jobs:
             );
           };
 
-          // =============================================================
-          // GARIS EMAS DEKORATIF (sub-ornament)
-          // =============================================================
-          const GoldDivider: React.FC<{ delay: number; width?: number }> = ({
+          export const GoldDivider: React.FC<{ delay: number; width?: number }> = ({
             delay,
             width = 420,
           }) => {
@@ -471,240 +662,316 @@ jobs:
                 style={{
                   height: 2,
                   width: w,
-                  background: `linear-gradient(90deg, transparent, ${THEME.gold}, transparent)`,
-                  boxShadow: `0 0 20px ${THEME.gold}88`,
-                  margin: '28px auto',
+                  background: `linear-gradient(90deg, transparent, ${THEME.gold}, ${THEME.goldBright}, ${THEME.gold}, transparent)`,
+                  boxShadow: `0 0 24px ${THEME.gold}aa`,
+                  margin: '26px auto',
                 }}
               />
             );
           };
 
-          // =============================================================
-          // FILM GRAIN + VIGNETTE (post-processing feel)
-          // =============================================================
-          const FilmGrain: React.FC = () => {
+          export const OrnamentCorner: React.FC<{
+            delay: number;
+            position: 'tl' | 'tr' | 'bl' | 'br';
+          }> = ({ delay, position }) => {
             const frame = useCurrentFrame();
-            const opacity = 0.06 + Math.abs(noise2D('grain', frame, 0)) * 0.04;
+            const { fps } = useVideoConfig();
+            const s = spring({ frame: frame - delay, fps, config: { damping: 20 } });
+            const opacity = interpolate(s, [0, 1], [0, 1], {
+              extrapolateLeft: 'clamp',
+              extrapolateRight: 'clamp',
+            });
+            const size = interpolate(s, [0, 1], [0, 90]);
+
+            const posStyle: React.CSSProperties = {};
+            if (position === 'tl') {
+              posStyle.top = 130;
+              posStyle.left = 60;
+              posStyle.borderTop = `2px solid ${THEME.gold}`;
+              posStyle.borderLeft = `2px solid ${THEME.gold}`;
+            } else if (position === 'tr') {
+              posStyle.top = 130;
+              posStyle.right = 60;
+              posStyle.borderTop = `2px solid ${THEME.gold}`;
+              posStyle.borderRight = `2px solid ${THEME.gold}`;
+            } else if (position === 'bl') {
+              posStyle.bottom = 130;
+              posStyle.left = 60;
+              posStyle.borderBottom = `2px solid ${THEME.gold}`;
+              posStyle.borderLeft = `2px solid ${THEME.gold}`;
+            } else {
+              posStyle.bottom = 130;
+              posStyle.right = 60;
+              posStyle.borderBottom = `2px solid ${THEME.gold}`;
+              posStyle.borderRight = `2px solid ${THEME.gold}`;
+            }
+
             return (
-              <AbsoluteFill
+              <div
                 style={{
-                  backgroundImage:
-                    'url("data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%22120%22><filter id=%22n%22><feTurbulence type=%22fractalNoise%22 baseFrequency=%220.9%22 numOctaves=%222%22/></filter><rect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23n)%22/></svg>")',
+                  position: 'absolute',
+                  width: size,
+                  height: size,
                   opacity,
-                  mixBlendMode: 'overlay',
-                  pointerEvents: 'none',
+                  boxShadow: `inset 0 0 20px ${THEME.gold}33`,
+                  ...posStyle,
                 }}
               />
-            );
-          };
-
-          // =============================================================
-          // KOMPONEN UTAMA
-          // =============================================================
-          export const PremiumStickman: React.FC = () => {
-            const frame = useCurrentFrame();
-            const { fps, durationInFrames } = useVideoConfig();
-
-            // -------- CAMERA SHAKE (noise based, halus) --------
-            const shakeX = noise2D('sx', frame * 0.05, 0) * 6;
-            const shakeY = noise2D('sy', frame * 0.05, 0) * 6;
-
-            // -------- DOLLY ZOOM (slow push-in) --------
-            const zoom = interpolate(
-              frame,
-              [0, durationInFrames],
-              [1.08, 1.0],
-              { easing: Easing.bezier(0.4, 0, 0.2, 1) }
-            );
-
-            // -------- ENTRANCE STICKMAN --------
-            const entry = spring({
-              frame: frame - 20,
-              fps,
-              config: { damping: 14, stiffness: 90 },
-            });
-            const translateY = interpolate(entry, [0, 1], [420, 0]);
-
-            // -------- ANIMASI TUBUH --------
-            const breathe = Math.sin(frame * 0.06) * 2;
-            const confidentSway = Math.sin(frame * 0.045) * 6;
-
-            // Fase 1 (0-120): pose diam elegan
-            // Fase 2 (120-180): angkat tangan (flex)
-            // Fase 3 (180-240): tunjuk ke kamera
-            // Fase 4 (240-300): turunkan tangan, sikap akhir
-
-            const flexSpring = spring({
-              frame: frame - 120,
-              fps,
-              config: { damping: 12, stiffness: 110 },
-            });
-            const pointSpring = spring({
-              frame: frame - 190,
-              fps,
-              config: { damping: 12, stiffness: 130 },
-            });
-            const restSpring = spring({
-              frame: frame - 255,
-              fps,
-              config: { damping: 14, stiffness: 100 },
-            });
-
-            let armLeft = -10 + confidentSway;
-            let armRight = 10 - confidentSway;
-            let headTilt = confidentSway * 0.2;
-
-            // Fase flex: kedua tangan ke atas
-            armLeft += interpolate(flexSpring, [0, 1], [0, -130]);
-            armRight += interpolate(flexSpring, [0, 1], [0, 130]);
-
-            // Fase point: tangan kanan menunjuk ke kamera (ke bawah)
-            const pointAmount = interpolate(pointSpring, [0, 1], [0, 1]) *
-              interpolate(restSpring, [0, 1], [1, 0]);
-            armRight += pointAmount * -60;
-            headTilt += pointAmount * 6;
-
-            // Rest: kembali netral
-            const restAmount = interpolate(restSpring, [0, 1], [0, 1]);
-            armLeft = armLeft * (1 - restAmount * 0.6);
-            armRight = armRight * (1 - restAmount * 0.6);
-
-            const legLeft = Math.sin(frame * 0.05) * 3;
-            const legRight = -Math.sin(frame * 0.05) * 3;
-
-            // Glow intensity naik saat flex
-            const glow = 0.35 + interpolate(flexSpring, [0, 1], [0, 0.5]);
-
-            // -------- TEKS PREMIUM (kinetic) --------
-            // Frame 0-90: hero text "MOVE IN SILENCE"
-            // Frame 90-180: "LET RESULTS SPEAK"
-            // Frame 180-300: "@YOURHANDLE"
-
-            return (
-              <AbsoluteFill
-                style={{
-                  background: THEME.ink,
-                  transform: `scale(${zoom}) translate(${shakeX}px, ${shakeY}px)`,
-                  overflow: 'hidden',
-                }}
-              >
-                <CinematicBackground />
-                <GoldParticles />
-
-                {/* STICKMAN - center, sedikit ke bawah */}
-                <AbsoluteFill
-                  style={{
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  }}
-                >
-                  <div
-                    style={{
-                      transform: `translateY(${translateY + breathe}px)`,
-                      marginTop: 160,
-                    }}
-                  >
-                    <PremiumStickman
-                      armLeft={armLeft}
-                      armRight={armRight}
-                      legLeft={legLeft}
-                      legRight={legRight}
-                      headTilt={headTilt}
-                      glow={glow}
-                    />
-                  </div>
-                </AbsoluteFill>
-
-                {/* TEKS HERO - atas */}
-                <AbsoluteFill
-                  style={{
-                    justifyContent: 'flex-start',
-                    alignItems: 'center',
-                    paddingTop: 180,
-                  }}
-                >
-                  <Sequence from={0} durationInFrames={95}>
-                    <KineticText text="MOVE IN" delay={10} size={140} />
-                    <KineticText text="SILENCE" delay={26} size={140} />
-                  </Sequence>
-
-                  <Sequence from={95} durationInFrames={90}>
-                    <KineticText text="LET" delay={0} size={140} />
-                    <KineticText text="RESULTS" delay={10} size={140} />
-                    <KineticText text="SPEAK" delay={26} size={140} />
-                  </Sequence>
-
-                  <Sequence from={185} durationInFrames={115}>
-                    <KineticText text="@YOURHANDLE" delay={0} size={72} variant="sub" />
-                    <GoldDivider delay={20} width={520} />
-                    <KineticText text="PREMIUM SERIES" delay={40} size={40} variant="tag" />
-                  </Sequence>
-                </AbsoluteFill>
-
-                {/* Subtitle bawah - selalu ada */}
-                <AbsoluteFill
-                  style={{
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                    paddingBottom: 120,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontFamily: 'Inter, Helvetica, Arial, sans-serif',
-                      fontSize: 26,
-                      letterSpacing: 8,
-                      color: THEME.gold,
-                      opacity: interpolate(frame, [0, 30], [0, 1], {
-                        extrapolateRight: 'clamp',
-                      }),
-                      textTransform: 'uppercase',
-                      fontWeight: 500,
-                    }}
-                  >
-                    · CINEMATIC · MINDSET · 2026 ·
-                  </div>
-                </AbsoluteFill>
-
-                {/* Post processing overlay */}
-                <FilmGrain />
-
-                {/* Vignette final (di atas semua) */}
-                <AbsoluteFill
-                  style={{
-                    background:
-                      'radial-gradient(ellipse at center, transparent 40%, #000000cc 100%)',
-                    pointerEvents: 'none',
-                  }}
-                />
-              </AbsoluteFill>
             );
           };
           EOF
 
       # ===============================================================
-      # 7. Install
+      # 10. src/PremiumCinematic.tsx  (komposisi utama, 4 scene)
       # ===============================================================
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
-
-      # ===============================================================
-      # 8. Render
-      # ===============================================================
-      - name: Render video
+      - name: Create src/PremiumCinematic.tsx
         run: |
-          npx remotion render PremiumStickman out/premium.mp4 \
-            --codec=h264 \
-            --crf=16 \
-            --concurrency=2 \
-            --pixel-format=yuv420p
+          cat > src/PremiumCinematic.tsx << 'EOF'
+          import React from 'react';
+          import {
+            AbsoluteFill,
+            interpolate,
+            spring,
+            useCurrentFrame,
+            useVideoConfig,
+            Sequence,
+            Easing,
+          } from 'remotion';
+          import { noise2D } from '@remotion/noise';
+          import { THEME } from './theme';
+          import {
+            CinematicBackground,
+            GoldParticles,
+            FilmGrain,
+            Letterbox,
+            VignetteLayer,
+            LensFlare,
+          } from './atoms';
+          import { StickmanFigure } from './StickmanFigure';
+          import { KineticText, GoldDivider, OrnamentCorner } from './Typography';
 
-      # ===============================================================
-      # 9. Upload artifact
-      # ===============================================================
-      - name: Upload video
-        uses: actions/upload-artifact@v4
-        with:
-          name: premium-stickman-cinematic
-          path: out/premium.mp4
-          retention-days: 7
+          // =============================================================
+          // Helper: scene camera (shake + dolly) per segmen
+          // =============================================================
+          const useSceneCamera = () => {
+            const frame = useCurrentFrame();
+            const shakeX = noise2D('sx', frame * 0.05, 0) * 5;
+            const shakeY = noise2D('sy', frame * 0.05, 0) * 5;
+            const zoom = interpolate(frame, [0, 360], [1.09, 1.0], {
+              easing: Easing.bezier(0.4, 0, 0.2, 1),
+            });
+            return { shakeX, shakeY, zoom };
+          };
+
+          // =============================================================
+          // SCENE 1 (frame 0-90): Entrance, pose elegan
+          // =============================================================
+          const Scene1: React.FC = () => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const entry = spring({
+              frame: frame - 15,
+              fps,
+              config: { damping: 14, stiffness: 90 },
+            });
+            const translateY = interpolate(entry, [0, 1], [520, 0]);
+            const breathe = Math.sin(frame * 0.06) * 2.5;
+            const sway = Math.sin(frame * 0.045) * 6;
+
+            return (
+              <>
+                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                  <div
+                    style={{
+                      transform: `translateY(${translateY + breathe}px)`,
+                      marginTop: 140,
+                    }}
+                  >
+                    <StickmanFigure
+                      armLeft={-10 + sway}
+                      armRight={10 - sway}
+                      legLeft={Math.sin(frame * 0.05) * 3}
+                      legRight={-Math.sin(frame * 0.05) * 3}
+                      headTilt={sway * 0.2}
+                      glow={0.45}
+                    />
+                  </div>
+                </AbsoluteFill>
+
+                <AbsoluteFill
+                  style={{
+                    justifyContent: 'flex-start',
+                    alignItems: 'center',
+                    paddingTop: 210,
+                  }}
+                >
+                  <KineticText text="MOVE IN" delay={20} size={148} />
+                  <KineticText text="SILENCE" delay={38} size={148} />
+                </AbsoluteFill>
+              </>
+            );
+          };
+
+          // =============================================================
+          // SCENE 2 (frame 90-180): Flex kedua tangan (power pose)
+          // =============================================================
+          const Scene2: React.FC = () => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+
+            const flex = spring({
+              frame: frame - 10,
+              fps,
+              config: { damping: 10, stiffness: 110 },
+            });
+            const glow = 0.4 + interpolate(flex, [0, 1], [0, 0.55]);
+
+            const armLeft = -10 + interpolate(flex, [0, 1], [0, -135]);
+            const armRight = 10 + interpolate(flex, [0, 1], [0, 135]);
+            const bodyPulse = 1 + interpolate(flex, [0, 1], [0, 0.04]);
+
+            return (
+              <>
+                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                  <div style={{ transform: `scale(${bodyPulse})`, marginTop: 140 }}>
+                    <StickmanFigure
+                      armLeft={armLeft}
+                      armRight={armRight}
+                      legLeft={Math.sin(frame * 0.08) * 4}
+                      legRight={-Math.sin(frame * 0.08) * 4}
+                      headTilt={-2}
+                      glow={glow}
+                    />
+                  </div>
+                </AbsoluteFill>
+
+                <AbsoluteFill
+                  style={{
+                    justifyContent: 'flex-start',
+                    alignItems: 'center',
+                    paddingTop: 210,
+                  }}
+                >
+                  <KineticText text="LET" delay={0} size={148} />
+                  <KineticText text="RESULTS" delay={10} size={148} />
+                  <KineticText text="SPEAK" delay={30} size={148} />
+                </AbsoluteFill>
+              </>
+            );
+          };
+
+          // =============================================================
+          // SCENE 3 (frame 180-270): Tunjuk ke kamera (call out)
+          // =============================================================
+          const Scene3: React.FC = () => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const point = spring({
+              frame: frame - 10,
+              fps,
+              config: { damping: 11, stiffness: 130 },
+            });
+
+            const armRight = 10 + interpolate(point, [0, 1], [0, -75]);
+            const headTilt = interpolate(point, [0, 1], [0, 7]);
+
+            return (
+              <>
+                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                  <div style={{ marginTop: 140 }}>
+                    <StickmanFigure
+                      armLeft={-20}
+                      armRight={armRight}
+                      legLeft={Math.sin(frame * 0.05) * 3}
+                      legRight={-Math.sin(frame * 0.05) * 3}
+                      headTilt={headTilt}
+                      glow={0.6}
+                    />
+                  </div>
+                </AbsoluteFill>
+
+                <AbsoluteFill
+                  style={{
+                    justifyContent: 'flex-start',
+                    alignItems: 'center',
+                    paddingTop: 240,
+                  }}
+                >
+                  <KineticText text="IT'S YOUR" delay={0} size={110} />
+                  <KineticText text="TIME" delay={18} size={160} />
+                </AbsoluteFill>
+              </>
+            );
+          };
+
+          // =============================================================
+          // SCENE 4 (frame 270-360): Brand end card
+          // =============================================================
+          const Scene4: React.FC = () => {
+            const frame = useCurrentFrame();
+            const { fps } = useVideoConfig();
+            const rest = spring({
+              frame: frame - 5,
+              fps,
+              config: { damping: 14, stiffness: 100 },
+            });
+
+            const armLeft = -20 * (1 - interpolate(rest, [0, 1], [0, 0.7]));
+            const armRight = 20 * (1 - interpolate(rest, [0, 1], [0, 0.7]));
+
+            return (
+              <>
+                <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+                  <div
+                    style={{
+                      transform: `translateY(${interpolate(
+                        rest,
+                        [0, 1],
+                        [60, 0]
+                      )}px)`,
+                      marginTop: 260,
+                      opacity: interpolate(rest, [0, 1], [0, 1], {
+                        extrapolateLeft: 'clamp',
+                        extrapolateRight: 'clamp',
+                      }),
+                    }}
+                  >
+                    <StickmanFigure
+                      armLeft={armLeft}
+                      armRight={armRight}
+                      legLeft={0}
+                      legRight={0}
+                      headTilt={0}
+                      glow={0.4}
+                      scale={0.9}
+                    />
+                  </div>
+                </AbsoluteFill>
+
+                <AbsoluteFill
+                  style={{
+                    justifyContent: 'flex-start',
+                    alignItems: 'center',
+                    paddingTop: 320,
+                  }}
+                >
+                  <KineticText text="@YOURHANDLE" delay={0} size={78} variant="sub" />
+                  <GoldDivider delay={20} width={560} />
+                  <KineticText
+                    text="PREMIUM SERIES · 2026"
+                    delay={40}
+                    size={38}
+                    variant="tag"
+                    letterSpacing={6}
+                  />
+                </AbsoluteFill>
+              </>
+            );
+          };
+
+          // =============================================================
+          // KOMPOSISI UTAMA
+          // =============================================================
+          export const PremiumCinematic: React.FC = () => {
+            const frame = useCurrentFrame();
+            const { shakeX, shakeY, zoom } = use
