@@ -569,6 +569,41 @@
       "concept": "FRAGILITY vs STRENGTH — Delicate rose-gold silk filaments spin under torsional stress to build an impenetrable geodesic violet armor.",
       "renderedAt": "2026-10-03T19:06:58.061Z",
       "run": "15"
+    },
+    {
+      "id": "gossamer-synapse-tensile",
+      "type": "neural-network",
+      "concept": "FRAGILITY vs STRENGTH: Gossamer micro-threads hold monolithic gravity wells under extreme tension without snapping.",
+      "renderedAt": "2026-10-04T04:21:05.856Z",
+      "run": "16"
+    },
+    {
+      "id": "kinetic-amber-stasis-core",
+      "type": "particle-morph",
+      "concept": "SPEED vs STILLNESS: Hyper-velocity particulate storm trapped in equilibrium around a dead-still levitating nucleus.",
+      "renderedAt": "2026-10-04T04:21:05.856Z",
+      "run": "16"
+    },
+    {
+      "id": "sapphire-laminar-conduit",
+      "type": "data-flow",
+      "concept": "ORDER vs CHAOS: Violent fluid turbulence forced into mathematical laminar flow via precision optical apertures.",
+      "renderedAt": "2026-10-04T04:21:05.856Z",
+      "run": "16"
+    },
+    {
+      "id": "vascular-xylem-chronometer",
+      "type": "organic-growth",
+      "concept": "ORGANIC vs MECHANICAL: Botanical xylem conduits biologically integrating with and driving rigid clockwork tracks.",
+      "renderedAt": "2026-10-04T04:21:05.856Z",
+      "run": "16"
+    },
+    {
+      "id": "bismuth-calcified-crystallite",
+      "type": "geometric-transform",
+      "concept": "GROWTH vs DECAY: Decaying oxidized geometric steps rapidly regenerating pristine crystal facets along fault lines.",
+      "renderedAt": "2026-10-04T04:21:05.856Z",
+      "run": "16"
     }
   ],
   "version": 1
