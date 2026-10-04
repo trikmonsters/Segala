@@ -1,6 +1,8 @@
 name: Auto Stock 4K Generator (Concept Assets, 1 ratio per topic)
 
 on:
+  schedule:
+    - cron: '0 */8 * * *'   # 3x sehari
   workflow_dispatch:
 
 permissions:
@@ -12,7 +14,7 @@ concurrency:
 
 env:
   # Daftar model Gemini (dicoba berurutan). Override lewat repo Variables: GEMINI_MODELS
-  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite' }}
+  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
 
 jobs:
   # ══════════════════════════════════════════════════════════
@@ -22,7 +24,7 @@ jobs:
   # ══════════════════════════════════════════════════════════
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
     outputs:
       comps: ${{ steps.comps.outputs.list }}
     steps:
@@ -628,7 +630,7 @@ jobs:
             phase: number;      // 0..1, posisi loop (satu-satunya sumber waktu)
             seconds: number;    // durasi loop dalam detik
             portrait: boolean;
-            ratio: '16:9' | '9:16';
+            ratio: '16:9' | '9:16' | '1:1';
             colors: Colors;
           };
 
@@ -660,6 +662,10 @@ jobs:
                 ctx.fillRect(0, 0, width, height);
               }
 
+              const aspect = width / height;
+
+              const ratio: '16:9' | '9:16' | '1:1' = aspect > 1.2 ? '16:9' : aspect > 0.8 ? '1:1' : '9:16';
+
               const s: DrawState = {
                 w: width,
                 h: height,
@@ -669,7 +675,7 @@ jobs:
                 phase: frame / durationInFrames,
                 seconds: durationInFrames / fps,
                 portrait: height > width,
-              ratio: width / height > 1.2 ? '16:9' : width / height < 0.8 ? '9:16',
+              ratio,
                 colors,
               };
 
@@ -806,6 +812,7 @@ jobs:
           const RATIOS = {
             "16:9": { key: "16x9", width: 3840, height: 2160 },
             "9:16": { key: "9x16", width: 2160, height: 3840 },
+            "1:1":  { key: "1x1",  width: 2160, height: 2160 },
           };
 
           const MODELS = (process.env.GEMINI_MODELS || "").split(",").map(s => s.trim()).filter(Boolean);
@@ -981,7 +988,7 @@ jobs:
            - 5 specific high-intent buyer search phrases (concrete nouns such as "medical record folder icon", not vague themes)
              with a relative demand label (high / medium);
            - the typical USE CASES, FUNCTIONS and TARGET PLATFORMS of those buyers (presentations, YouTube explainers, TikTok/Reels,
-             app promos, web hero sections, ads ...) and therefore which VIDEO ASPECT RATIO (16:9 or 9:16) they need;
+             app promos, web hero sections, ads ...) and therefore which VIDEO ASPECT RATIO (16:9, 9:16 or 1:1) they need;
            - what looks saturated (generic clip-art, same flat style) vs. what is under-served.
           Then add 3 emerging visual styles buyers/designers currently want, and seasonal/industry hooks for the next 90 days.
           Do NOT invent numeric search volumes — say so if no numbers were found. Name the sources you relied on.`;
