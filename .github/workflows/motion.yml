@@ -14,7 +14,7 @@ concurrency:
 
 env:
   # Daftar model Gemini (dicoba berurutan). Override lewat repo Variables: GEMINI_MODELS
-  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
+  GEMINI_MODELS: ${{ vars.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite' }}
 
 jobs:
   # ══════════════════════════════════════════════════════════
