@@ -41,7 +41,7 @@ jobs:
         run: |
           mkdir -p shots
           cat > upload.py << 'PYEOF'
-          import asyncio, os, json, base64, sys, time
+          import asyncio, os, json, base64, sys, time, re
           from playwright.async_api import async_playwright
 
           VIDEO = "secret.mp4"
@@ -146,79 +146,127 @@ jobs:
                   pass
               return True
 
-          async def is_uploaded(page):
+          async def count_items(page):
+              """Jumlah item di daftar New (ambil yang terbesar dari grid & label File types)."""
+              n_grid, n_label = 0, 0
               try:
-                  txt = (await page.locator(
-                      '[data-t="submit-moderation-button"]').inner_text()).strip().lower()
-                  if txt and not txt.startswith("submit 0"):
-                      return True
+                  n_grid = await page.locator('[data-t="assets-content-grid"] > *').count()
               except Exception:
                   pass
               try:
-                  n = await page.locator(
-                      '[data-t="assets-content-grid"] > *').count()
-                  if n > 0:
-                      return True
+                  t = await page.locator('[data-t="content-filter-menu"]').first.inner_text(timeout=2000)
+                  m = re.search(r"\((\d+)\)", t)
+                  if m:
+                      n_label = int(m.group(1))
               except Exception:
                   pass
-              return False
+              return max(n_grid, n_label)
 
-          async def wait_result(page, label):
+          async def stable_count(page, max_wait=30):
+              """Tunggu daftar item selesai dimuat (angka stabil 3x berturut-turut)."""
+              last, same = -1, 0
+              for _ in range(max_wait // 2):
+                  c = await count_items(page)
+                  if c == last:
+                      same += 1
+                  else:
+                      last, same = c, 0
+                  if same >= 2:
+                      break
+                  await page.wait_for_timeout(2000)
+              return last
+
+          async def wait_result(page, label, baseline, timeout_s):
               start = time.time()
               last_shot = 0
-              while time.time() - start < WAIT_UPLOAD_SECONDS:
-                  if await is_uploaded(page):
-                      log(f"✅ [{label}] File terdeteksi di UI")
+              while time.time() - start < timeout_s:
+                  c = await count_items(page)
+                  if c > baseline:
+                      log(f"✅ [{label}] Item bertambah: {baseline} -> {c}")
                       return True
                   elapsed = int(time.time() - start)
-                  if elapsed - last_shot >= 60:
+                  if elapsed - last_shot >= 30:
                       last_shot = elapsed
-                      log(f"  ...menunggu ({elapsed}s)")
+                      log(f"  ...menunggu ({elapsed}s) item masih {c}")
                       await shot(page, f"progress_{label}_{elapsed}s")
                   await page.wait_for_timeout(3000)
-              log(f"⚠️ [{label}] Tidak ada perubahan setelah {WAIT_UPLOAD_SECONDS}s")
+              log(f"⚠️ [{label}] Item tidak bertambah setelah {timeout_s}s (baseline {baseline})")
               return False
 
           # ---------------- Strategi upload ----------------
           async def upload_file(page, path):
+              size_mb = os.path.getsize(path) / 1024 / 1024
+              timeout_s = min(WAIT_UPLOAD_SECONDS, max(90, int(size_mb * 4)))
+
+              baseline = await stable_count(page)
+              log(f"Baseline item di daftar New: {baseline}")
+              await shot(page, "03_baseline")
+
               # Strategi A: isi input[type=file] tersembunyi langsung
               log("[A] set_input_files ke input tersembunyi...")
               try:
-                  await page.wait_for_selector('input[type="file"]',
-                                               state="attached", timeout=15000)
+                  await page.wait_for_selector('input[type="file"]', state="attached", timeout=15000)
+                  n_inputs = await page.locator('input[type="file"]').count()
+                  log(f"  jumlah input[type=file]: {n_inputs}")
                   fi = page.locator('input[type="file"]').first
                   await fi.set_input_files(path, timeout=120000)
-                  log("  file di-set, menunggu proses...")
+                  log("  file di-set, menunggu item bertambah...")
                   await shot(page, "10_A_setelah_set")
-                  if await wait_result(page, "A"):
+                  if await wait_result(page, "A", baseline, 60):
                       return True
               except Exception as e:
                   log(f"  A gagal: {e}")
 
-              # Strategi B: klik Upload -> (Browse) -> file chooser
-              log("[B] Klik tombol Upload + file chooser...")
+              # Strategi B: klik Upload -> overlay -> Browse -> file chooser
+              log("[B] Klik Upload, lalu Browse + file chooser...")
               try:
                   btn = page.locator('button:has-text("Upload")').first
                   box = await btn.bounding_box()
                   if box:
                       await page.mouse.move(box["x"] + box["width"] / 2,
                                             box["y"] + box["height"] / 2, steps=10)
+                  await btn.click()
+                  await page.wait_for_timeout(2000)
+                  await shot(page, "11_B_overlay")
                   async with page.expect_file_chooser(timeout=15000) as fc:
-                      await btn.click()
-                      try:
-                          await page.get_by_role("button", name="Browse").first.click(
-                              timeout=4000, force=True)
-                      except Exception:
-                          pass
+                      await page.get_by_text("Browse", exact=True).first.click(force=True)
                   chooser = await fc.value
                   await chooser.set_files(path)
-                  await shot(page, "11_B_setelah_chooser")
-                  if await wait_result(page, "B"):
+                  log("  file chooser terisi, menunggu item bertambah...")
+                  await shot(page, "12_B_setelah_chooser")
+                  if await wait_result(page, "B", baseline, timeout_s):
                       return True
               except Exception as e:
                   log(f"  B gagal: {e}")
 
+              # Strategi C: simulasi drag & drop pada dropzone
+              if size_mb <= 60:
+                  log("[C] Simulasi drop event pada dropzone...")
+                  try:
+                      data = base64.b64encode(open(path, "rb").read()).decode()
+                      res = await page.evaluate("""
+                      async ({data, name}) => {
+                        const bin = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+                        const file = new File([bin], name, {type: 'video/mp4'});
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
+                        const target = document.querySelector('.dropzone') || document.body;
+                        for (const t of ['dragenter', 'dragover', 'drop']) {
+                          target.dispatchEvent(new DragEvent(t, {
+                            bubbles: true, cancelable: true, dataTransfer: dt}));
+                        }
+                        return target.className;
+                      }
+                      """, {"data": data, "name": os.path.basename(path)})
+                      log(f"  drop dikirim ke: {res}")
+                      await shot(page, "13_C_setelah_drop")
+                      if await wait_result(page, "C", baseline, timeout_s):
+                          return True
+                  except Exception as e:
+                      log(f"  C gagal: {e}")
+
               return False
+
 
           # ---------------- Main ----------------
           async def main():
@@ -250,14 +298,23 @@ jobs:
                   page = await context.new_page()
 
                   # Log request upload untuk debug
+                  NOISE = ("nr-data.net", "sentry.io", "cc-api-data", "/log/",
+                           "google", "doubleclick")
                   def on_response(r):
                       try:
-                          u = r.url.lower()
-                          if r.request.method in ("POST", "PUT") and any(
-                                  k in u for k in ("upload", "ingest", "contributor", "s3")):
-                              log(f"🌐 {r.request.method} {r.status} {r.url[:110]}")
+                          u = r.url
+                          if r.request.method in ("POST", "PUT") and not any(
+                                  k in u for k in NOISE):
+                              log(f"🌐 {r.request.method} {r.status} {u[:120]}")
                       except Exception:
                           pass
+                  def on_failed(req):
+                      try:
+                          if not any(k in req.url for k in NOISE):
+                              log(f"🚫 request gagal: {req.url[:100]} {req.failure}")
+                      except Exception:
+                          pass
+                  page.on("requestfailed", on_failed)
                   page.on("response", on_response)
 
                   ok = False
