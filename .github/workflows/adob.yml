@@ -1,4 +1,4 @@
-name: Adobe Stock Contributor - Upload JPEG (Multi Strategy)
+name: Adobe Stock Contributor - Upload Video (secret.mp4)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
 
@@ -21,333 +21,212 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright requests Pillow
+          pip install playwright
           playwright install --with-deps chromium
 
-      - name: Download & Prepare Image
+      - name: Check video file
         run: |
-          cat > prepare.py << 'EOF'
-          import os, sys, requests
-          from io import BytesIO
-          from PIL import Image
+          if [ ! -f secret.mp4 ]; then
+            echo "❌ secret.mp4 tidak ditemukan di root repo"; exit 1
+          fi
+          ls -la secret.mp4
+          echo "--- ffprobe (hanya info, tidak menggagalkan job) ---"
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=codec_name,width,height,r_frame_rate:format=duration,size \
+            -of default=nw=1 secret.mp4 || echo "ffprobe tidak tersedia / gagal baca"
 
-          SRC_URL = "https://i.pinimg.com/736x/ba/53/9d/ba539da3426ce5359601138c02258f1d.jpg"
-          OUT = "upload.jpg"
-          MIN_MP, MAX_MP, MAX_MB = 4.0, 100.0, 45.0
-
-          def log(m): print(f"[PREP] {m}", flush=True)
-
-          r = requests.get(SRC_URL, headers={
-              "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-              "Referer": "https://www.pinterest.com/",
-          }, timeout=30)
-          r.raise_for_status()
-          log(f"Downloaded {len(r.content)} bytes")
-
-          img = Image.open(BytesIO(r.content))
-          log(f"Original: {img.size[0]}x{img.size[1]} {img.mode} {img.format}")
-          w, h = img.size
-          mp = (w * h) / 1_000_000
-
-          if img.mode in ("RGBA", "LA", "P"):
-              img = img.convert("RGB")
-
-          if mp < MIN_MP:
-              scale = (12.0 / mp) ** 0.5
-              new_w, new_h = int(w * scale), int(h * scale)
-              log(f"Upscale: {w}x{h} -> {new_w}x{new_h}")
-              img = img.resize((new_w, new_h), Image.LANCZOS)
-              w, h = new_w, new_h
-              mp = (w * h) / 1_000_000
-
-          if mp > MAX_MP:
-              scale = (MAX_MP / mp) ** 0.5
-              new_w, new_h = int(w * scale), int(h * scale)
-              img = img.resize((new_w, new_h), Image.LANCZOS)
-              w, h = new_w, new_h
-              mp = (w * h) / 1_000_000
-
-          q = 92
-          while q >= 60:
-              img.save(OUT, "JPEG", quality=q, optimize=True, progressive=True)
-              size_mb = os.path.getsize(OUT) / (1024 * 1024)
-              log(f"Quality {q} -> {size_mb:.2f} MB")
-              if size_mb <= MAX_MB:
-                  break
-              q -= 5
-
-          size_mb = os.path.getsize(OUT) / (1024 * 1024)
-          log(f"FINAL: {OUT} | {w}x{h} | {mp:.2f} MP | {size_mb:.2f} MB")
-
-          errs = []
-          if mp < MIN_MP: errs.append(f"MP {mp:.2f} < {MIN_MP}")
-          if mp > MAX_MP: errs.append(f"MP {mp:.2f} > {MAX_MP}")
-          if size_mb > MAX_MB: errs.append(f"Size {size_mb:.2f} MB > {MAX_MB} MB")
-          if errs:
-              log("❌ " + ", ".join(errs)); sys.exit(1)
-          log("✅ Validasi lolos")
-          EOF
-          python prepare.py
-          ls -la upload.jpg
-          file upload.jpg
-
-      - name: Upload to Adobe (all strategies)
+      - name: Upload video to Adobe Stock
         env:
           ADOBE_COOKIE: ${{ secrets.ADOBE_COOKIE }}
         run: |
           mkdir -p shots
           cat > upload.py << 'PYEOF'
-          import asyncio, os, json, base64
+          import asyncio, os, json, base64, sys, time
           from playwright.async_api import async_playwright
 
+          VIDEO = "secret.mp4"
+          UPLOADS_URL = "https://contributor.stock.adobe.com/en/uploads"
+          FAILURE_URL = "https://contributor.stock.adobe.com/en/uploads/logs/failure"
           SHOTS = "shots"
+          WAIT_UPLOAD_SECONDS = 600  # video besar butuh waktu
+
           def log(m): print(f"[UPLOAD] {m}", flush=True)
 
+          # ---------------- Cookie parser ----------------
           def parse_cookies(raw):
               raw = raw.strip()
               try:
                   dec = base64.b64decode(raw).decode("utf-8", errors="ignore")
                   if dec.strip().startswith("[") or dec.strip().startswith("{"):
                       raw = dec
-              except Exception: pass
+              except Exception:
+                  pass
+              out = []
               if raw.startswith("[") or raw.startswith("{"):
                   data = json.loads(raw)
-                  if isinstance(data, dict): data = [data]
-                  out = []
+                  if isinstance(data, dict):
+                      data = [data]
                   for c in data:
-                      if not c.get("name"): continue
-                      it = {"name": c["name"], "value": c.get("value"),
-                            "domain": c.get("domain"), "path": c.get("path","/")}
+                      if not c.get("name") or not c.get("domain"):
+                          continue
+                      it = {"name": c["name"], "value": c.get("value", ""),
+                            "domain": c["domain"], "path": c.get("path", "/")}
                       ss = c.get("sameSite")
-                      it["sameSite"] = ss if ss in ("Strict","Lax","None") else "Lax"
-                      if "expirationDate" in c: it["expires"] = int(c["expirationDate"])
-                      elif "expires" in c and c["expires"] not in (-1,None):
+                      it["sameSite"] = ss if ss in ("Strict", "Lax", "None") else "Lax"
+                      if "expirationDate" in c:
+                          it["expires"] = int(c["expirationDate"])
+                      elif c.get("expires") not in (-1, None):
                           it["expires"] = int(c["expires"])
-                      if "secure" in c: it["secure"] = bool(c["secure"])
-                      if "httpOnly" in c: it["httpOnly"] = bool(c["httpOnly"])
+                      if "secure" in c:
+                          it["secure"] = bool(c["secure"])
+                      if "httpOnly" in c:
+                          it["httpOnly"] = bool(c["httpOnly"])
                       out.append(it)
                   return out
-              out = []
+              # Format Netscape cookies.txt
               for ln in raw.splitlines():
                   ln = ln.strip()
-                  if not ln or ln.startswith("#"): continue
+                  if not ln or ln.startswith("#"):
+                      continue
                   p = ln.split("\t")
-                  if len(p) != 7: continue
-                  d,_,pa,se,ex,n,v = p
-                  it = {"name":n,"value":v,"domain":d,"path":pa,
-                        "secure": se.upper()=="TRUE","sameSite":"Lax"}
+                  if len(p) != 7:
+                      continue
+                  d, _, pa, se, ex, n, v = p
+                  it = {"name": n, "value": v, "domain": d, "path": pa,
+                        "secure": se.upper() == "TRUE", "sameSite": "Lax"}
                   try:
                       e = int(ex)
-                      if e>0: it["expires"]=e
-                  except: pass
+                      if e > 0:
+                          it["expires"] = e
+                  except Exception:
+                      pass
                   out.append(it)
               return out
 
+          # ---------------- Helpers ----------------
           async def shot(page, name, full=False):
               try:
-                  vp = os.path.join(SHOTS, f"{name}.png")
-                  await page.screenshot(path=vp, full_page=False)
-                  log(f"📸 {vp}")
-                  if full:
-                      fp = os.path.join(SHOTS, f"{name}_full.png")
-                      await page.screenshot(path=fp, full_page=True)
-                  hp = os.path.join(SHOTS, f"{name}.html")
+                  await page.screenshot(path=os.path.join(SHOTS, f"{name}.png"),
+                                        full_page=full)
                   html = await page.content()
-                  with open(hp, "w", encoding="utf-8") as f:
+                  with open(os.path.join(SHOTS, f"{name}.html"), "w",
+                            encoding="utf-8") as f:
                       f.write(html)
-                  log(f"📄 {hp} ({len(html)}B)")
+                  log(f"📸 {name}")
               except Exception as e:
                   log(f"❌ shot {name}: {e}")
 
-          async def dump_diagnostics(page, label):
-              """Dump info penting: frames, modal candidates, file inputs, buttons."""
-              log(f"=== DIAGNOSTICS [{label}] ===")
-              log(f"URL: {page.url}")
-              log(f"Title: {await page.title()}")
-              log(f"Frames: {len(page.frames)}")
-              for i, fr in enumerate(page.frames):
-                  log(f"  [{i}] {fr.url}")
-
+          async def open_uploads_page(page):
+              log("Buka halaman uploads...")
+              await page.goto(UPLOADS_URL, wait_until="domcontentloaded")
               try:
-                  inputs = await page.locator('input[type="file"]').count()
-                  log(f"input[type=file] count (main frame): {inputs}")
-              except Exception as e:
-                  log(f"  input check err: {e}")
+                  await page.wait_for_load_state("networkidle", timeout=30000)
+              except Exception:
+                  log("networkidle timeout (lanjut)")
+              await shot(page, "01_uploads")
 
-              for i, fr in enumerate(page.frames):
-                  if fr == page.main_frame: continue
-                  try:
-                      c = await fr.locator('input[type="file"]').count()
-                      if c > 0:
-                          log(f"  🎯 input[type=file] di frame [{i}]: {c}")
-                  except Exception: pass
-
-              try:
-                  buttons = await page.locator('button, a[role="button"]').all()
-                  uploads = []
-                  for b in buttons[:60]:
-                      try:
-                          t = (await b.inner_text()).strip()
-                          if "upload" in t.lower() and len(t) < 40:
-                              box = await b.bounding_box()
-                              uploads.append({"text": t, "box": box})
-                      except Exception: pass
-                  log(f"Tombol mengandung 'upload': {len(uploads)}")
-                  for u in uploads[:10]:
-                      log(f"  '{u['text']}' box={u['box']}")
-              except Exception as e:
-                  log(f"  button err: {e}")
-
-              try:
-                  modals = await page.evaluate("""
-                  () => {
-                    const out = [];
-                    document.querySelectorAll('*').forEach(el => {
-                      const s = getComputedStyle(el);
-                      if ((s.position === 'fixed' || s.position === 'absolute') &&
-                          parseInt(s.zIndex||0) > 50 &&
-                          el.offsetWidth > 200 && el.offsetHeight > 150) {
-                        out.push({
-                          tag: el.tagName,
-                          cls: (el.className||'').toString().slice(0,60),
-                          z: s.zIndex,
-                          w: el.offsetWidth, h: el.offsetHeight,
-                          text: (el.innerText||'').slice(0,80)
-                        });
-                      }
-                    });
-                    return out.slice(0,10);
-                  }
-                  """)
-                  log(f"Kandidat modal (fixed/absolute z>50): {len(modals)}")
-                  for m in modals:
-                      log(f"  <{m['tag']}> z={m['z']} {m['w']}x{m['h']} | {m['text'][:50]}")
-              except Exception as e:
-                  log(f"  modal err: {e}")
-              log(f"=== END DIAGNOSTICS ===")
-
-          async def try_open_upload(page):
-              """
-              Strategi berurutan untuk buka modal upload.
-              HANYA pakai halaman /portfolio sebagai entry point.
-              Return: True kalau input[type=file] terdeteksi.
-              """
-              base = "https://contributor.stock.adobe.com/en/portfolio"
-
-              # --- S0: Buka portfolio dulu ---
-              log("[S0] Buka portfolio...")
-              await page.goto(base, wait_until="domcontentloaded")
-              await page.wait_for_timeout(5000)
-              await shot(page, "01_portfolio")
-              await dump_diagnostics(page, "S0-portfolio")
-
-              # Cek kalau cookie invalid → redirect ke login
-              if "adobe.com/signin" in page.url or "/signin" in page.url:
-                  log("❌ Cookie expired — diarahkan ke sign-in")
+              if "/signin" in page.url or "auth.services.adobe.com" in page.url:
+                  log("❌ Cookie tidak valid / expired (redirect ke sign-in)")
                   return False
 
-              # --- S1: Cek kalau input file sudah ada di halaman ---
-              if await page.locator('input[type="file"]').count() > 0:
-                  log("[S1] input[type=file] sudah ada di halaman portfolio")
-                  await shot(page, "02_input_ditemukan")
-                  return True
-
-              # --- S2: Cari tombol Upload, klik dengan mouse move ---
-              log("[S2] Cari & klik tombol Upload (dengan mouse move)...")
-              selectors = [
-                  'header button:has-text("Upload")',
-                  '[role="banner"] button:has-text("Upload")',
-                  'button:has-text("Upload")',
-                  'a:has-text("Upload")',
-                  'button[class*="upload" i]',
-                  'a[href*="upload"]',
-                  '[data-testid*="upload" i]',
-              ]
-              clicked = False
-              for sel in selectors:
-                  try:
-                      loc = page.locator(sel)
-                      n = await loc.count()
-                      log(f"  '{sel}' → {n} elemen")
-                      for i in range(min(n, 5)):
-                          el = loc.nth(i)
-                          if not await el.is_visible(): continue
-                          box = await el.bounding_box()
-                          if not box: continue
-                          # Simulasi gerakan mouse dulu
-                          await page.mouse.move(box["x"] + box["width"]/2,
-                                                box["y"] + box["height"]/2,
-                                                steps=10)
-                          await page.wait_for_timeout(300)
-                          await el.click()
-                          log(f"  ✅ Klik '{sel}' #{i}")
-                          clicked = True
-                          break
-                      if clicked: break
-                  except Exception as e:
-                      log(f"  err '{sel}': {e}")
-
-              if clicked:
-                  await page.wait_for_timeout(5000)
-                  await shot(page, "03_setelah_klik_upload")
-                  await dump_diagnostics(page, "S3-after-click")
-                  if await page.locator('input[type="file"]').count() > 0:
-                      log("✅ Modal muncul setelah klik")
-                      return True
-
-              # --- S3: Tunggu lazy load hingga 30 detik ---
-              log("[S3] Tunggu input[type=file] hingga 30s (lazy load)...")
               try:
-                  await page.wait_for_selector('input[type="file"]', timeout=30000)
-                  log("✅ Muncul setelah tunggu")
-                  await shot(page, "04_lazy_muncul")
-                  return True
+                  await page.wait_for_selector(
+                      '[data-t="submit-moderation-button"]',
+                      state="attached", timeout=45000)
+                  log("✅ Halaman uploads siap")
               except Exception:
-                  log("  tidak muncul")
+                  log("❌ Halaman tidak render (blank / diblokir?)")
+                  await shot(page, "02_not_ready", full=True)
+                  return False
 
-              # --- S4: Cek semua frame ---
-              log("[S4] Cek semua frame...")
-              for i, fr in enumerate(page.frames):
-                  try:
-                      c = await fr.locator('input[type="file"]').count()
-                      if c > 0:
-                          log(f"✅ input[type=file] di frame [{i}]: {fr.url}")
-                          await shot(page, "05_frame_ditemukan")
-                          return True
-                  except Exception: pass
-
-              # --- S5: Force show semua input file (fallback) ---
-              log("[S5] Force-render input[type=file] tersembunyi...")
+              # Tutup banner kalau ada
               try:
-                  forced = await page.evaluate("""
-                  () => {
-                    const inputs = document.querySelectorAll('input[type="file"]');
-                    let n = 0;
-                    inputs.forEach(inp => {
-                      inp.style.display = 'block';
-                      inp.style.visibility = 'visible';
-                      inp.style.opacity = '1';
-                      inp.removeAttribute('hidden');
-                      n++;
-                    });
-                    return n;
-                  }
-                  """)
-                  log(f"  Force-render {forced} input file")
-                  if forced > 0:
-                      await shot(page, "06_forced_input")
-                      return True
-              except Exception as e:
-                  log(f"  err: {e}")
+                  await page.keyboard.press("Escape")
+              except Exception:
+                  pass
+              return True
 
-              # --- S6: Gagal ---
-              log("❌ Semua strategi gagal")
-              await shot(page, "07_gagal")
-              await dump_diagnostics(page, "S6-fail")
+          async def is_uploaded(page):
+              try:
+                  txt = (await page.locator(
+                      '[data-t="submit-moderation-button"]').inner_text()).strip().lower()
+                  if txt and not txt.startswith("submit 0"):
+                      return True
+              except Exception:
+                  pass
+              try:
+                  n = await page.locator(
+                      '[data-t="assets-content-grid"] > *').count()
+                  if n > 0:
+                      return True
+              except Exception:
+                  pass
               return False
 
+          async def wait_result(page, label):
+              start = time.time()
+              last_shot = 0
+              while time.time() - start < WAIT_UPLOAD_SECONDS:
+                  if await is_uploaded(page):
+                      log(f"✅ [{label}] File terdeteksi di UI")
+                      return True
+                  elapsed = int(time.time() - start)
+                  if elapsed - last_shot >= 60:
+                      last_shot = elapsed
+                      log(f"  ...menunggu ({elapsed}s)")
+                      await shot(page, f"progress_{label}_{elapsed}s")
+                  await page.wait_for_timeout(3000)
+              log(f"⚠️ [{label}] Tidak ada perubahan setelah {WAIT_UPLOAD_SECONDS}s")
+              return False
+
+          # ---------------- Strategi upload ----------------
+          async def upload_file(page, path):
+              # Strategi A: isi input[type=file] tersembunyi langsung
+              log("[A] set_input_files ke input tersembunyi...")
+              try:
+                  await page.wait_for_selector('input[type="file"]',
+                                               state="attached", timeout=15000)
+                  fi = page.locator('input[type="file"]').first
+                  await fi.set_input_files(path, timeout=120000)
+                  log("  file di-set, menunggu proses...")
+                  await shot(page, "10_A_setelah_set")
+                  if await wait_result(page, "A"):
+                      return True
+              except Exception as e:
+                  log(f"  A gagal: {e}")
+
+              # Strategi B: klik Upload -> (Browse) -> file chooser
+              log("[B] Klik tombol Upload + file chooser...")
+              try:
+                  btn = page.locator('button:has-text("Upload")').first
+                  box = await btn.bounding_box()
+                  if box:
+                      await page.mouse.move(box["x"] + box["width"] / 2,
+                                            box["y"] + box["height"] / 2, steps=10)
+                  async with page.expect_file_chooser(timeout=15000) as fc:
+                      await btn.click()
+                      try:
+                          await page.get_by_role("button", name="Browse").first.click(
+                              timeout=4000, force=True)
+                      except Exception:
+                          pass
+                  chooser = await fc.value
+                  await chooser.set_files(path)
+                  await shot(page, "11_B_setelah_chooser")
+                  if await wait_result(page, "B"):
+                      return True
+              except Exception as e:
+                  log(f"  B gagal: {e}")
+
+              return False
+
+          # ---------------- Main ----------------
           async def main():
+              if not os.path.isfile(VIDEO):
+                  log(f"❌ {VIDEO} tidak ada")
+                  return False
+              log(f"Video: {VIDEO} ({os.path.getsize(VIDEO)/1024/1024:.1f} MB)")
+
               cookies = parse_cookies(os.environ["ADOBE_COOKIE"])
               log(f"Loaded {len(cookies)} cookies")
 
@@ -356,17 +235,13 @@ jobs:
                       headless=True,
                       args=["--no-sandbox",
                             "--disable-blink-features=AutomationControlled",
-                            "--disable-dev-shm-usage"],
-                  )
+                            "--disable-dev-shm-usage"])
                   context = await browser.new_context(
                       user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
                       viewport={"width": 1366, "height": 900},
-                      locale="en-US",
-                  )
+                      locale="en-US")
                   await context.add_cookies(cookies)
-
-                  # Anti-detection
                   await context.add_init_script("""
                       Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                       window.chrome = {runtime: {}};
@@ -374,59 +249,41 @@ jobs:
 
                   page = await context.new_page()
 
-                  ok = await try_open_upload(page)
+                  # Log request upload untuk debug
+                  def on_response(r):
+                      try:
+                          u = r.url.lower()
+                          if r.request.method in ("POST", "PUT") and any(
+                                  k in u for k in ("upload", "ingest", "contributor", "s3")):
+                              log(f"🌐 {r.request.method} {r.status} {r.url[:110]}")
+                      except Exception:
+                          pass
+                  page.on("response", on_response)
+
+                  ok = False
+                  if await open_uploads_page(page):
+                      ok = await upload_file(page, VIDEO)
+
+                  log(f"HASIL UPLOAD: {ok}")
+                  await page.wait_for_timeout(5000)
+                  await shot(page, "20_final", full=True)
 
                   if not ok:
-                      log("Upload tidak bisa dilanjutkan. Cek screenshots & HTML di release.")
-                      try: await browser.close()
-                      except: pass
-                      return
+                      try:
+                          await page.goto(FAILURE_URL, wait_until="domcontentloaded")
+                          await page.wait_for_timeout(5000)
+                          await shot(page, "21_upload_issues")
+                      except Exception as e:
+                          log(f"gagal buka upload issues: {e}")
 
-                  # --- Lakukan upload ---
-                  log("=== MULAI UPLOAD ===")
                   try:
-                      fi = page.locator('input[type="file"]').first
-                      await fi.set_input_files("upload.jpg", timeout=30000)
-                      log("✅ File di-set via input[type=file]")
-                  except Exception as e:
-                      log(f"set_input_files gagal: {e}")
-                      # Fallback: cari di frame
-                      for fr in page.frames:
-                          try:
-                              fi = fr.locator('input[type="file"]').first
-                              if await fi.count() > 0:
-                                  await fi.set_input_files("upload.jpg", timeout=30000)
-                                  log(f"✅ File di-set via frame {fr.url}")
-                                  break
-                          except Exception: pass
-
-                  await page.wait_for_timeout(3000)
-                  await shot(page, "10_setelah_set_file")
-
-                  log("Tunggu proses Adobe (15s)...")
-                  await page.wait_for_timeout(15000)
-                  await shot(page, "11_15_detik")
-
-                  log("Tunggu proses Adobe (30s total)...")
-                  await page.wait_for_timeout(15000)
-                  await shot(page, "12_30_detik")
-
-                  # Cek pesan error di UI
-                  try:
-                      txt = await page.locator("body").inner_text()
-                      for kw in ["4 MP","4 megapixel","minimum","45 MB",
-                                 "not supported","invalid","rejected",
-                                 "too small","too large","error","failed"]:
-                          if kw.lower() in txt.lower():
-                              log(f"⚠️  Keyword: '{kw}'")
-                  except Exception: pass
-
-                  log(f"Final URL: {page.url}")
-                  try: await browser.close()
-                  except: pass
+                      await browser.close()
+                  except Exception:
+                      pass
+                  return ok
 
           if __name__ == "__main__":
-              asyncio.run(main())
+              sys.exit(0 if asyncio.run(main()) else 1)
           PYEOF
 
           python upload.py
@@ -479,7 +336,7 @@ jobs:
               -H "Authorization: token $GITHUB_TOKEN" \
               -H "Content-Type: $CT" \
               --data-binary @"$f" \
-              "$UPLOAD_URL?name=$NAME"
+              "$UPLOAD_URL?name=$NAME" > /dev/null
             echo "Uploaded: $NAME"
           done
 
