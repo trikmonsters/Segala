@@ -63,14 +63,7 @@ jobs:
           echo "VPN terhubung, IP:"
           curl -s ifconfig.me
 
-      - name: Generate AI video on Dola
-        env:
-          DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
-          PRODUCT_NAME: ${{ inputs.product_name }}
-          STYLE_NOTES: ${{ inputs.style_notes }}
-          SEND_RULES: ${{ inputs.send_rules && '1' || '0' }}
-          PRODUCT_IMAGE: produk.png
-          MAX_ATTEMPTS: "3"
+      - name: Tulis script bot
         run: |
           cat > dola_bot.py <<'PYEOF'
           import asyncio
@@ -78,6 +71,7 @@ jobs:
           import json
           import os
           import random
+          import subprocess
           import traceback
 
           import cv2
@@ -619,7 +613,7 @@ jobs:
                       await handle_captcha(page)
                   s = await snapshot(page)
 
-                  if [u for u in s["urls"] if u not in base["urls"]] or s["vcount"] > base["vcount"]:
+                  if [u for u in s["urls"] if u not in base["urls"]]:
                       return "video", s
                   if s["overload"] > base["overload"]:
                       return "overload", s
@@ -635,7 +629,7 @@ jobs:
                   last_text = s["text"]
 
                   if seen_gen and not s["generating"]:
-                      if s["big"] > base["big"] and finished_for >= 10:
+                      if (s["big"] > base["big"] or s["vcount"] > base["vcount"]) and finished_for >= 10:
                           return "video_poster", s
                       if finished_for >= 60:
                           return "done_no_media", s
@@ -678,26 +672,58 @@ jobs:
                   info(f"aktivasi media gagal: {str(e)[:80]}")
 
 
+          FETCH_B64_JS = """async (u) => { const r = await fetch(u); const b = await r.blob();
+              return await new Promise(res => { const f = new FileReader();
+              f.onload = () => res(f.result.split(',')[1]); f.readAsDataURL(b); }); }"""
+
+
+          def pick_src(urls):
+              """Pilih URL video hasil: utamakan host dola.com dan mime video, ambil yang terbaru."""
+              if not urls:
+                  return None
+
+              def score(u):
+                  sc = 0
+                  if u.startswith("http"):
+                      sc += 1
+                  if "dola.com" in u[:70]:
+                      sc += 2
+                  if "mime_type=video" in u or "/video/" in u:
+                      sc += 2
+                  return sc
+
+              return max(reversed(urls), key=score)
+
+
           async def save_video(context, page, src):
               if not src:
                   return False
+              data = b""
               try:
-                  if src.startswith("blob:"):
-                      b64 = await page.evaluate(
-                          """async (u) => { const r = await fetch(u); const b = await r.blob();
-                          return await new Promise(res => { const f = new FileReader();
-                          f.onload = () => res(f.result.split(',')[1]); f.readAsDataURL(b); }); }""",
-                          src,
-                      )
-                      data = base64.b64decode(b64)
-                  else:
-                      data = await (await context.request.get(src)).body()
+                  if not src.startswith("blob:"):
+                      resp = await context.request.get(src, headers={"Referer": "https://www.dola.com/"})
+                      info(f"unduh langsung: HTTP {resp.status}")
+                      if resp.ok:
+                          data = await resp.body()
                   if len(data) < 10_000:
-                      warn(f"file terlalu kecil ({len(data)} B), kemungkinan bukan video")
+                      info("coba unduh lewat fetch di dalam halaman")
+                      b64 = await page.evaluate(FETCH_B64_JS, src)
+                      data = base64.b64decode(b64)
+                  if len(data) < 10_000:
+                      warn(f"file terlalu kecil ({len(data)} B), link mungkin kedaluwarsa")
                       return False
                   with open("result.mp4", "wb") as f:
                       f.write(data)
                   ok(f"video disimpan: result.mp4 ({len(data) // 1024} KB)")
+                  try:
+                      out = subprocess.run(
+                          ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=width,height",
+                           "-of", "csv=p=0", "result.mp4"],
+                          capture_output=True, text=True, timeout=20,
+                      ).stdout.split()
+                      info("detail video (lebar,tinggi / durasi detik): " + " / ".join(out))
+                  except Exception:
+                      pass
                   return True
               except Exception as e:
                   warn(f"gagal unduh video: {str(e)[:120]}")
@@ -809,8 +835,7 @@ jobs:
                               snap = await snapshot(page)
                               await describe_media(page, snap, base)
                               new = [u for u in snap["urls"] if u not in base["urls"]]
-                          web = [u for u in new if not u.startswith("blob:")]
-                          src = (web or new or [None])[-1]
+                          src = pick_src(new)
                           if await save_video(context, page, src):
                               status["video_saved"] = "YES"
                           else:
@@ -837,7 +862,16 @@ jobs:
 
           asyncio.run(main())
           PYEOF
-          xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
+
+      - name: Generate AI video on Dola
+        env:
+          DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
+          PRODUCT_NAME: ${{ inputs.product_name }}
+          STYLE_NOTES: ${{ inputs.style_notes }}
+          SEND_RULES: ${{ inputs.send_rules && '1' || '0' }}
+          PRODUCT_IMAGE: produk.png
+          MAX_ATTEMPTS: "3"
+        run: xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
 
       - name: Disconnect VPN
         if: always()
@@ -849,6 +883,7 @@ jobs:
         with:
           name: dola-debug-${{ github.run_number }}
           if-no-files-found: ignore
+          retention-days: 3
           path: |
             install.log
             dola.log
@@ -868,6 +903,7 @@ jobs:
             result.mp4
             dola_video_result.png
             dola_debug.png
+            dola_text.txt
             attach_failed.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
