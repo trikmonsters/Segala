@@ -714,10 +714,10 @@ jobs:
           set -euo pipefail
           npx remotion render \
             src/index.ts \
-            MindBotionSkincare \
+            MindBlowingSkincare \
             out/mindblowing-skincare.mp4 \
             --codec=h264 \
-            --crf=15 \
+            --crf=19 \
             --concurrency=2 \
             --pixel-format=yuv420p
 
@@ -732,4 +732,4 @@ jobs:
         with:
           name: mindblowing-skincare-video
           path: out/mindblowing-skincare.mp4
-          retention-days: 30
+          retention-days: 1
