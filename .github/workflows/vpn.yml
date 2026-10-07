@@ -74,6 +74,7 @@ jobs:
         run: |
           cat > dola_bot.py <<'PYEOF'
           import asyncio
+          import base64
           import json
           import os
           import random
@@ -378,60 +379,178 @@ jobs:
                   log(f"[ui] dump gagal: {e}")
 
 
+          ATTACH_SIGNAL_JS = """() => document.querySelectorAll(
+              "img, canvas, video, [class*='attach' i], [class*='preview' i], [class*='thumb' i], [class*='file' i]"
+          ).length"""
+
+          UPLOADING_JS = """() => [...document.querySelectorAll(
+              "[class*='uploading' i], [class*='progress' i], [role='progressbar']"
+          )].filter(e => e.offsetParent !== null).length"""
+
+          CLIPBOARD_WRITE_JS = """async (b64) => {
+              const bin = atob(b64); const arr = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+              const blob = new Blob([arr], {type: 'image/png'});
+              await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+              return true;
+          }"""
+
+          SYNTH_PASTE_JS = """(b64) => {
+              const bin = atob(b64); const arr = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+              const file = new File([arr], 'produk.png', {type: 'image/png'});
+              const dt = new DataTransfer(); dt.items.add(file);
+              const t = document.activeElement || document.querySelector('[contenteditable=true],textarea');
+              t.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+              return true;
+          }"""
+
+
+          def image_png_b64(path):
+              data = open(path, "rb").read()
+              if os.path.splitext(path)[1].lower() != ".png":
+                  im = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+                  data = cv2.imencode(".png", im)[1].tobytes()
+              return base64.b64encode(data).decode()
+
+
+          async def attach_signal(page):
+              try:
+                  return await page.evaluate(ATTACH_SIGNAL_JS)
+              except Exception:
+                  return 0
+
+
+          async def wait_upload_done(page, max_s=40):
+              await page.wait_for_timeout(6000)
+              waited = 6
+              while waited < max_s:
+                  try:
+                      n = await page.evaluate(UPLOADING_JS)
+                  except Exception:
+                      n = 0
+                  if n == 0:
+                      break
+                  await page.wait_for_timeout(2000)
+                  waited += 2
+              log(f"[+] Upload selesai (menunggu {waited}s)")
+
+
           async def attach_image(page, path):
+              """Upload gambar dengan cara yang sama seperti manual: copy gambar lalu Ctrl+V di input."""
               if not os.path.exists(path):
                   log(f"[!] File gambar tidak ada: {path}")
                   return False
+              b64 = image_png_b64(path)
+              before = await attach_signal(page)
 
-              inputs = page.locator("input[type='file']")
-              if await inputs.count() > 0:
-                  try:
-                      await inputs.last.set_input_files(path)
-                      log("[+] Gambar di-attach lewat input[type=file]")
-                      await page.wait_for_timeout(8000)
+              # Cara 1: clipboard asli + Ctrl+V
+              try:
+                  await page.evaluate(CLIPBOARD_WRITE_JS, b64)
+                  await page.keyboard.press("Control+V")
+                  await page.wait_for_timeout(5000)
+                  after = await attach_signal(page)
+                  log(f"[+] Paste Ctrl+V: sinyal {before} -> {after}")
+                  if after > before:
+                      await wait_upload_done(page)
                       return True
-                  except Exception as e:
-                      log(f"[-] set_input_files gagal: {str(e)[:120]}")
+              except Exception as e:
+                  log(f"[-] Clipboard paste gagal: {str(e)[:150]}")
 
-              for sel in (
-                  "[aria-label*='upload' i]", "[aria-label*='attach' i]", "[aria-label*='image' i]",
-                  "[data-testid*='upload' i]", "[data-testid*='attach' i]",
-                  "button[class*='upload' i]", "button[class*='attach' i]", "[class*='upload' i]",
-              ):
-                  loc = page.locator(sel)
-                  if await loc.count() == 0:
-                      continue
-                  try:
-                      async with page.expect_file_chooser(timeout=5000) as fc_info:
-                          await loc.first.click()
-                      chooser = await fc_info.value
-                      await chooser.set_files(path)
-                      log(f"[+] Gambar di-attach lewat file chooser ({sel})")
-                      await page.wait_for_timeout(8000)
+              # Cara 2: event paste sintetis
+              try:
+                  await page.evaluate(SYNTH_PASTE_JS, b64)
+                  await page.wait_for_timeout(5000)
+                  after = await attach_signal(page)
+                  log(f"[+] Paste sintetis: sinyal {before} -> {after}")
+                  if after > before:
+                      await wait_upload_done(page)
                       return True
+              except Exception as e:
+                  log(f"[-] Paste sintetis gagal: {str(e)[:150]}")
+
+              # Cara 3: menu "+" -> "Upload File or Image" (file chooser)
+              try:
+                  item = page.get_by_text("Upload File or Image", exact=False)
+                  if await item.count() == 0:
+                      plus = page.locator("div[contenteditable='true'], textarea").first.locator(
+                          "xpath=ancestor::*[.//button][1]"
+                      ).locator("button").first
+                      await plus.click(timeout=3000)
+                      await page.wait_for_timeout(800)
+                  async with page.expect_file_chooser(timeout=6000) as fc_info:
+                      await page.get_by_text("Upload File or Image", exact=False).first.click()
+                  chooser = await fc_info.value
+                  await chooser.set_files(path)
+                  log("[+] Gambar di-attach lewat menu Upload File or Image")
+                  await wait_upload_done(page)
+                  return True
+              except Exception as e:
+                  log(f"[-] Menu upload gagal: {str(e)[:150]}")
+                  try:
+                      await page.keyboard.press("Escape")
                   except Exception:
-                      continue
+                      pass
               return False
 
 
           async def send_message(page, text, image=None):
-              if image:
-                  if not await attach_image(page, image):
-                      await page.screenshot(path="attach_failed.png", full_page=True)
-                      await dump_ui(page)
-                      return False
-                  await page.screenshot(path="after_attach.png")
               for sel in ("textarea", "div[contenteditable='true']"):
                   loc = page.locator(sel)
-                  if await loc.count() > 0:
-                      el = loc.first
-                      await el.click()
-                      await el.fill(text)
-                      await page.wait_for_timeout(800)
-                      await page.keyboard.press("Enter")
-                      return True
+                  if await loc.count() == 0:
+                      continue
+                  el = loc.first
+                  await el.click()
+                  await el.fill(text)
+                  await page.wait_for_timeout(500)
+                  if image:
+                      await el.focus()
+                      if not await attach_image(page, image):
+                          await page.screenshot(path="attach_failed.png", full_page=True)
+                          await dump_ui(page)
+                          return False
+                      await page.screenshot(path="after_attach.png")
+                      await el.focus()
+                  await page.wait_for_timeout(1000)
+                  await page.keyboard.press("Enter")
+                  return True
               await page.screenshot(path="dola_debug.png", full_page=True)
               await dump_ui(page)
+              return False
+
+
+          async def dismiss_banners(page):
+              for name in ("OK", "Accept", "Got it", "Agree"):
+                  try:
+                      btn = page.get_by_role("button", name=name, exact=True)
+                      if await btn.count() > 0:
+                          await btn.first.click(timeout=2000)
+                          log(f"[+] Banner ditutup ({name})")
+                          await page.wait_for_timeout(500)
+                          return
+                  except Exception:
+                      pass
+
+
+          async def wait_idle_after_rules(page, base_ready, max_s=240):
+              """Tunggu AI selesai membalas aturan: RULES_READY muncul lalu halaman diam."""
+              elapsed, stable, seen = 0, 0, False
+              last = await body_text(page)
+              while elapsed < max_s:
+                  await page.wait_for_timeout(5000)
+                  elapsed += 5
+                  text = await body_text(page)
+                  if text.count(SENT_READY) > base_ready:
+                      seen = True
+                  stable = stable + 5 if text == last else 0
+                  last = text
+                  if seen and stable >= 10:
+                      log("[✓] AI menyetujui aturan dan sudah selesai membalas")
+                      return True
+                  if stable >= 45:
+                      log("[-] Halaman diam 45s tanpa RULES_READY, lanjut saja")
+                      return False
+              log("[-] Batas waktu menunggu aturan, lanjut saja")
               return False
 
 
@@ -475,6 +594,12 @@ jobs:
                   context = await browser.new_context(
                       viewport={"width": 1366, "height": 768}, locale="en-US"
                   )
+                  try:
+                      await context.grant_permissions(
+                          ["clipboard-read", "clipboard-write"], origin="https://www.dola.com"
+                      )
+                  except Exception as e:
+                      log(f"[-] Izin clipboard gagal: {e}")
                   page = await context.new_page()
                   try:
                       cookies = load_cookies()
@@ -488,6 +613,7 @@ jobs:
                       await page.wait_for_timeout(8000)
                       status["captcha_solved"] = "YES" if await handle_captcha(page) else "NO"
                       await page.wait_for_timeout(3000)
+                      await dismiss_banners(page)
                       await page.screenshot(path="start_page.png")
 
                       # ---- Prompt 1: aturan ----
@@ -499,15 +625,11 @@ jobs:
                           log("[+] Prompt aturan terkirim")
                           await page.wait_for_timeout(4000)
                           base_ready = (await body_text(page)).count(SENT_READY)
-                          for _ in range(24):
-                              await page.wait_for_timeout(5000)
-                              if (await body_text(page)).count(SENT_READY) > base_ready:
-                                  log("[✓] AI menyetujui aturan")
-                                  break
-                          else:
-                              log("[-] Tidak ada RULES_READY, lanjut saja")
+                          await wait_idle_after_rules(page, base_ready)
 
                       # ---- Prompt 2: generate + gambar produk, dengan retry ----
+                      log("[+] Jeda 3 detik sebelum prompt ke-2")
+                      await page.wait_for_timeout(3000)
                       known = await get_video_urls(page)
                       prompt, use_image = GENERATE_PROMPT, True
                       video_src, state = None, "none"
