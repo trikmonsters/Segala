@@ -370,29 +370,6 @@ jobs:
             );
           };
 
-          const RackFocus: React.FC<{ children: React.ReactNode; startBlur?: number; endBlur?: number; focusFrame?: number; dur?: number }> = ({
-            children,
-            startBlur = 12,
-            endBlur = 0,
-            focusFrame = 30,
-            dur = 120,
-          }) => {
-            const f = useCurrentFrame();
-            const blur = interpolate(f, [0, focusFrame, dur], [startBlur, 0, endBlur], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-            return <AbsoluteFill style={{ filter: `blur(${blur}px)` }}>{children}</AbsoluteFill>;
-          };
-
-          const SpeedRamp: React.FC<{ children: React.ReactNode; slowStart?: number; slowEnd?: number; duration: number }> = ({
-            children,
-            slowStart = 0,
-            slowEnd = 60,
-            duration,
-          }) => {
-            const f = useCurrentFrame();
-            const ramp = interpolate(f, [slowStart, slowEnd, duration], [1.0, 1.05, 1.12], { easing: ease.cine, extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
-            return <AbsoluteFill style={{ transform: `scale(${ramp})` }}>{children}</AbsoluteFill>;
-          };
-
           const ChromaticLayer: React.FC<{ intensity?: number }> = ({ intensity = 1 }) => {
             const f = useCurrentFrame();
             const shift = Math.sin(f / 40) * 2 * intensity;
@@ -737,7 +714,7 @@ jobs:
           set -euo pipefail
           npx remotion render \
             src/index.ts \
-            MindBlowingSkincare \
+            MindBotionSkincare \
             out/mindblowing-skincare.mp4 \
             --codec=h264 \
             --crf=15 \
