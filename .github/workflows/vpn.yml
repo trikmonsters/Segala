@@ -1,7 +1,20 @@
-name: Dola AI Video Generation (Patchright + ddddocr)
+name: Dola AI Beauty Affiliate Video (Patchright + ddddocr)
 
 on:
   workflow_dispatch:
+    inputs:
+      product_name:
+        description: "Nama/deskripsi produk (kosongkan = produk di gambar referensi)"
+        required: false
+        default: ""
+      style_notes:
+        description: "Arahan tambahan (opsional), mis. 'bathroom setting, pink palette'"
+        required: false
+        default: ""
+      send_rules:
+        description: "Kirim prompt aturan dulu (anti-konfirmasi / OVERLOAD)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -9,11 +22,19 @@ permissions:
 jobs:
   generate-video:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cek gambar referensi produk
+        run: |
+          if [ ! -f produk.png ]; then
+            echo "::error::produk.png tidak ditemukan di root repo"
+            exit 1
+          fi
+          ls -la produk.png
 
       - name: Install system packages
         run: |
@@ -42,16 +63,516 @@ jobs:
           echo "VPN terhubung, IP:"
           curl -s ifconfig.me
 
-      - name: Generate AI Video on Dola
+      - name: Generate AI video on Dola
         env:
           DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
-        run: xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
+          PRODUCT_NAME: ${{ inputs.product_name }}
+          STYLE_NOTES: ${{ inputs.style_notes }}
+          SEND_RULES: ${{ inputs.send_rules && '1' || '0' }}
+          PRODUCT_IMAGE: produk.png
+          MAX_ATTEMPTS: "3"
+        run: |
+          cat > dola_bot.py <<'PYEOF'
+          import asyncio
+          import json
+          import os
+          import random
+          import traceback
+
+          import cv2
+          import ddddocr
+          import numpy as np
+          from patchright.async_api import async_playwright
+
+          TARGET_URL = "https://www.dola.com/chat"
+          IMAGE_PATH = os.path.abspath(os.environ.get("PRODUCT_IMAGE", "produk.png"))
+          PRODUCT_NAME = os.environ.get("PRODUCT_NAME", "").strip() or "the beauty product in the reference image"
+          STYLE_NOTES = os.environ.get("STYLE_NOTES", "").strip()
+
+          SENT_OVERLOAD = "VIDEO_OVERLOAD"
+          SENT_READY = "RULES_READY"
+          MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+          SEND_RULES = os.environ.get("SEND_RULES", "1") == "1"
+          MAX_CAPTCHA_TRIES = 5
+          VIDEO_TIMEOUT_S = 480
+          POLL_S = 15
+          STABLE_S = 120
+          BACKOFF_S = [60, 180, 300]
+
+          # --------------------------------------------------------------------------
+          # PROMPT
+          # --------------------------------------------------------------------------
+          RULES_PROMPT = (
+              "RULES for this whole chat. Follow them for every message from now on.\n"
+              "1) When I ask for a video, generate it immediately with your video generation "
+              "tool and attach the finished video file in your reply.\n"
+              "2) When I attach a product image, treat it as the exact visual reference of the "
+              "product and keep the product identical in the video.\n"
+              "3) Never ask me questions, never ask for confirmation, never offer options or "
+              "alternatives. If something is unspecified, choose a sensible default yourself.\n"
+              "4) Never answer with only a script, storyboard, description or apology instead "
+              "of the video.\n"
+              "5) If you cannot produce the video for any reason (tool busy, queue full, rate "
+              f"limit, quota, error), reply with exactly this one word and nothing else: {SENT_OVERLOAD}\n"
+              "6) Never say the video is ready unless the video file is actually attached.\n"
+              f"To confirm you understood, reply with exactly: {SENT_READY}"
+          )
+
+          VIDEO_BRIEF = (
+              f"Create a premium 15-second vertical (9:16) UGC-style beauty ad video for TikTok/Reels "
+              f"featuring {PRODUCT_NAME}, exactly as shown in the attached reference image.\n\n"
+              "PRODUCT FIDELITY (highest priority): reproduce the product from the reference image "
+              "exactly: same shape, proportions, color, cap or pump, packaging and label layout. "
+              "Do not redesign, recolor or invent any text. Keep the label sharp, legible and "
+              "unaltered. The product must be clearly visible in most shots.\n\n"
+              "TALENT & SETTING: one natural-looking woman with realistic skin texture (visible pores, "
+              "no plastic or over-smoothed skin), clean minimal vanity or bathroom-shelf background, "
+              "soft neutral tones, tidy and aspirational.\n\n"
+              "SHOT LIST:\n"
+              "0-2s HOOK: close-up of her hand picking up the product and turning it to camera, "
+              "then a quick glance and a soft smile at the lens.\n"
+              "2-6s APPLICATION: macro of the texture, then smooth, realistic application on cheek "
+              "or hand.\n"
+              "6-11s RESULT: soft glowing skin in natural light, gentle head turn, relaxed "
+              "satisfied expression, macro of skin detail.\n"
+              "11-15s HERO: she holds the product beside her face with the label facing the camera, "
+              "slow push-in, ends on a clean stable hero frame of the product.\n\n"
+              "STYLE: natural window light, warm soft highlights, shallow depth of field, "
+              "handheld smartphone feel with gentle stabilization, smooth continuous motion, "
+              "consistent lighting and exposure, high-end beauty commercial look, sharp 4K detail.\n\n"
+              "AUDIO: soft upbeat lo-fi background music, no speech. No captions, subtitles, "
+              "watermarks or logos other than the product's own label.\n\n"
+              "COMPLIANCE: no medical or miracle claims, no exaggerated before/after, "
+              "only believable everyday results.\n\n"
+              "AVOID: distorted hands or extra fingers, warped or morphing packaging, garbled text, "
+              "flicker, sudden cuts, uncanny face."
+          )
+          if STYLE_NOTES:
+              VIDEO_BRIEF += f"\n\nEXTRA DIRECTION: {STYLE_NOTES}"
+
+          GENERATE_PROMPT = (
+              "Generate this video now and attach the video file in this reply. "
+              "No questions, no confirmation. "
+              f"If you cannot, reply with exactly: {SENT_OVERLOAD}\n\n" + VIDEO_BRIEF
+          )
+          NUDGE_PROMPT = (
+              "Do not ask or explain anything. Generate the video now and attach the video file. "
+              f"If you cannot, reply with exactly: {SENT_OVERLOAD}"
+          )
+
+          slide_det = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
+
+
+          def log(*a):
+              print(*a, flush=True)
+
+
+          # --------------------------------------------------------------------------
+          # Util
+          # --------------------------------------------------------------------------
+          def load_cookies():
+              raw = os.environ.get("DOLA_COOKIES", "").strip()
+              if not raw:
+                  return []
+              out = []
+              for c in json.loads(raw):
+                  if "name" not in c or "value" not in c:
+                      continue
+                  ck = {
+                      "name": c["name"],
+                      "value": c["value"],
+                      "domain": c.get("domain", ".dola.com"),
+                      "path": c.get("path", "/"),
+                  }
+                  ss = str(c.get("sameSite", "")).capitalize()
+                  if ss in ("Strict", "Lax", "None"):
+                      ck["sameSite"] = ss
+                  exp = c.get("expires", c.get("expirationDate"))
+                  if isinstance(exp, (int, float)) and exp > 0:
+                      ck["expires"] = exp
+                  if c.get("secure") is not None:
+                      ck["secure"] = bool(c["secure"])
+                  if c.get("httpOnly") is not None:
+                      ck["httpOnly"] = bool(c["httpOnly"])
+                  out.append(ck)
+              return out
+
+
+          async def captcha_visible(page):
+              for ctx in [page] + list(page.frames):
+                  try:
+                      if await ctx.locator("text=Verify to continue").count() > 0:
+                          return True
+                  except Exception:
+                      pass
+              return False
+
+
+          async def fetch_bytes(page, src):
+              if src.startswith("data:"):
+                  import base64
+                  return base64.b64decode(src.split(",", 1)[1])
+              resp = await page.context.request.get(src)
+              return await resp.body()
+
+
+          def gap_x_ddddocr(piece_bytes, bg_bytes):
+              res = slide_det.slide_match(piece_bytes, bg_bytes, simple_target=True)
+              return res["target"][0]
+
+
+          def gap_x_opencv(piece_bytes, bg_bytes):
+              bg = cv2.imdecode(np.frombuffer(bg_bytes, np.uint8), cv2.IMREAD_COLOR)
+              pc = cv2.imdecode(np.frombuffer(piece_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+              if pc.ndim == 3 and pc.shape[2] == 4:
+                  ys, xs = np.where(pc[:, :, 3] > 20)
+                  if len(xs):
+                      pc = pc[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+                  pc = cv2.cvtColor(pc[:, :, :3], cv2.COLOR_BGR2GRAY)
+              elif pc.ndim == 3:
+                  pc = cv2.cvtColor(pc, cv2.COLOR_BGR2GRAY)
+              res = cv2.matchTemplate(
+                  cv2.Canny(cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY), 100, 200),
+                  cv2.Canny(pc, 100, 200),
+                  cv2.TM_CCOEFF_NORMED,
+              )
+              return cv2.minMaxLoc(res)[3][0]
+
+
+          async def solve_slider_once(page):
+              ctx = None
+              for c in [page] + list(page.frames):
+                  try:
+                      if await c.locator("[class*='captcha' i] img").count() >= 2:
+                          ctx = c
+                          break
+                  except Exception:
+                      pass
+              if ctx is None:
+                  log("[!] Gambar captcha tidak ditemukan (cek selector)")
+                  return False
+
+              imgs = ctx.locator("[class*='captcha' i] img")
+              items = []
+              for i in range(await imgs.count()):
+                  el = imgs.nth(i)
+                  box = await el.bounding_box()
+                  src = await el.get_attribute("src")
+                  if box and src and box["width"] > 5:
+                      items.append((box["width"] * box["height"], box, src))
+              if len(items) < 2:
+                  log("[!] Gambar captcha < 2")
+                  return False
+              items.sort(key=lambda t: t[0], reverse=True)
+              _, bg_box, bg_src = items[0]
+              _, pc_box, pc_src = items[-1]
+
+              bg_bytes = await fetch_bytes(page, bg_src)
+              pc_bytes = await fetch_bytes(page, pc_src)
+              bg_w = cv2.imdecode(np.frombuffer(bg_bytes, np.uint8), cv2.IMREAD_COLOR).shape[1]
+
+              try:
+                  gx = gap_x_ddddocr(pc_bytes, bg_bytes)
+                  how = "ddddocr"
+              except Exception as e:
+                  log(f"[-] ddddocr gagal ({e}), pakai OpenCV")
+                  gx = gap_x_opencv(pc_bytes, bg_bytes)
+                  how = "opencv"
+
+              scale = bg_box["width"] / bg_w
+              distance = gx * scale - (pc_box["x"] - bg_box["x"])
+              log(f"[+] {how}: gap_x={gx}px asli, jarak drag={distance:.1f}px layar")
+
+              handle = ctx.locator(
+                  "[class*='captcha' i] [class*='slider' i], "
+                  "[class*='captcha' i] [class*='drag' i], "
+                  "[class*='captcha' i] [class*='knob' i]"
+              ).last
+              hb = await handle.bounding_box()
+              if not hb:
+                  log("[!] Handle slider tidak ditemukan")
+                  return False
+
+              x0, y0 = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+              await page.mouse.move(x0 - 40, y0 + 25, steps=10)
+              await page.mouse.move(x0, y0, steps=8)
+              await page.wait_for_timeout(random.randint(250, 600))
+              await page.mouse.down()
+              steps = random.randint(28, 45)
+              for i in range(1, steps + 1):
+                  t = i / steps
+                  ease = 1 - (1 - t) ** 3
+                  await page.mouse.move(
+                      x0 + distance * ease + random.uniform(-0.6, 0.6),
+                      y0 + random.uniform(-1.5, 1.5),
+                  )
+                  await page.wait_for_timeout(random.randint(8, 30))
+              await page.mouse.move(x0 + distance + random.uniform(2, 4), y0)
+              await page.wait_for_timeout(random.randint(60, 140))
+              await page.mouse.move(x0 + distance, y0)
+              await page.wait_for_timeout(random.randint(120, 260))
+              await page.mouse.up()
+              await page.wait_for_timeout(2500)
+              return not await captcha_visible(page)
+
+
+          async def handle_captcha(page):
+              for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
+                  if not await captcha_visible(page):
+                      log("[✓] Tidak ada captcha")
+                      return True
+                  log(f"[+] Captcha terdeteksi, percobaan {attempt}/{MAX_CAPTCHA_TRIES}")
+                  await page.screenshot(path=f"captcha_try{attempt}.png")
+                  try:
+                      if await solve_slider_once(page):
+                          log("[✓] Slider puzzle lolos")
+                          return True
+                  except Exception:
+                      log("[!] Slider error:\n" + traceback.format_exc())
+                  for ctx in [page] + list(page.frames):
+                      try:
+                          r = ctx.locator("[class*='refresh' i]").first
+                          if await r.count():
+                              await r.click(timeout=2000)
+                              break
+                      except Exception:
+                          pass
+                  await page.wait_for_timeout(2000)
+              return not await captcha_visible(page)
+
+
+          # --------------------------------------------------------------------------
+          # Chat helpers
+          # --------------------------------------------------------------------------
+          async def body_text(page):
+              try:
+                  return await page.evaluate("document.body.innerText")
+              except Exception:
+                  return ""
+
+
+          async def get_video_urls(page):
+              urls = set()
+              vids = page.locator("video")
+              for i in range(await vids.count()):
+                  el = vids.nth(i)
+                  src = await el.get_attribute("src") or ""
+                  if not src:
+                      s = el.locator("source").first
+                      if await s.count():
+                          src = await s.get_attribute("src") or ""
+                  if src.startswith("http"):
+                      urls.add(src)
+              return urls
+
+
+          async def dump_ui(page):
+              """Bantu debug: cetak tombol/input yang ada di halaman."""
+              try:
+                  rows = await page.evaluate("""() => [...document.querySelectorAll('button,input,[role=button]')]
+                      .slice(0, 60).map(e => [e.tagName, e.type || '', e.getAttribute('aria-label') || '',
+                      (e.className && e.className.toString().slice(0, 60)) || '',
+                      (e.innerText || '').slice(0, 20)].join(' | '))""")
+                  log("[ui] elemen interaktif:\n  " + "\n  ".join(rows))
+              except Exception as e:
+                  log(f"[ui] dump gagal: {e}")
+
+
+          async def attach_image(page, path):
+              if not os.path.exists(path):
+                  log(f"[!] File gambar tidak ada: {path}")
+                  return False
+
+              inputs = page.locator("input[type='file']")
+              if await inputs.count() > 0:
+                  try:
+                      await inputs.last.set_input_files(path)
+                      log("[+] Gambar di-attach lewat input[type=file]")
+                      await page.wait_for_timeout(8000)
+                      return True
+                  except Exception as e:
+                      log(f"[-] set_input_files gagal: {str(e)[:120]}")
+
+              for sel in (
+                  "[aria-label*='upload' i]", "[aria-label*='attach' i]", "[aria-label*='image' i]",
+                  "[data-testid*='upload' i]", "[data-testid*='attach' i]",
+                  "button[class*='upload' i]", "button[class*='attach' i]", "[class*='upload' i]",
+              ):
+                  loc = page.locator(sel)
+                  if await loc.count() == 0:
+                      continue
+                  try:
+                      async with page.expect_file_chooser(timeout=5000) as fc_info:
+                          await loc.first.click()
+                      chooser = await fc_info.value
+                      await chooser.set_files(path)
+                      log(f"[+] Gambar di-attach lewat file chooser ({sel})")
+                      await page.wait_for_timeout(8000)
+                      return True
+                  except Exception:
+                      continue
+              return False
+
+
+          async def send_message(page, text, image=None):
+              if image:
+                  if not await attach_image(page, image):
+                      await page.screenshot(path="attach_failed.png", full_page=True)
+                      await dump_ui(page)
+                      return False
+                  await page.screenshot(path="after_attach.png")
+              for sel in ("textarea", "div[contenteditable='true']"):
+                  loc = page.locator(sel)
+                  if await loc.count() > 0:
+                      el = loc.first
+                      await el.click()
+                      await el.fill(text)
+                      await page.wait_for_timeout(800)
+                      await page.keyboard.press("Enter")
+                      return True
+              await page.screenshot(path="dola_debug.png", full_page=True)
+              await dump_ui(page)
+              return False
+
+
+          async def wait_reply(page, known_videos, base_overload, limit_s):
+              elapsed, stable = 0, 0
+              last_text = await body_text(page)
+              while elapsed < limit_s:
+                  await page.wait_for_timeout(POLL_S * 1000)
+                  elapsed += POLL_S
+                  if await captcha_visible(page):
+                      await handle_captcha(page)
+
+                  new = (await get_video_urls(page)) - known_videos
+                  if new:
+                      return "video", next(iter(new))
+
+                  text = await body_text(page)
+                  if text.count(SENT_OVERLOAD) > base_overload:
+                      return "overload", None
+
+                  if text == last_text:
+                      stable += POLL_S
+                  else:
+                      stable, last_text = 0, text
+                  if stable >= STABLE_S:
+                      return "text_only", None
+                  log(f"[.] menunggu... {elapsed}s (halaman statis {stable}s)")
+              return "timeout", None
+
+
+          # --------------------------------------------------------------------------
+          # Main
+          # --------------------------------------------------------------------------
+          async def main():
+              status = {"captcha_solved": "NO", "video_found": "NO", "error": "NO",
+                        "attempts": "0", "final_state": "none"}
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=False, args=["--no-sandbox", "--disable-dev-shm-usage"]
+                  )
+                  context = await browser.new_context(
+                      viewport={"width": 1366, "height": 768}, locale="en-US"
+                  )
+                  page = await context.new_page()
+                  try:
+                      cookies = load_cookies()
+                      if cookies:
+                          await context.add_cookies(cookies)
+                          log(f"[+] {len(cookies)} cookie disuntikkan")
+
+                      log(f"[+] Membuka {TARGET_URL}")
+                      resp = await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+                      log(f"[+] HTTP {resp.status if resp else 'no response'}")
+                      await page.wait_for_timeout(8000)
+                      status["captcha_solved"] = "YES" if await handle_captcha(page) else "NO"
+                      await page.wait_for_timeout(3000)
+                      await page.screenshot(path="start_page.png")
+
+                      # ---- Prompt 1: aturan ----
+                      if SEND_RULES:
+                          if not await send_message(page, RULES_PROMPT):
+                              log("[!] Gagal mengirim prompt aturan")
+                              status["error"] = "YES"
+                              return
+                          log("[+] Prompt aturan terkirim")
+                          await page.wait_for_timeout(4000)
+                          base_ready = (await body_text(page)).count(SENT_READY)
+                          for _ in range(24):
+                              await page.wait_for_timeout(5000)
+                              if (await body_text(page)).count(SENT_READY) > base_ready:
+                                  log("[✓] AI menyetujui aturan")
+                                  break
+                          else:
+                              log("[-] Tidak ada RULES_READY, lanjut saja")
+
+                      # ---- Prompt 2: generate + gambar produk, dengan retry ----
+                      known = await get_video_urls(page)
+                      prompt, use_image = GENERATE_PROMPT, True
+                      video_src, state = None, "none"
+                      for attempt in range(1, MAX_ATTEMPTS + 1):
+                          status["attempts"] = str(attempt)
+                          ok = await send_message(page, prompt, IMAGE_PATH if use_image else None)
+                          if not ok:
+                              log("[!] Gagal mengirim prompt generate (cek attach_failed.png & daftar UI)")
+                              status["error"] = "YES"
+                              break
+                          log(f"[+] Percobaan {attempt}/{MAX_ATTEMPTS}: prompt terkirim")
+                          await page.wait_for_timeout(4000)
+                          base_overload = (await body_text(page)).count(SENT_OVERLOAD)
+
+                          state, video_src = await wait_reply(page, known, base_overload, VIDEO_TIMEOUT_S)
+                          log(f"[=] Hasil percobaan {attempt}: {state}")
+                          await page.screenshot(path=f"attempt{attempt}_{state}.png", full_page=True)
+                          with open("dola_text.txt", "a") as f:
+                              f.write(f"\n===== attempt {attempt} / {state} =====\n")
+                              f.write((await body_text(page))[-4000:])
+
+                          if state == "video":
+                              break
+                          if state == "overload":
+                              wait_s = BACKOFF_S[min(attempt - 1, len(BACKOFF_S) - 1)]
+                              log(f"[-] Overload, tunggu {wait_s}s lalu kirim ulang")
+                              await page.wait_for_timeout(wait_s * 1000)
+                              prompt, use_image = GENERATE_PROMPT, True
+                          elif state == "text_only":
+                              log("[-] AI hanya membalas teks, kirim nudge")
+                              prompt, use_image = NUDGE_PROMPT, False
+                          else:
+                              break
+                      status["final_state"] = state
+
+                      await page.screenshot(path="dola_video_result.png", full_page=True)
+                      if video_src:
+                          status["video_found"] = "YES"
+                          data = await (await context.request.get(video_src)).body()
+                          with open("result.mp4", "wb") as f:
+                              f.write(data)
+                          log(f"[+] Video disimpan ({len(data)//1024} KB)")
+                  except Exception:
+                      log("[!] Fatal:\n" + traceback.format_exc())
+                      status["error"] = "YES"
+                      try:
+                          await page.screenshot(path="dola_debug.png", full_page=True)
+                      except Exception:
+                          pass
+                  finally:
+                      with open("result_status.txt", "w") as f:
+                          f.write(f"target_url={TARGET_URL}\n")
+                          for k, v in status.items():
+                              f.write(f"{k}={v}\n")
+                      await browser.close()
+
+
+          asyncio.run(main())
+          PYEOF
+          xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
 
       - name: Disconnect VPN
         if: always()
         run: sudo wg-quick down wg0 2>/dev/null || true
 
-      # Log tetap bisa diunduh walau tampilan log GitHub bermasalah
       - name: Upload logs & screenshots as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -61,6 +582,7 @@ jobs:
           path: |
             install.log
             dola.log
+            dola_text.txt
             result_status.txt
             *.png
             result.mp4
@@ -70,13 +592,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: dola-video-${{ github.run_number }}
-          name: "Dola AI Video #${{ github.run_number }}"
+          name: "Dola Beauty Video #${{ github.run_number }}"
           body_path: result_status.txt
           files: |
+            result.mp4
             dola_video_result.png
             dola_debug.png
-            captcha_try*.png
-            result.mp4
+            attach_failed.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
