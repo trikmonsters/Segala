@@ -1,46 +1,34 @@
-name: Dola AI Video Generation with Botright Captcha Solver
+name: Dola AI Video Generation (Patchright + ddddocr)
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # wajib agar softprops/action-gh-release bisa membuat release
+  contents: write
 
 jobs:
   generate-video:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install WireGuard
+      - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y wireguard resolvconf
+          sudo apt-get install -y wireguard resolvconf xvfb
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Botright + Playwright + OpenCV
+      - name: Install Python deps
         run: |
-          pip install botright playwright opencv-python-headless numpy
-          playwright install chromium
-          # Jangan pakai `playwright install-deps`: Playwright lama (dipin Botright)
-          # mencari libasound2 yang tidak ada di Ubuntu 24.04. Pakai nama paket t64.
-          sudo apt-get install -y \
-            libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 \
-            libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 \
-            libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 \
-            libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 \
-            libxdamage1 libxext6 libxfixes3 libxkbcommon0 \
-            libxrandr2 libcairo-gobject2 libfontconfig1 \
-            libfreetype6 libgdk-pixbuf-2.0-0 libgtk-3-0t64 \
-            libpangocairo-1.0-0 libx11-xcb1 libxcb-shm0 \
-            libxcursor1 libxi6 libxrender1 libxss1 fonts-liberation
+          pip install patchright ddddocr opencv-python-headless numpy 2>&1 | tee install.log
+          patchright install chromium --with-deps 2>&1 | tee -a install.log
 
       - name: Setup WireGuard Config
         run: |
@@ -51,17 +39,31 @@ jobs:
       - name: Connect to ProtonVPN
         run: |
           sudo wg-quick up wg0
-          echo "✅ VPN terhubung"
+          echo "VPN terhubung, IP:"
           curl -s ifconfig.me
 
       - name: Generate AI Video on Dola
         env:
           DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
-        run: python dola_bot.py
+        run: xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
 
       - name: Disconnect VPN
         if: always()
         run: sudo wg-quick down wg0 2>/dev/null || true
+
+      # Log tetap bisa diunduh walau tampilan log GitHub bermasalah
+      - name: Upload logs & screenshots as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dola-debug-${{ github.run_number }}
+          if-no-files-found: ignore
+          path: |
+            install.log
+            dola.log
+            result_status.txt
+            *.png
+            result.mp4
 
       - name: Upload Result to Release
         if: always()
