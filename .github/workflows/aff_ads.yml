@@ -404,7 +404,7 @@ jobs:
             );
           };
           TSXEOF
-                - name: Write MindBlowingSkincare.tsx (part 2 - 8 shots)
+      - name: Write MindBlowingSkincare.tsx (part 2 - 8 shots)
         run: |
           set -euo pipefail
           cat >> src/MindBlowingSkincare.tsx <<'TSXEOF2'
