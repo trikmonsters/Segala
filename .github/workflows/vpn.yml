@@ -81,7 +81,6 @@ jobs:
           import traceback
 
           import cv2
-          import ddddocr
           import numpy as np
           from patchright.async_api import async_playwright
 
@@ -92,13 +91,40 @@ jobs:
 
           SENT_OVERLOAD = "VIDEO_OVERLOAD"
           SENT_READY = "RULES_READY"
+          # Pesan overload dari Dola sendiri (bukan dari AI)
+          DEMAND_PATTERNS = ["high demand", "try again later", "experiencing high"]
           MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
           SEND_RULES = os.environ.get("SEND_RULES", "1") == "1"
           MAX_CAPTCHA_TRIES = 5
-          VIDEO_TIMEOUT_S = 480
-          POLL_S = 15
-          STABLE_S = 120
-          BACKOFF_S = [60, 180, 300]
+          VIDEO_TIMEOUT_S = 600       # batas tunggu per percobaan (generate biasanya 2-5 menit)
+          POLL_S = 10
+          STABLE_S = 90               # halaman diam selama ini TANPA proses generate = hanya teks
+          BACKOFF_S = [60, 180, 300]  # jeda sebelum kirim ulang saat overload
+
+          NET_VIDEOS = []             # URL video yang terlihat di jaringan (berurutan)
+
+          # --------------------------------------------------------------------------
+          # Log ringkas
+          # --------------------------------------------------------------------------
+          def log(msg=""):
+              print(msg, flush=True)
+
+
+          def step(msg):
+              log(f"\n▶ {msg}")
+
+
+          def ok(msg):
+              log(f"  ✓ {msg}")
+
+
+          def warn(msg):
+              log(f"  ! {msg}")
+
+
+          def info(msg):
+              log(f"  · {msg}")
+
 
           # --------------------------------------------------------------------------
           # PROMPT
@@ -161,15 +187,9 @@ jobs:
               f"If you cannot, reply with exactly: {SENT_OVERLOAD}"
           )
 
-          slide_det = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
-
-
-          def log(*a):
-              print(*a, flush=True)
-
 
           # --------------------------------------------------------------------------
-          # Util
+          # Cookie & captcha
           # --------------------------------------------------------------------------
           def load_cookies():
               raw = os.environ.get("DOLA_COOKIES", "").strip()
@@ -199,6 +219,18 @@ jobs:
               return out
 
 
+          _slide_det = None
+
+
+          def get_slide_det():
+              """Dimuat hanya saat captcha muncul (menghindari log onnxruntime yang berisik)."""
+              global _slide_det
+              if _slide_det is None:
+                  import ddddocr
+                  _slide_det = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
+              return _slide_det
+
+
           async def captcha_visible(page):
               for ctx in [page] + list(page.frames):
                   try:
@@ -211,14 +243,13 @@ jobs:
 
           async def fetch_bytes(page, src):
               if src.startswith("data:"):
-                  import base64
                   return base64.b64decode(src.split(",", 1)[1])
               resp = await page.context.request.get(src)
               return await resp.body()
 
 
           def gap_x_ddddocr(piece_bytes, bg_bytes):
-              res = slide_det.slide_match(piece_bytes, bg_bytes, simple_target=True)
+              res = get_slide_det().slide_match(piece_bytes, bg_bytes, simple_target=True)
               return res["target"][0]
 
 
@@ -250,7 +281,7 @@ jobs:
                   except Exception:
                       pass
               if ctx is None:
-                  log("[!] Gambar captcha tidak ditemukan (cek selector)")
+                  warn("gambar captcha tidak ditemukan (cek selector)")
                   return False
 
               imgs = ctx.locator("[class*='captcha' i] img")
@@ -262,7 +293,7 @@ jobs:
                   if box and src and box["width"] > 5:
                       items.append((box["width"] * box["height"], box, src))
               if len(items) < 2:
-                  log("[!] Gambar captcha < 2")
+                  warn("gambar captcha kurang dari 2")
                   return False
               items.sort(key=lambda t: t[0], reverse=True)
               _, bg_box, bg_src = items[0]
@@ -273,16 +304,13 @@ jobs:
               bg_w = cv2.imdecode(np.frombuffer(bg_bytes, np.uint8), cv2.IMREAD_COLOR).shape[1]
 
               try:
-                  gx = gap_x_ddddocr(pc_bytes, bg_bytes)
-                  how = "ddddocr"
-              except Exception as e:
-                  log(f"[-] ddddocr gagal ({e}), pakai OpenCV")
-                  gx = gap_x_opencv(pc_bytes, bg_bytes)
-                  how = "opencv"
+                  gx, how = gap_x_ddddocr(pc_bytes, bg_bytes), "ddddocr"
+              except Exception:
+                  gx, how = gap_x_opencv(pc_bytes, bg_bytes), "opencv"
 
               scale = bg_box["width"] / bg_w
               distance = gx * scale - (pc_box["x"] - bg_box["x"])
-              log(f"[+] {how}: gap_x={gx}px asli, jarak drag={distance:.1f}px layar")
+              info(f"slider ({how}): geser {distance:.0f}px")
 
               handle = ctx.locator(
                   "[class*='captcha' i] [class*='slider' i], "
@@ -291,7 +319,7 @@ jobs:
               ).last
               hb = await handle.bounding_box()
               if not hb:
-                  log("[!] Handle slider tidak ditemukan")
+                  warn("handle slider tidak ditemukan")
                   return False
 
               x0, y0 = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
@@ -320,16 +348,15 @@ jobs:
           async def handle_captcha(page):
               for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
                   if not await captcha_visible(page):
-                      log("[✓] Tidak ada captcha")
                       return True
-                  log(f"[+] Captcha terdeteksi, percobaan {attempt}/{MAX_CAPTCHA_TRIES}")
+                  info(f"captcha terdeteksi (percobaan {attempt}/{MAX_CAPTCHA_TRIES})")
                   await page.screenshot(path=f"captcha_try{attempt}.png")
                   try:
                       if await solve_slider_once(page):
-                          log("[✓] Slider puzzle lolos")
+                          ok("captcha lolos")
                           return True
-                  except Exception:
-                      log("[!] Slider error:\n" + traceback.format_exc())
+                  except Exception as e:
+                      warn(f"captcha error: {type(e).__name__}: {str(e)[:100]}")
                   for ctx in [page] + list(page.frames):
                       try:
                           r = ctx.locator("[class*='refresh' i]").first
@@ -343,42 +370,8 @@ jobs:
 
 
           # --------------------------------------------------------------------------
-          # Chat helpers
+          # Upload gambar (copy + Ctrl+V)
           # --------------------------------------------------------------------------
-          async def body_text(page):
-              try:
-                  return await page.evaluate("document.body.innerText")
-              except Exception:
-                  return ""
-
-
-          async def get_video_urls(page):
-              urls = set()
-              vids = page.locator("video")
-              for i in range(await vids.count()):
-                  el = vids.nth(i)
-                  src = await el.get_attribute("src") or ""
-                  if not src:
-                      s = el.locator("source").first
-                      if await s.count():
-                          src = await s.get_attribute("src") or ""
-                  if src.startswith("http"):
-                      urls.add(src)
-              return urls
-
-
-          async def dump_ui(page):
-              """Bantu debug: cetak tombol/input yang ada di halaman."""
-              try:
-                  rows = await page.evaluate("""() => [...document.querySelectorAll('button,input,[role=button]')]
-                      .slice(0, 60).map(e => [e.tagName, e.type || '', e.getAttribute('aria-label') || '',
-                      (e.className && e.className.toString().slice(0, 60)) || '',
-                      (e.innerText || '').slice(0, 20)].join(' | '))""")
-                  log("[ui] elemen interaktif:\n  " + "\n  ".join(rows))
-              except Exception as e:
-                  log(f"[ui] dump gagal: {e}")
-
-
           ATTACH_SIGNAL_JS = """() => document.querySelectorAll(
               "img, canvas, video, [class*='attach' i], [class*='preview' i], [class*='thumb' i], [class*='file' i]"
           ).length"""
@@ -433,44 +426,38 @@ jobs:
                       break
                   await page.wait_for_timeout(2000)
                   waited += 2
-              log(f"[+] Upload selesai (menunggu {waited}s)")
+              ok(f"gambar ter-upload ({waited}s)")
 
 
           async def attach_image(page, path):
-              """Upload gambar dengan cara yang sama seperti manual: copy gambar lalu Ctrl+V di input."""
               if not os.path.exists(path):
-                  log(f"[!] File gambar tidak ada: {path}")
+                  warn(f"file gambar tidak ada: {path}")
                   return False
               b64 = image_png_b64(path)
               before = await attach_signal(page)
 
-              # Cara 1: clipboard asli + Ctrl+V
-              try:
+              try:  # cara 1: clipboard asli + Ctrl+V
                   await page.evaluate(CLIPBOARD_WRITE_JS, b64)
                   await page.keyboard.press("Control+V")
                   await page.wait_for_timeout(5000)
-                  after = await attach_signal(page)
-                  log(f"[+] Paste Ctrl+V: sinyal {before} -> {after}")
-                  if after > before:
+                  if await attach_signal(page) > before:
                       await wait_upload_done(page)
                       return True
+                  info("Ctrl+V tidak terdeteksi, coba paste sintetis")
               except Exception as e:
-                  log(f"[-] Clipboard paste gagal: {str(e)[:150]}")
+                  info(f"clipboard gagal: {str(e)[:100]}")
 
-              # Cara 2: event paste sintetis
-              try:
+              try:  # cara 2: event paste sintetis
                   await page.evaluate(SYNTH_PASTE_JS, b64)
                   await page.wait_for_timeout(5000)
-                  after = await attach_signal(page)
-                  log(f"[+] Paste sintetis: sinyal {before} -> {after}")
-                  if after > before:
+                  if await attach_signal(page) > before:
                       await wait_upload_done(page)
                       return True
+                  info("paste sintetis tidak terdeteksi, coba menu upload")
               except Exception as e:
-                  log(f"[-] Paste sintetis gagal: {str(e)[:150]}")
+                  info(f"paste sintetis gagal: {str(e)[:100]}")
 
-              # Cara 3: menu "+" -> "Upload File or Image" (file chooser)
-              try:
+              try:  # cara 3: menu "+" -> Upload File or Image
                   item = page.get_by_text("Upload File or Image", exact=False)
                   if await item.count() == 0:
                       plus = page.locator("div[contenteditable='true'], textarea").first.locator(
@@ -482,16 +469,26 @@ jobs:
                       await page.get_by_text("Upload File or Image", exact=False).first.click()
                   chooser = await fc_info.value
                   await chooser.set_files(path)
-                  log("[+] Gambar di-attach lewat menu Upload File or Image")
                   await wait_upload_done(page)
                   return True
               except Exception as e:
-                  log(f"[-] Menu upload gagal: {str(e)[:150]}")
+                  warn(f"menu upload gagal: {str(e)[:100]}")
                   try:
                       await page.keyboard.press("Escape")
                   except Exception:
                       pass
               return False
+
+
+          async def dump_ui(page):
+              try:
+                  rows = await page.evaluate("""() => [...document.querySelectorAll('button,input,[role=button]')]
+                      .slice(0, 40).map(e => [e.tagName, e.type || '', e.getAttribute('aria-label') || '',
+                      (e.className && e.className.toString().slice(0, 50)) || '',
+                      (e.innerText || '').slice(0, 20)].join(' | '))""")
+                  info("elemen interaktif:\n      " + "\n      ".join(rows))
+              except Exception as e:
+                  info(f"dump UI gagal: {e}")
 
 
           async def send_message(page, text, image=None):
@@ -525,15 +522,70 @@ jobs:
                       btn = page.get_by_role("button", name=name, exact=True)
                       if await btn.count() > 0:
                           await btn.first.click(timeout=2000)
-                          log(f"[+] Banner ditutup ({name})")
+                          info(f"banner ditutup ({name})")
                           await page.wait_for_timeout(500)
                           return
                   except Exception:
                       pass
 
 
+          # --------------------------------------------------------------------------
+          # Deteksi respons chat (teks / sedang generate / video / overload)
+          # --------------------------------------------------------------------------
+          BIGIMG_JS = """() => [...document.querySelectorAll('img')]
+              .filter(i => i.naturalWidth >= 200 && i.offsetParent !== null).length"""
+
+          VIDEO_SRC_JS = """() => [...document.querySelectorAll('video')].map(v =>
+              v.currentSrc || v.src || (v.querySelector('source') && v.querySelector('source').src) || '')"""
+
+          VIDEO_HTML_JS = """() => [...document.querySelectorAll('video')].slice(-3)
+              .map(v => v.outerHTML.slice(0, 220))"""
+
+          LAST_BIGIMG_POS_JS = """() => {
+              const imgs = [...document.querySelectorAll('img')]
+                  .filter(i => i.naturalWidth >= 200 && i.offsetParent !== null);
+              const e = imgs[imgs.length - 1];
+              if (!e) return null;
+              e.scrollIntoView({block: 'center'});
+              const r = e.getBoundingClientRect();
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+          }"""
+
+
+          async def body_text(page):
+              try:
+                  return await page.evaluate("document.body.innerText")
+              except Exception:
+                  return ""
+
+
+          def overload_score(text):
+              low = text.lower()
+              return text.count(SENT_OVERLOAD) + sum(low.count(p) for p in DEMAND_PATTERNS)
+
+
+          async def snapshot(page):
+              text = await body_text(page)
+              try:
+                  vids = await page.evaluate(VIDEO_SRC_JS)
+              except Exception:
+                  vids = []
+              try:
+                  big = await page.evaluate(BIGIMG_JS)
+              except Exception:
+                  big = 0
+              urls = []
+              for u in [v for v in vids if v] + NET_VIDEOS:
+                  if u not in urls:
+                      urls.append(u)
+              return {
+                  "text": text, "vcount": len(vids), "urls": urls, "big": big,
+                  "overload": overload_score(text),
+                  "generating": "generating" in text.lower(),
+              }
+
+
           async def wait_idle_after_rules(page, base_ready, max_s=240):
-              """Tunggu AI selesai membalas aturan: RULES_READY muncul lalu halaman diam."""
               elapsed, stable, seen = 0, 0, False
               last = await body_text(page)
               while elapsed < max_s:
@@ -545,48 +597,129 @@ jobs:
                   stable = stable + 5 if text == last else 0
                   last = text
                   if seen and stable >= 10:
-                      log("[✓] AI menyetujui aturan dan sudah selesai membalas")
-                      return True
+                      ok("aturan diterima AI")
+                      return
                   if stable >= 45:
-                      log("[-] Halaman diam 45s tanpa RULES_READY, lanjut saja")
-                      return False
-              log("[-] Batas waktu menunggu aturan, lanjut saja")
-              return False
+                      warn("tidak ada RULES_READY, lanjut saja")
+                      return
+              warn("batas waktu menunggu aturan, lanjut saja")
 
 
-          async def wait_reply(page, known_videos, base_overload, limit_s):
-              elapsed, stable = 0, 0
-              last_text = await body_text(page)
+          async def wait_reply(page, base, limit_s):
+              """Return (state, snapshot). state: video | video_poster | overload |
+              done_no_media | text_only | timeout"""
+              elapsed = stable = finished_for = last_print = 0
+              seen_gen = False
+              last_text = base["text"]
+              s = base
               while elapsed < limit_s:
                   await page.wait_for_timeout(POLL_S * 1000)
                   elapsed += POLL_S
                   if await captcha_visible(page):
                       await handle_captcha(page)
+                  s = await snapshot(page)
 
-                  new = (await get_video_urls(page)) - known_videos
-                  if new:
-                      return "video", next(iter(new))
+                  if [u for u in s["urls"] if u not in base["urls"]] or s["vcount"] > base["vcount"]:
+                      return "video", s
+                  if s["overload"] > base["overload"]:
+                      return "overload", s
 
-                  text = await body_text(page)
-                  if text.count(SENT_OVERLOAD) > base_overload:
-                      return "overload", None
-
-                  if text == last_text:
-                      stable += POLL_S
+                  if s["generating"]:
+                      if not seen_gen:
+                          info(f"Dola mulai generate video ({elapsed}s)")
+                      seen_gen, stable, finished_for = True, 0, 0
                   else:
-                      stable, last_text = 0, text
-                  if stable >= STABLE_S:
-                      return "text_only", None
-                  log(f"[.] menunggu... {elapsed}s (halaman statis {stable}s)")
-              return "timeout", None
+                      stable = stable + POLL_S if s["text"] == last_text else 0
+                      if seen_gen:
+                          finished_for += POLL_S
+                  last_text = s["text"]
+
+                  if seen_gen and not s["generating"]:
+                      if s["big"] > base["big"] and finished_for >= 10:
+                          return "video_poster", s
+                      if finished_for >= 60:
+                          return "done_no_media", s
+                  elif not seen_gen and stable >= STABLE_S:
+                      return "text_only", s
+
+                  if elapsed - last_print >= 30:
+                      last_print = elapsed
+                      label = "generate video" if s["generating"] else (
+                          "menunggu balasan" if not seen_gen else "generate selesai, cari video")
+                      info(f"{elapsed}s · {label}")
+              return "timeout", s
+
+
+          # --------------------------------------------------------------------------
+          # Ambil video
+          # --------------------------------------------------------------------------
+          async def describe_media(page, snap, base):
+              new = [u for u in snap["urls"] if u not in base["urls"]]
+              info(f"elemen <video>: {snap['vcount']} | gambar besar baru: {snap['big'] - base['big']} | URL baru: {len(new)}")
+              for u in new[-3:]:
+                  info("url: " + u[:120])
+              try:
+                  for h in await page.evaluate(VIDEO_HTML_JS):
+                      info("html: " + h)
+              except Exception:
+                  pass
+
+
+          async def activate_media(page):
+              """Klik gambar hasil terakhir supaya player memuat video (memicu request jaringan)."""
+              try:
+                  pos = await page.evaluate(LAST_BIGIMG_POS_JS)
+                  if pos:
+                      await page.mouse.move(pos["x"], pos["y"])
+                      await page.wait_for_timeout(500)
+                      await page.mouse.click(pos["x"], pos["y"])
+                      await page.wait_for_timeout(6000)
+              except Exception as e:
+                  info(f"aktivasi media gagal: {str(e)[:80]}")
+
+
+          async def save_video(context, page, src):
+              if not src:
+                  return False
+              try:
+                  if src.startswith("blob:"):
+                      b64 = await page.evaluate(
+                          """async (u) => { const r = await fetch(u); const b = await r.blob();
+                          return await new Promise(res => { const f = new FileReader();
+                          f.onload = () => res(f.result.split(',')[1]); f.readAsDataURL(b); }); }""",
+                          src,
+                      )
+                      data = base64.b64decode(b64)
+                  else:
+                      data = await (await context.request.get(src)).body()
+                  if len(data) < 10_000:
+                      warn(f"file terlalu kecil ({len(data)} B), kemungkinan bukan video")
+                      return False
+                  with open("result.mp4", "wb") as f:
+                      f.write(data)
+                  ok(f"video disimpan: result.mp4 ({len(data) // 1024} KB)")
+                  return True
+              except Exception as e:
+                  warn(f"gagal unduh video: {str(e)[:120]}")
+                  return False
+
+
+          def on_response(resp):
+              try:
+                  url = resp.url
+                  ct = resp.headers.get("content-type", "")
+                  if (ct.startswith("video/") or ".mp4" in url.split("?")[0]) and url not in NET_VIDEOS:
+                      NET_VIDEOS.append(url)
+              except Exception:
+                  pass
 
 
           # --------------------------------------------------------------------------
           # Main
           # --------------------------------------------------------------------------
           async def main():
-              status = {"captcha_solved": "NO", "video_found": "NO", "error": "NO",
-                        "attempts": "0", "final_state": "none"}
+              status = {"captcha_solved": "NO", "video_found": "NO", "video_saved": "NO",
+                        "error": "NO", "attempts": "0", "final_state": "none"}
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=False, args=["--no-sandbox", "--disable-dev-shm-usage"]
@@ -598,82 +731,94 @@ jobs:
                       await context.grant_permissions(
                           ["clipboard-read", "clipboard-write"], origin="https://www.dola.com"
                       )
-                  except Exception as e:
-                      log(f"[-] Izin clipboard gagal: {e}")
+                  except Exception:
+                      pass
                   page = await context.new_page()
+                  page.on("response", on_response)
                   try:
+                      step("Buka Dola")
                       cookies = load_cookies()
                       if cookies:
                           await context.add_cookies(cookies)
-                          log(f"[+] {len(cookies)} cookie disuntikkan")
-
-                      log(f"[+] Membuka {TARGET_URL}")
+                          info(f"{len(cookies)} cookie dipasang")
                       resp = await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
-                      log(f"[+] HTTP {resp.status if resp else 'no response'}")
+                      info(f"HTTP {resp.status if resp else '-'}")
                       await page.wait_for_timeout(8000)
                       status["captcha_solved"] = "YES" if await handle_captcha(page) else "NO"
                       await page.wait_for_timeout(3000)
                       await dismiss_banners(page)
                       await page.screenshot(path="start_page.png")
 
-                      # ---- Prompt 1: aturan ----
                       if SEND_RULES:
+                          step("Prompt 1: aturan chat")
                           if not await send_message(page, RULES_PROMPT):
-                              log("[!] Gagal mengirim prompt aturan")
+                              warn("gagal mengirim prompt aturan")
                               status["error"] = "YES"
                               return
-                          log("[+] Prompt aturan terkirim")
                           await page.wait_for_timeout(4000)
                           base_ready = (await body_text(page)).count(SENT_READY)
                           await wait_idle_after_rules(page, base_ready)
 
-                      # ---- Prompt 2: generate + gambar produk, dengan retry ----
-                      log("[+] Jeda 3 detik sebelum prompt ke-2")
+                      info("jeda 3 detik")
                       await page.wait_for_timeout(3000)
-                      known = await get_video_urls(page)
-                      prompt, use_image = GENERATE_PROMPT, True
-                      video_src, state = None, "none"
+
+                      prompt, use_image, nudges = GENERATE_PROMPT, True, 0
+                      state, snap, base = "none", None, None
                       for attempt in range(1, MAX_ATTEMPTS + 1):
                           status["attempts"] = str(attempt)
-                          ok = await send_message(page, prompt, IMAGE_PATH if use_image else None)
-                          if not ok:
-                              log("[!] Gagal mengirim prompt generate (cek attach_failed.png & daftar UI)")
+                          step(f"Prompt 2: generate video (percobaan {attempt}/{MAX_ATTEMPTS})")
+                          if not await send_message(page, prompt, IMAGE_PATH if use_image else None):
+                              warn("gagal mengirim prompt (lihat attach_failed.png)")
                               status["error"] = "YES"
                               break
-                          log(f"[+] Percobaan {attempt}/{MAX_ATTEMPTS}: prompt terkirim")
+                          ok("prompt terkirim")
                           await page.wait_for_timeout(4000)
-                          base_overload = (await body_text(page)).count(SENT_OVERLOAD)
+                          base = await snapshot(page)
 
-                          state, video_src = await wait_reply(page, known, base_overload, VIDEO_TIMEOUT_S)
-                          log(f"[=] Hasil percobaan {attempt}: {state}")
+                          state, snap = await wait_reply(page, base, VIDEO_TIMEOUT_S)
+                          (ok if state.startswith("video") else warn)(f"hasil: {state}")
                           await page.screenshot(path=f"attempt{attempt}_{state}.png", full_page=True)
                           with open("dola_text.txt", "a") as f:
                               f.write(f"\n===== attempt {attempt} / {state} =====\n")
-                              f.write((await body_text(page))[-4000:])
+                              f.write(snap["text"][-4000:])
 
-                          if state == "video":
+                          if state in ("video", "video_poster", "done_no_media", "timeout"):
                               break
                           if state == "overload":
                               wait_s = BACKOFF_S[min(attempt - 1, len(BACKOFF_S) - 1)]
-                              log(f"[-] Overload, tunggu {wait_s}s lalu kirim ulang")
+                              info(f"Dola overload, tunggu {wait_s}s lalu kirim ulang")
                               await page.wait_for_timeout(wait_s * 1000)
                               prompt, use_image = GENERATE_PROMPT, True
                           elif state == "text_only":
-                              log("[-] AI hanya membalas teks, kirim nudge")
+                              if nudges >= 1:
+                                  warn("sudah di-nudge sekali, berhenti")
+                                  break
+                              nudges += 1
+                              info("AI hanya membalas teks, kirim nudge")
                               prompt, use_image = NUDGE_PROMPT, False
-                          else:
-                              break
                       status["final_state"] = state
 
+                      if state in ("video", "video_poster", "done_no_media"):
+                          step("Ambil video")
+                          status["video_found"] = "YES" if state != "done_no_media" else "UNSURE"
+                          await describe_media(page, snap, base)
+                          new = [u for u in snap["urls"] if u not in base["urls"]]
+                          if not new:
+                              info("belum ada URL video, coba klik hasil untuk memuat player")
+                              await activate_media(page)
+                              snap = await snapshot(page)
+                              await describe_media(page, snap, base)
+                              new = [u for u in snap["urls"] if u not in base["urls"]]
+                          web = [u for u in new if not u.startswith("blob:")]
+                          src = (web or new or [None])[-1]
+                          if await save_video(context, page, src):
+                              status["video_saved"] = "YES"
+                          else:
+                              warn("video terdeteksi tapi belum bisa diunduh, cek screenshot & log di atas")
+
                       await page.screenshot(path="dola_video_result.png", full_page=True)
-                      if video_src:
-                          status["video_found"] = "YES"
-                          data = await (await context.request.get(video_src)).body()
-                          with open("result.mp4", "wb") as f:
-                              f.write(data)
-                          log(f"[+] Video disimpan ({len(data)//1024} KB)")
                   except Exception:
-                      log("[!] Fatal:\n" + traceback.format_exc())
+                      warn("error fatal:\n" + traceback.format_exc())
                       status["error"] = "YES"
                       try:
                           await page.screenshot(path="dola_debug.png", full_page=True)
@@ -684,6 +829,9 @@ jobs:
                           f.write(f"target_url={TARGET_URL}\n")
                           for k, v in status.items():
                               f.write(f"{k}={v}\n")
+                      log("\n══ RINGKASAN ══")
+                      for k, v in status.items():
+                          log(f"  {k:15s}: {v}")
                       await browser.close()
 
 
