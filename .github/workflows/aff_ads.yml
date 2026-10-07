@@ -36,11 +36,11 @@ jobs:
         run: |
           mkdir -p src public out
 
-          if [ -f produk.jpg ]; then
-            cp produk.jpg public/produk.jpg
-            echo "✅ produk.jpg copied"
+          if [ -f produk.png ]; then
+            cp produk.png public/produk.png
+            echo "✅ produk.png copied"
           else
-            echo "❌ produk.jpg NOT found in root!"
+            echo "❌ produk.png NOT found in root!"
             exit 1
           fi
 
@@ -104,7 +104,7 @@ jobs:
             random,
           } from 'remotion';
 
-          const PRODUCT = staticFile('produk.jpg');
+          const PRODUCT = staticFile('produk.png');
 
           // ================= PALETTE =================
           const CORAL = '#E8756A';
