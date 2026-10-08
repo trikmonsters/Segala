@@ -1,0 +1,62 @@
+{
+  "defaults": {
+    "product_name": "",
+    "duration_s": 15,
+    "style_notes": ""
+  },
+  "videos": [
+    {
+      "id": "morning-routine",
+      "scene": "morning routine: bright bathroom, she applies the product right after washing her face, fresh dewy finish"
+    },
+    {
+      "id": "unboxing",
+      "scene": "unboxing: hands open the packaging on a vanity, reveal the product, first touch of the texture"
+    },
+    {
+      "id": "texture-macro",
+      "scene": "texture macro: close-up of the texture on a fingertip in slow motion, then spreading on the back of her hand"
+    },
+    {
+      "id": "grwm-vanity",
+      "scene": "get ready with me: vanity mirror with soft ring light, the product is her first step"
+    },
+    {
+      "id": "night-routine",
+      "scene": "night routine: cozy bedside lamp lighting, calm and relaxed mood, applying before sleep"
+    },
+    {
+      "id": "quick-refresh",
+      "scene": "quick refresh: sitting by a window in daylight before leaving home, confident smile"
+    },
+    {
+      "id": "shelf-aesthetic",
+      "scene": "shelf aesthetic: the product on a minimal shelf, her hand picks it up, soft sunlight, slow push-in"
+    },
+    {
+      "id": "ugc-selfie",
+      "scene": "UGC selfie style: handheld framing, she shows the product to the camera and smiles naturally"
+    },
+    {
+      "id": "travel-pouch",
+      "scene": "travel pouch: she packs the product into a pouch, then uses it in a hotel bathroom"
+    },
+    {
+      "id": "gift-idea",
+      "scene": "gift idea: the product on a table with a ribbon, a hand slides it toward the camera"
+    },
+    {
+      "id": "glow-closeup",
+      "scene": "beauty close-up: glowing skin, she holds the product beside her cheek, shallow depth of field"
+    },
+    {
+      "id": "cafe-lifestyle",
+      "scene": "cafe lifestyle: sitting by a cafe window, a quick touch-up with the product, warm tones",
+      "notes": "warm golden tones"
+    },
+    {
+      "id": "custom-contoh",
+      "prompt": "SHOT LIST: 0-3s hook: she lifts the product into frame and smiles. 3-9s: gentle application on her cheek. 9-15s: product held beside her face, label facing the camera, slow push-in."
+    }
+  ]
+}
