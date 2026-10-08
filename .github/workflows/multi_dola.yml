@@ -1,0 +1,1083 @@
+name: Dola Bulk Video Generator (beauty affiliate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_count:
+        description: "Jumlah video (diambil berurutan dari prompts.json)"
+        type: choice
+        options: ["1", "3", "5", "10", "12", "15"]
+        default: "10"
+      concurrency:
+        description: "Chat paralel (makin besar makin cepat, tapi lebih rawan overload)"
+        type: choice
+        options: ["1", "2", "3", "4", "5"]
+        default: "3"
+      product_name:
+        description: "Nama/deskripsi produk (kosong = ikut gambar atau prompts.json)"
+        required: false
+        default: ""
+      style_notes:
+        description: "Arahan tambahan untuk semua video (opsional)"
+        required: false
+        default: ""
+      send_rules:
+        description: "Kirim prompt aturan dulu di tiap chat (lebih lambat, lebih patuh)"
+        type: boolean
+        default: false
+      delete_chats:
+        description: "Hapus chat dari Dola setelah video tersimpan"
+        type: boolean
+        default: true
+      retention_days:
+        description: "Lama video disimpan di artifact (hari)"
+        type: choice
+        options: ["7", "14", "30", "90"]
+        default: "30"
+
+permissions:
+  contents: read
+
+jobs:
+  generate-videos:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cek produk.png dan prompts.json
+        run: |
+          test -f produk.png || { echo "::error::produk.png tidak ditemukan di root repo"; exit 1; }
+          if [ -f prompts.json ]; then
+            python3 -c "import json; d=json.load(open('prompts.json', encoding='utf-8')); v=d if isinstance(d, list) else d.get('videos', []); print('prompts.json OK:', len(v), 'prompt')"
+          else
+            echo "prompts.json tidak ada, memakai 12 skenario bawaan"
+          fi
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard resolvconf xvfb
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: |
+          pip install patchright ddddocr opencv-python-headless numpy 2>&1 | tee install.log
+          patchright install chromium --with-deps 2>&1 | tee -a install.log
+
+      - name: Setup WireGuard Config
+        run: |
+          sudo mkdir -p /etc/wireguard
+          echo "${{ secrets.WIREGUARD_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+
+      - name: Connect to ProtonVPN
+        run: |
+          sudo wg-quick up wg0
+          echo "VPN terhubung, IP:"
+          curl -s ifconfig.me
+
+      - name: Tulis script bot
+        run: |
+          cat > dola_bot.py <<'PYEOF'
+          import asyncio
+          import base64
+          import contextvars
+          import json
+          import os
+          import random
+          import re
+          import subprocess
+          import sys
+          import time
+          import traceback
+
+          import cv2
+          import numpy as np
+          from patchright.async_api import async_playwright
+
+          TARGET_URL = "https://www.dola.com/chat"
+          IMAGE_PATH = os.path.abspath(os.environ.get("PRODUCT_IMAGE", "produk.png"))
+          PROMPTS_FILE = os.environ.get("PROMPTS_FILE", "prompts.json")
+          VIDEO_COUNT = int(os.environ.get("VIDEO_COUNT", "10"))
+          CONCURRENCY = max(1, int(os.environ.get("CONCURRENCY", "3")))
+          MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+          SEND_RULES = os.environ.get("SEND_RULES", "0") == "1"
+          DELETE_CHATS = os.environ.get("DELETE_CHATS", "1") == "1"
+          RETRY_FAILED = os.environ.get("RETRY_FAILED", "1") == "1"
+          DEADLINE = time.time() + int(os.environ.get("DEADLINE_MIN", "200")) * 60
+
+          SENT_OVERLOAD = "VIDEO_OVERLOAD"
+          SENT_READY = "RULES_READY"
+          DEMAND_PATTERNS = ["high demand", "try again later", "experiencing high"]
+          MAX_CAPTCHA_TRIES = 5
+          VIDEO_TIMEOUT_S = 600
+          POLL_S = 10
+          STABLE_S = 90
+          STAGGER_S = 12
+          BACKOFF_S = [60, 180, 300]
+
+          CFG = {"product": "", "style": "", "duration": 15}
+          NET = {}                      # id(page) -> daftar URL video dari jaringan
+          PASTE_LOCK = asyncio.Lock()   # clipboard dipakai bersama, paste harus bergantian
+          TAG = contextvars.ContextVar("tag", default="")
+
+          DEFAULT_SCENES = [
+              "morning routine: bright bathroom, she applies the product right after washing her face, fresh dewy finish",
+              "unboxing: hands open the packaging on a vanity, reveal the product, first touch of the texture",
+              "texture macro: close-up of the texture on a fingertip in slow motion, then spreading on the back of her hand",
+              "get ready with me: vanity mirror with soft ring light, the product is her first step",
+              "night routine: cozy bedside lamp lighting, calm and relaxed mood, applying before sleep",
+              "quick refresh: sitting by a window in daylight before leaving home, confident smile",
+              "shelf aesthetic: the product on a minimal shelf, her hand picks it up, soft sunlight, slow push-in",
+              "UGC selfie style: handheld framing, she shows the product to the camera and smiles naturally",
+              "travel pouch: she packs the product into a pouch, then uses it in a hotel bathroom",
+              "gift idea: the product on a table with a ribbon, a hand slides it toward the camera",
+              "beauty close-up: glowing skin, she holds the product beside her cheek, shallow depth of field",
+              "cafe lifestyle: sitting by a cafe window, a quick touch-up with the product, warm tones",
+          ]
+
+
+          # --------------------------------------------------------------------------
+          # Log ringkas (tiap baris diberi tag job)
+          # --------------------------------------------------------------------------
+          def log(msg=""):
+              tag = TAG.get()
+              print(f"[{tag}] {msg}" if tag and msg else msg, flush=True)
+
+
+          def step(msg):
+              log(f"▶ {msg}")
+
+
+          def ok(msg):
+              log(f"✓ {msg}")
+
+
+          def warn(msg):
+              log(f"! {msg}")
+
+
+          def info(msg):
+              log(f"· {msg}")
+
+
+          # --------------------------------------------------------------------------
+          # Prompt
+          # --------------------------------------------------------------------------
+          RULES_PROMPT = (
+              "RULES for this whole chat. Follow them for every message from now on.\n"
+              "1) When I ask for a video, generate it immediately with your built-in video generation "
+              "tool and show the finished video inline in your reply as a playable video preview. "
+              "Never deliver it as a file, file card or download link, and never make it with code.\n"
+              "2) When I attach a product image, treat it as the exact visual reference of the "
+              "product and keep the product identical in the video.\n"
+              "3) Never ask me questions, never ask for confirmation, never offer options or "
+              "alternatives. If something is unspecified, choose a sensible default yourself.\n"
+              "4) Never answer with only a script, storyboard, description or apology instead "
+              "of the video.\n"
+              "5) If you cannot produce the video for any reason (tool busy, queue full, rate "
+              f"limit, quota, error), reply with exactly this one word and nothing else: {SENT_OVERLOAD}\n"
+              "6) Never say the video is ready unless the video file is actually attached.\n"
+              f"To confirm you understood, reply with exactly: {SENT_READY}"
+          )
+
+          DELIVERY = (
+              "DELIVERY FORMAT (mandatory): make the video with your built-in video generation tool "
+              "(image-to-video, using the attached reference image). Never make it with code, scripts, "
+              "ffmpeg, slideshows or by assembling still images. Show the finished video inline in this "
+              "chat as a playable video preview, exactly like a normal generated video. Do NOT create, "
+              "attach or link it as a downloadable document or file, do NOT show a file card, file name "
+              "or file link, and do NOT add any extra watermark, logo or text overlay of your own."
+          )
+
+          FIDELITY = (
+              "PRODUCT FIDELITY (highest priority): reproduce the product from the reference image "
+              "exactly: same shape, proportions, color, cap or pump, packaging and label layout. "
+              "Do not redesign, recolor or invent any text. Keep the label sharp, legible and "
+              "unaltered. The product must be clearly visible in most shots."
+          )
+          TALENT = (
+              "TALENT: one natural-looking woman with realistic skin texture (visible pores, "
+              "no plastic or over-smoothed skin), tidy and aspirational."
+          )
+          STRUCTURE = (
+              "SHOT STRUCTURE: opening HOOK (hand picks up the product and turns it to camera, "
+              "quick glance and soft smile), then APPLICATION (macro of the texture, smooth realistic "
+              "application), then RESULT (soft glowing skin, relaxed satisfied expression), "
+              "ending on a HERO frame (product beside her face, label facing the camera, slow "
+              "push-in, clean stable final frame)."
+          )
+          STYLE_AUDIO = (
+              "STYLE: natural light, warm soft highlights, shallow depth of field, handheld "
+              "smartphone feel with gentle stabilization, smooth continuous motion, consistent "
+              "lighting and exposure, high-end beauty commercial look, sharp 4K detail.\n"
+              "AUDIO: soft upbeat lo-fi background music, no speech. No captions, subtitles, "
+              "watermarks or logos other than the product's own label."
+          )
+          COMPLIANCE_AVOID = (
+              "COMPLIANCE: no medical or miracle claims, no exaggerated before/after, "
+              "only believable everyday results.\n"
+              "AVOID: distorted hands or extra fingers, warped or morphing packaging, garbled text, "
+              "flicker, sudden cuts, uncanny face."
+          )
+
+
+          def build_prompt(job):
+              product = CFG["product"] or "the beauty product in the reference image"
+              parts = [
+                  f"Create a premium {CFG['duration']}-second vertical (9:16) UGC-style beauty ad video "
+                  f"for TikTok/Reels featuring {product}, exactly as shown in the attached reference image.",
+                  FIDELITY,
+              ]
+              if job.get("prompt"):                       # prompt kustom penuh dari JSON
+                  parts.append(str(job["prompt"]).strip())
+              else:
+                  parts += [f"CREATIVE ANGLE: {job.get('scene', '').strip()}", TALENT, STRUCTURE]
+              parts += [STYLE_AUDIO, COMPLIANCE_AVOID]
+              extra = " ".join(x for x in (CFG["style"], str(job.get("notes", "")).strip()) if x)
+              if extra:
+                  parts.append(f"EXTRA DIRECTION: {extra}")
+              return (
+                  "Generate this video now. No questions, no confirmation. "
+                  f"If you cannot, reply with exactly: {SENT_OVERLOAD}\n\n" + DELIVERY + "\n\n" + "\n\n".join(parts)
+              )
+
+
+          NUDGE_PROMPT = (
+              "Do not ask or explain anything. Generate the video now with your video generation tool "
+              "and show it inline as a playable video preview (not a file or download link). "
+              f"If you cannot, reply with exactly: {SENT_OVERLOAD}"
+          )
+
+          FILECARD_PROMPT = (
+              "That was delivered as a file. Do not send a file. Generate the video again with your "
+              "built-in video generation tool and show it inline in the chat as a playable video preview, "
+              "not as a document, file card or download link. Do not use code. "
+              f"If you cannot, reply with exactly: {SENT_OVERLOAD}"
+          )
+
+
+          def load_jobs():
+              defaults, videos = {}, None
+              if os.path.exists(PROMPTS_FILE):
+                  data = json.load(open(PROMPTS_FILE, encoding="utf-8"))
+                  if isinstance(data, list):
+                      videos = data
+                  else:
+                      defaults, videos = data.get("defaults", {}) or {}, data.get("videos")
+                  info(f"{PROMPTS_FILE}: {len(videos or [])} prompt")
+              if not videos:
+                  videos = [{"id": f"v{i + 1:02d}", "scene": s} for i, s in enumerate(DEFAULT_SCENES)]
+                  info(f"prompts.json tidak ada/kosong, memakai {len(videos)} skenario bawaan")
+              CFG["product"] = os.environ.get("PRODUCT_NAME", "").strip() or str(defaults.get("product_name", "")).strip()
+              CFG["style"] = os.environ.get("STYLE_NOTES", "").strip() or str(defaults.get("style_notes", "")).strip()
+              CFG["duration"] = defaults.get("duration_s", 15)
+
+              jobs = []
+              for i, v in enumerate(videos[:VIDEO_COUNT]):
+                  if isinstance(v, str):
+                      v = {"scene": v}
+                  vid = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(v.get("id") or f"v{i + 1:02d}")).strip("-")[:40]
+                  jobs.append({**v, "id": vid or f"v{i + 1:02d}"})
+              if len(videos) < VIDEO_COUNT:
+                  info(f"diminta {VIDEO_COUNT} video, tersedia {len(videos)} prompt")
+              return jobs
+
+
+          # --------------------------------------------------------------------------
+          # Cookie & captcha
+          # --------------------------------------------------------------------------
+          def load_cookies():
+              raw = os.environ.get("DOLA_COOKIES", "").strip()
+              if not raw:
+                  return []
+              out = []
+              for c in json.loads(raw):
+                  if "name" not in c or "value" not in c:
+                      continue
+                  ck = {"name": c["name"], "value": c["value"],
+                        "domain": c.get("domain", ".dola.com"), "path": c.get("path", "/")}
+                  ss = str(c.get("sameSite", "")).capitalize()
+                  if ss in ("Strict", "Lax", "None"):
+                      ck["sameSite"] = ss
+                  exp = c.get("expires", c.get("expirationDate"))
+                  if isinstance(exp, (int, float)) and exp > 0:
+                      ck["expires"] = exp
+                  if c.get("secure") is not None:
+                      ck["secure"] = bool(c["secure"])
+                  if c.get("httpOnly") is not None:
+                      ck["httpOnly"] = bool(c["httpOnly"])
+                  out.append(ck)
+              return out
+
+
+          _slide_det = None
+
+
+          def get_slide_det():
+              global _slide_det
+              if _slide_det is None:
+                  import ddddocr
+                  _slide_det = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
+              return _slide_det
+
+
+          async def captcha_visible(page):
+              for ctx in [page] + list(page.frames):
+                  try:
+                      if await ctx.locator("text=Verify to continue").count() > 0:
+                          return True
+                  except Exception:
+                      pass
+              return False
+
+
+          async def fetch_bytes(page, src):
+              if src.startswith("data:"):
+                  return base64.b64decode(src.split(",", 1)[1])
+              resp = await page.context.request.get(src)
+              return await resp.body()
+
+
+          def gap_x_ddddocr(piece_bytes, bg_bytes):
+              return get_slide_det().slide_match(piece_bytes, bg_bytes, simple_target=True)["target"][0]
+
+
+          def gap_x_opencv(piece_bytes, bg_bytes):
+              bg = cv2.imdecode(np.frombuffer(bg_bytes, np.uint8), cv2.IMREAD_COLOR)
+              pc = cv2.imdecode(np.frombuffer(piece_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+              if pc.ndim == 3 and pc.shape[2] == 4:
+                  ys, xs = np.where(pc[:, :, 3] > 20)
+                  if len(xs):
+                      pc = pc[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+                  pc = cv2.cvtColor(pc[:, :, :3], cv2.COLOR_BGR2GRAY)
+              elif pc.ndim == 3:
+                  pc = cv2.cvtColor(pc, cv2.COLOR_BGR2GRAY)
+              res = cv2.matchTemplate(
+                  cv2.Canny(cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY), 100, 200),
+                  cv2.Canny(pc, 100, 200), cv2.TM_CCOEFF_NORMED)
+              return cv2.minMaxLoc(res)[3][0]
+
+
+          async def solve_slider_once(page):
+              ctx = None
+              for c in [page] + list(page.frames):
+                  try:
+                      if await c.locator("[class*='captcha' i] img").count() >= 2:
+                          ctx = c
+                          break
+                  except Exception:
+                      pass
+              if ctx is None:
+                  warn("gambar captcha tidak ditemukan")
+                  return False
+              imgs = ctx.locator("[class*='captcha' i] img")
+              items = []
+              for i in range(await imgs.count()):
+                  el = imgs.nth(i)
+                  box, src = await el.bounding_box(), await el.get_attribute("src")
+                  if box and src and box["width"] > 5:
+                      items.append((box["width"] * box["height"], box, src))
+              if len(items) < 2:
+                  warn("gambar captcha kurang dari 2")
+                  return False
+              items.sort(key=lambda t: t[0], reverse=True)
+              _, bg_box, bg_src = items[0]
+              _, pc_box, pc_src = items[-1]
+              bg_bytes, pc_bytes = await fetch_bytes(page, bg_src), await fetch_bytes(page, pc_src)
+              bg_w = cv2.imdecode(np.frombuffer(bg_bytes, np.uint8), cv2.IMREAD_COLOR).shape[1]
+              try:
+                  gx = gap_x_ddddocr(pc_bytes, bg_bytes)
+              except Exception:
+                  gx = gap_x_opencv(pc_bytes, bg_bytes)
+              distance = gx * (bg_box["width"] / bg_w) - (pc_box["x"] - bg_box["x"])
+              handle = ctx.locator(
+                  "[class*='captcha' i] [class*='slider' i], [class*='captcha' i] [class*='drag' i], "
+                  "[class*='captcha' i] [class*='knob' i]").last
+              hb = await handle.bounding_box()
+              if not hb:
+                  warn("handle slider tidak ditemukan")
+                  return False
+              x0, y0 = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+              await page.mouse.move(x0 - 40, y0 + 25, steps=10)
+              await page.mouse.move(x0, y0, steps=8)
+              await page.wait_for_timeout(random.randint(250, 600))
+              await page.mouse.down()
+              steps = random.randint(28, 45)
+              for i in range(1, steps + 1):
+                  ease = 1 - (1 - i / steps) ** 3
+                  await page.mouse.move(x0 + distance * ease + random.uniform(-0.6, 0.6),
+                                        y0 + random.uniform(-1.5, 1.5))
+                  await page.wait_for_timeout(random.randint(8, 30))
+              await page.mouse.move(x0 + distance + random.uniform(2, 4), y0)
+              await page.wait_for_timeout(random.randint(60, 140))
+              await page.mouse.move(x0 + distance, y0)
+              await page.wait_for_timeout(random.randint(120, 260))
+              await page.mouse.up()
+              await page.wait_for_timeout(2500)
+              return not await captcha_visible(page)
+
+
+          async def handle_captcha(page):
+              for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
+                  if not await captcha_visible(page):
+                      return True
+                  info(f"captcha ({attempt}/{MAX_CAPTCHA_TRIES})")
+                  try:
+                      if await solve_slider_once(page):
+                          ok("captcha lolos")
+                          return True
+                  except Exception as e:
+                      warn(f"captcha error: {type(e).__name__}")
+                  for ctx in [page] + list(page.frames):
+                      try:
+                          r = ctx.locator("[class*='refresh' i]").first
+                          if await r.count():
+                              await r.click(timeout=2000)
+                              break
+                      except Exception:
+                          pass
+                  await page.wait_for_timeout(2000)
+              return not await captcha_visible(page)
+
+
+          # --------------------------------------------------------------------------
+          # Upload gambar (copy + Ctrl+V)
+          # --------------------------------------------------------------------------
+          ATTACH_SIGNAL_JS = """() => document.querySelectorAll(
+              "img, canvas, video, [class*='attach' i], [class*='preview' i], [class*='thumb' i], [class*='file' i]"
+          ).length"""
+          UPLOADING_JS = """() => [...document.querySelectorAll(
+              "[class*='uploading' i], [class*='progress' i], [role='progressbar']"
+          )].filter(e => e.offsetParent !== null).length"""
+          CLIPBOARD_WRITE_JS = """async (b64) => {
+              const bin = atob(b64); const arr = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+              const blob = new Blob([arr], {type: 'image/png'});
+              await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+              return true;
+          }"""
+          SYNTH_PASTE_JS = """(b64) => {
+              const bin = atob(b64); const arr = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+              const file = new File([arr], 'produk.png', {type: 'image/png'});
+              const dt = new DataTransfer(); dt.items.add(file);
+              const t = document.activeElement || document.querySelector('[contenteditable=true],textarea');
+              t.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+              return true;
+          }"""
+
+
+          def image_png_b64(path):
+              data = open(path, "rb").read()
+              if os.path.splitext(path)[1].lower() != ".png":
+                  im = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+                  data = cv2.imencode(".png", im)[1].tobytes()
+              return base64.b64encode(data).decode()
+
+
+          async def attach_signal(page):
+              try:
+                  return await page.evaluate(ATTACH_SIGNAL_JS)
+              except Exception:
+                  return 0
+
+
+          async def wait_upload_done(page, max_s=40):
+              await page.wait_for_timeout(6000)
+              waited = 6
+              while waited < max_s:
+                  try:
+                      n = await page.evaluate(UPLOADING_JS)
+                  except Exception:
+                      n = 0
+                  if n == 0:
+                      break
+                  await page.wait_for_timeout(2000)
+                  waited += 2
+              ok(f"gambar ter-upload ({waited}s)")
+
+
+          async def attach_image(page, path):
+              if not os.path.exists(path):
+                  warn(f"file gambar tidak ada: {path}")
+                  return False
+              b64 = image_png_b64(path)
+              before = await attach_signal(page)
+              try:  # 1) clipboard asli + Ctrl+V
+                  await page.evaluate(CLIPBOARD_WRITE_JS, b64)
+                  await page.keyboard.press("Control+V")
+                  await page.wait_for_timeout(5000)
+                  if await attach_signal(page) > before:
+                      await wait_upload_done(page)
+                      return True
+              except Exception as e:
+                  info(f"clipboard gagal: {str(e)[:80]}")
+              try:  # 2) paste sintetis
+                  await page.evaluate(SYNTH_PASTE_JS, b64)
+                  await page.wait_for_timeout(5000)
+                  if await attach_signal(page) > before:
+                      await wait_upload_done(page)
+                      return True
+              except Exception as e:
+                  info(f"paste sintetis gagal: {str(e)[:80]}")
+              try:  # 3) menu + -> Upload File or Image
+                  item = page.get_by_text("Upload File or Image", exact=False)
+                  if await item.count() == 0:
+                      plus = page.locator("div[contenteditable='true'], textarea").first.locator(
+                          "xpath=ancestor::*[.//button][1]").locator("button").first
+                      await plus.click(timeout=3000)
+                      await page.wait_for_timeout(800)
+                  async with page.expect_file_chooser(timeout=6000) as fc_info:
+                      await page.get_by_text("Upload File or Image", exact=False).first.click()
+                  chooser = await fc_info.value
+                  await chooser.set_files(path)
+                  await wait_upload_done(page)
+                  return True
+              except Exception as e:
+                  warn(f"menu upload gagal: {str(e)[:80]}")
+                  try:
+                      await page.keyboard.press("Escape")
+                  except Exception:
+                      pass
+              return False
+
+
+          async def send_message(page, text, image=None, shot=None):
+              for sel in ("textarea", "div[contenteditable='true']"):
+                  loc = page.locator(sel)
+                  if await loc.count() == 0:
+                      continue
+                  el = loc.first
+                  await el.click()
+                  await el.fill(text)
+                  await page.wait_for_timeout(500)
+                  if image:
+                      async with PASTE_LOCK:        # clipboard dipakai bersama antar tab
+                          await page.bring_to_front()
+                          await el.focus()
+                          good = await attach_image(page, image)
+                      if not good:
+                          if shot:
+                              await page.screenshot(path=shot("attach_failed"))
+                          return False
+                      await el.focus()
+                  await page.wait_for_timeout(1000)
+                  await page.keyboard.press("Enter")
+                  return True
+              if shot:
+                  await page.screenshot(path=shot("no_input"))
+              return False
+
+
+          async def dismiss_banners(page):
+              for name in ("OK", "Accept", "Got it", "Agree"):
+                  try:
+                      btn = page.get_by_role("button", name=name, exact=True)
+                      if await btn.count() > 0:
+                          await btn.first.click(timeout=2000)
+                          await page.wait_for_timeout(500)
+                          return
+                  except Exception:
+                      pass
+
+
+          # --------------------------------------------------------------------------
+          # Deteksi respons chat
+          # --------------------------------------------------------------------------
+          BIGIMG_JS = """() => [...document.querySelectorAll('img')]
+              .filter(i => i.naturalWidth >= 200 && i.offsetParent !== null).length"""
+          VIDEO_SRC_JS = """() => [...document.querySelectorAll('video')].map(v =>
+              v.currentSrc || v.src || (v.querySelector('source') && v.querySelector('source').src) || '')"""
+          LAST_BIGIMG_POS_JS = """() => {
+              const imgs = [...document.querySelectorAll('img')]
+                  .filter(i => i.naturalWidth >= 200 && i.offsetParent !== null);
+              const e = imgs[imgs.length - 1];
+              if (!e) return null;
+              e.scrollIntoView({block: 'center'});
+              const r = e.getBoundingClientRect();
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+          }"""
+
+
+          async def body_text(page):
+              try:
+                  return await page.evaluate("document.body.innerText")
+              except Exception:
+                  return ""
+
+
+          def file_score(text):
+              """Kartu file dari Dola: teks 'Generated: <jam>' dan nama berkas video."""
+              return text.count("Generated:") + len(re.findall(r"\.mp4", text, re.I))
+
+
+          def is_generating(text):
+              """Label status 'Generating video' ada di ekor halaman; kalimat AI di tengah tidak dihitung."""
+              return "generating" in text[-150:].lower()
+
+
+          def overload_score(text):
+              low = text.lower()
+              return text.count(SENT_OVERLOAD) + sum(low.count(p) for p in DEMAND_PATTERNS)
+
+
+          def attach_net(page):
+              lst = NET.setdefault(id(page), [])
+
+              def on_response(resp):
+                  try:
+                      url = resp.url
+                      ct = resp.headers.get("content-type", "")
+                      if (ct.startswith("video/") or ".mp4" in url.split("?")[0]) and url not in lst:
+                          lst.append(url)
+                  except Exception:
+                      pass
+
+              page.on("response", on_response)
+
+
+          async def snapshot(page):
+              text = await body_text(page)
+              try:
+                  vids = await page.evaluate(VIDEO_SRC_JS)
+              except Exception:
+                  vids = []
+              try:
+                  big = await page.evaluate(BIGIMG_JS)
+              except Exception:
+                  big = 0
+              urls = []
+              for u in [v for v in vids if v] + NET.get(id(page), []):
+                  if u not in urls:
+                      urls.append(u)
+              return {"text": text, "vcount": len(vids), "urls": urls, "big": big,
+                      "overload": overload_score(text), "file": file_score(text),
+                      "generating": is_generating(text)}
+
+
+          async def wait_idle_after_rules(page, base_ready, max_s=240):
+              elapsed, stable, seen = 0, 0, False
+              last = await body_text(page)
+              while elapsed < max_s:
+                  await page.wait_for_timeout(5000)
+                  elapsed += 5
+                  text = await body_text(page)
+                  seen = seen or text.count(SENT_READY) > base_ready
+                  stable = stable + 5 if text == last else 0
+                  last = text
+                  if (seen and stable >= 10) or stable >= 45:
+                      return
+
+
+          async def wait_reply(page, base, limit_s):
+              """state: video | video_poster | file_card | overload | done_no_media | text_only | timeout"""
+              elapsed = stable = finished_for = last_print = 0
+              seen_gen = False
+              last_text, s = base["text"], base
+              while elapsed < limit_s:
+                  await page.wait_for_timeout(POLL_S * 1000)
+                  elapsed += POLL_S
+                  if await captcha_visible(page):
+                      await handle_captcha(page)
+                  s = await snapshot(page)
+                  if [u for u in s["urls"] if u not in base["urls"]]:
+                      return "video", s
+                  if s["overload"] > base["overload"]:
+                      return "overload", s
+                  if not s["generating"] and s["file"] > base["file"] and stable >= 20:
+                      return "file_card", s
+                  if s["generating"]:
+                      if not seen_gen:
+                          info(f"mulai generate ({elapsed}s)")
+                      seen_gen, stable, finished_for = True, 0, 0
+                  else:
+                      stable = stable + POLL_S if s["text"] == last_text else 0
+                      if seen_gen:
+                          finished_for += POLL_S
+                  last_text = s["text"]
+                  if seen_gen and not s["generating"]:
+                      if (s["big"] > base["big"] or s["vcount"] > base["vcount"]) and finished_for >= 10:
+                          return "video_poster", s
+                      if finished_for >= 60:
+                          return "done_no_media", s
+                  elif not seen_gen and stable >= STABLE_S:
+                      return "text_only", s
+                  if elapsed - last_print >= 60:
+                      last_print = elapsed
+                      info(f"{elapsed}s · {'generate' if s['generating'] else 'menunggu'}")
+              return "timeout", s
+
+
+          # --------------------------------------------------------------------------
+          # Ambil video
+          # --------------------------------------------------------------------------
+          FETCH_B64_JS = """async (u) => { const r = await fetch(u); const b = await r.blob();
+              return await new Promise(res => { const f = new FileReader();
+              f.onload = () => res(f.result.split(',')[1]); f.readAsDataURL(b); }); }"""
+
+
+          def pick_src(urls):
+              if not urls:
+                  return None
+
+              def score(u):
+                  sc = 1 if u.startswith("http") else 0
+                  sc += 2 if "dola.com" in u[:70] else 0
+                  sc += 2 if ("mime_type=video" in u or "/video/" in u) else 0
+                  return sc
+
+              return max(reversed(urls), key=score)
+
+
+          async def activate_media(page):
+              try:
+                  pos = await page.evaluate(LAST_BIGIMG_POS_JS)
+                  if pos:
+                      await page.mouse.move(pos["x"], pos["y"])
+                      await page.wait_for_timeout(500)
+                      await page.mouse.click(pos["x"], pos["y"])
+                      await page.wait_for_timeout(6000)
+              except Exception:
+                  pass
+
+
+          async def activate_card(page):
+              """Cadangan: buka kartu file agar player memuat video (hasil bisa berwatermark)."""
+              try:
+                  card = page.get_by_text("Generated:", exact=False).last
+                  await card.scroll_into_view_if_needed(timeout=3000)
+                  await card.click(timeout=3000)
+                  await page.wait_for_timeout(6000)
+              except Exception:
+                  pass
+
+
+          def probe_duration(path):
+              try:
+                  out = subprocess.run(
+                      ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                      capture_output=True, text=True, timeout=20).stdout.strip()
+                  return round(float(out), 1)
+              except Exception:
+                  return None
+
+
+          async def save_video(context, page, src, path):
+              if not src:
+                  return 0
+              data = b""
+              try:
+                  if not src.startswith("blob:"):
+                      resp = await context.request.get(src, headers={"Referer": "https://www.dola.com/"})
+                      if resp.ok:
+                          data = await resp.body()
+                  if len(data) < 10_000:
+                      data = base64.b64decode(await page.evaluate(FETCH_B64_JS, src))
+                  if len(data) < 10_000:
+                      warn(f"file terlalu kecil ({len(data)} B)")
+                      return 0
+                  with open(path, "wb") as f:
+                      f.write(data)
+                  return len(data)
+              except Exception as e:
+                  warn(f"gagal unduh: {str(e)[:100]}")
+                  return 0
+
+
+          # --------------------------------------------------------------------------
+          # Hapus chat
+          # --------------------------------------------------------------------------
+          HEADER_BTNS_JS = """() => [...document.querySelectorAll('button,[role=button]')].map(e => {
+              const r = e.getBoundingClientRect();
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2, t: (e.innerText || '').trim(),
+                      top: r.top, w: r.width};
+          }).filter(o => o.top >= 0 && o.top < 60 && o.x > 300 && o.w > 0 && o.t === '')
+            .sort((a, b) => b.x - a.x)"""
+          MENU_TEXT_JS = """() => [...document.querySelectorAll('[role=menuitem],[role=menu] *,[class*=popover] *,[class*=dropdown] *')]
+              .map(e => (e.innerText || '').trim()).filter(t => t && t.length < 30)"""
+          DELETE_RE = re.compile(r"^\s*(delete|hapus|remove)", re.I)
+
+
+          async def delete_chat(page, shot):
+              chat_url = page.url
+              if "/chat/" not in chat_url:
+                  warn("URL chat tidak ditemukan, lewati hapus")
+                  return False
+              try:
+                  cands = await page.evaluate(HEADER_BTNS_JS)
+                  for c in cands[:5]:                       # tombol ··· ada di header, kiri tombol Download
+                      await page.mouse.click(c["x"], c["y"])
+                      await page.wait_for_timeout(800)
+                      item = page.get_by_text(DELETE_RE).first
+                      if await item.count() > 0:
+                          await item.click(timeout=3000)
+                          await page.wait_for_timeout(1000)
+                          dlg = page.locator("[role=dialog] button, [class*=modal] button, [class*=dialog] button")
+                          for i in range(await dlg.count()):
+                              t = ((await dlg.nth(i).inner_text()) or "").strip()
+                              if re.match(r"^(delete|hapus|confirm|yes|ok|remove)", t, re.I):
+                                  await dlg.nth(i).click(timeout=3000)
+                                  break
+                          await page.wait_for_timeout(2500)
+                          if page.url != chat_url or "/chat/" not in page.url:
+                              return True
+                          await page.goto(chat_url, wait_until="domcontentloaded", timeout=30000)
+                          await page.wait_for_timeout(3000)
+                          low = (await body_text(page)).lower()
+                          return page.url != chat_url or any(k in low for k in ("not found", "does not exist", "deleted"))
+                      await page.keyboard.press("Escape")
+                  warn("menu hapus tidak ditemukan")
+                  try:
+                      items = await page.evaluate(MENU_TEXT_JS)
+                      info("teks menu terlihat: " + " | ".join(dict.fromkeys(items))[:200])
+                  except Exception:
+                      pass
+                  await page.screenshot(path=shot("delete_failed"))
+              except Exception as e:
+                  warn(f"hapus chat error: {str(e)[:100]}")
+              return False
+
+
+          # --------------------------------------------------------------------------
+          # Satu job = satu chat = satu video
+          # --------------------------------------------------------------------------
+          async def process_job(context, job, idx, total, pass_no):
+              TAG.set(job["id"])
+              res = {"no": idx + 1, "id": job["id"], "scene": job.get("scene") or "(prompt kustom)",
+                     "state": "none", "saved": False, "file": "", "size_kb": 0, "duration_s": None,
+                     "attempts": 0, "chat_url": "", "chat_deleted": "-", "pass": pass_no, "note": ""}
+              if time.time() > DEADLINE:
+                  res["state"] = "skipped_deadline"
+                  warn("batas waktu habis, dilewati")
+                  return res
+
+              def shot(label):
+                  return f"shots/{idx + 1:02d}-{job['id']}_{label}.png"
+
+              page = await context.new_page()
+              attach_net(page)
+              try:
+                  step(f"mulai ({idx + 1}/{total})")
+                  await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+                  await page.wait_for_timeout(8000)
+                  await handle_captcha(page)
+                  await dismiss_banners(page)
+
+                  if SEND_RULES:
+                      if await send_message(page, RULES_PROMPT, shot=shot):
+                          await page.wait_for_timeout(4000)
+                          await wait_idle_after_rules(page, (await body_text(page)).count(SENT_READY))
+                      await page.wait_for_timeout(3000)
+
+                  prompt, use_image, nudges, cards = build_prompt(job), True, 0, 0
+                  state, snap, base = "none", None, None
+                  for attempt in range(1, MAX_ATTEMPTS + 1):
+                      res["attempts"] = attempt
+                      if not await send_message(page, prompt, IMAGE_PATH if use_image else None, shot=shot):
+                          warn("gagal mengirim prompt")
+                          state = "send_failed"
+                          break
+                      ok(f"prompt terkirim (percobaan {attempt}/{MAX_ATTEMPTS})")
+                      await page.wait_for_timeout(4000)
+                      res["chat_url"] = page.url
+                      base = await snapshot(page)
+                      state, snap = await wait_reply(page, base, VIDEO_TIMEOUT_S)
+                      res["chat_url"] = page.url
+                      (ok if state.startswith("video") else warn)(f"hasil: {state}")
+                      if not state.startswith("video"):
+                          await page.screenshot(path=shot(f"attempt{attempt}_{state}"), full_page=True)
+                          with open(f"logs/{idx + 1:02d}-{job['id']}.txt", "a", encoding="utf-8") as f:
+                              f.write(f"== attempt {attempt} / {state} ==\n{snap['text'][-3000:]}\n")
+                      if state in ("video", "video_poster", "done_no_media", "timeout"):
+                          break
+                      if state == "file_card":
+                          if cards >= 2:
+                              break
+                          cards += 1
+                          info("hasil berupa file card, minta tampil inline")
+                          prompt, use_image = FILECARD_PROMPT, False
+                          continue
+                      if state == "overload":
+                          wait_s = BACKOFF_S[min(attempt - 1, len(BACKOFF_S) - 1)]
+                          info(f"overload, tunggu {wait_s}s")
+                          await page.wait_for_timeout(wait_s * 1000)
+                          prompt, use_image = build_prompt(job), True
+                      elif state == "text_only":
+                          if nudges >= 1:
+                              break
+                          nudges += 1
+                          info("hanya teks, kirim nudge")
+                          prompt, use_image = NUDGE_PROMPT, False
+                  res["state"] = state
+
+                  if state in ("video", "video_poster", "done_no_media", "file_card"):
+                      new = [u for u in snap["urls"] if u not in base["urls"]]
+                      if not new:
+                          await (activate_card(page) if state == "file_card" else activate_media(page))
+                          snap = await snapshot(page)
+                          new = [u for u in snap["urls"] if u not in base["urls"]]
+                      path = f"videos/{idx + 1:02d}-{job['id']}.mp4"
+                      size = await save_video(context, page, pick_src(new), path)
+                      if size:
+                          res.update(saved=True, file=path, size_kb=size // 1024,
+                                     duration_s=probe_duration(path))
+                          if state == "file_card":
+                              res["note"] = "dari file card (kemungkinan berwatermark)"
+                              warn(res["note"])
+                          ok(f"video tersimpan ({res['size_kb']} KB, {res['duration_s']} dtk)")
+                      else:
+                          await page.screenshot(path=shot("download_failed"), full_page=True)
+                          warn("video terdeteksi tapi gagal diunduh")
+
+                  if res["saved"] and DELETE_CHATS:
+                      deleted = await delete_chat(page, shot)
+                      res["chat_deleted"] = "YA" if deleted else "GAGAL"
+                      (ok if deleted else warn)("chat dihapus" if deleted else "chat tidak terhapus")
+                  elif not res["saved"]:
+                      res["chat_deleted"] = "dipertahankan"
+              except Exception:
+                  warn("error: " + traceback.format_exc().strip().splitlines()[-1])
+                  res["state"] = "error"
+                  try:
+                      await page.screenshot(path=shot("error"), full_page=True)
+                  except Exception:
+                      pass
+              finally:
+                  await page.close()
+              return res
+
+
+          async def run_pass(context, indexed_jobs, total, concurrency, pass_no):
+              sem = asyncio.Semaphore(concurrency)
+              results = {}
+
+              async def run_one(n, idx, job):
+                  async with sem:
+                      if n < concurrency:
+                          await asyncio.sleep(n * STAGGER_S)
+                      results[idx] = await process_job(context, job, idx, total, pass_no)
+
+              await asyncio.gather(*(run_one(n, idx, job) for n, (idx, job) in enumerate(indexed_jobs)))
+              return results
+
+
+          # --------------------------------------------------------------------------
+          # Output ringkasan
+          # --------------------------------------------------------------------------
+          def write_outputs(results, total):
+              rows = [results[i] for i in sorted(results)]
+              with open("manifest.json", "w", encoding="utf-8") as f:
+                  json.dump(rows, f, ensure_ascii=False, indent=2)
+              saved = sum(1 for r in rows if r["saved"])
+              log("\n══ HASIL ══")
+              for r in rows:
+                  mark = "✓" if r["saved"] else "✗"
+                  det = f"{r['size_kb']} KB, {r['duration_s']} dtk" if r["saved"] else r["state"]
+                  log(f" {mark} {r['no']:02d} {r['id'][:24]:24s} {det:22s} chat:{r['chat_deleted']}"
+                      + (f"  ⚠ {r['note']}" if r["note"] else ""))
+              log(f"\nTotal: {saved}/{total} video tersimpan")
+              path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if path:
+                  with open(path, "a", encoding="utf-8") as f:
+                      f.write(f"## Dola bulk: {saved}/{total} video\n\n| # | id | hasil | ukuran | durasi | chat dihapus |\n|---|---|---|---|---|---|\n")
+                      for r in rows:
+                          f.write(f"| {r['no']} | {r['id']} | {('⚠️ file card' if r['note'] else '✅') if r['saved'] else '❌ ' + r['state']} | "
+                                  f"{r['size_kb']} KB | {r['duration_s'] or '-'} | {r['chat_deleted']} |\n")
+              return saved
+
+
+          async def main():
+              os.makedirs("videos", exist_ok=True)
+              os.makedirs("logs", exist_ok=True)
+              os.makedirs("shots", exist_ok=True)
+              jobs = load_jobs()
+              total = len(jobs)
+              log(f"Rencana: {total} video · {CONCURRENCY} chat paralel · hapus chat: {'ya' if DELETE_CHATS else 'tidak'}")
+              results = {}
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=False, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                  context = await browser.new_context(viewport={"width": 1366, "height": 768}, locale="en-US")
+                  try:
+                      await context.grant_permissions(["clipboard-read", "clipboard-write"],
+                                                      origin="https://www.dola.com")
+                  except Exception:
+                      pass
+                  cookies = load_cookies()
+                  if cookies:
+                      await context.add_cookies(cookies)
+                      log(f"{len(cookies)} cookie dipasang")
+                  try:
+                      results = await run_pass(context, list(enumerate(jobs)), total, CONCURRENCY, 1)
+                      failed = [(i, jobs[i]) for i in sorted(results) if not results[i]["saved"]
+                                and results[i]["state"] != "skipped_deadline"]
+                      if failed and RETRY_FAILED:
+                          TAG.set("")
+                          log(f"\nUlangi {len(failed)} job gagal satu per satu (jeda 60s)")
+                          await asyncio.sleep(60)
+                          second = await run_pass(context, failed, total, 1, 2)
+                          for i, r in second.items():
+                              if r["saved"] or not results[i]["saved"]:
+                                  results[i] = r
+                  finally:
+                      TAG.set("")
+                      saved = write_outputs(results, total) if results else 0
+                      await browser.close()
+              sys.exit(0 if saved else 1)
+
+
+          if __name__ == "__main__":
+              asyncio.run(main())
+          PYEOF
+
+      - name: Generate video (bulk)
+        shell: bash
+        env:
+          DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
+          VIDEO_COUNT: ${{ inputs.video_count }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          PRODUCT_NAME: ${{ inputs.product_name }}
+          STYLE_NOTES: ${{ inputs.style_notes }}
+          SEND_RULES: ${{ inputs.send_rules && '1' || '0' }}
+          DELETE_CHATS: ${{ inputs.delete_chats && '1' || '0' }}
+          PRODUCT_IMAGE: produk.png
+          PROMPTS_FILE: prompts.json
+          MAX_ATTEMPTS: "3"
+        run: xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
+
+      - name: Disconnect VPN
+        if: always()
+        run: sudo wg-quick down wg0 2>/dev/null || true
+
+      # Kumpulan video: unduh dari halaman run, atau `gh run download <run-id> -n dola-videos-<nomor>`
+      - name: Simpan video ke artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dola-videos-${{ github.run_number }}
+          path: |
+            videos/
+            manifest.json
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Simpan log dan screenshot (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dola-debug-${{ github.run_number }}
+          path: |
+            install.log
+            dola.log
+            logs/
+            shots/
+          if-no-files-found: ignore
+          retention-days: 3
