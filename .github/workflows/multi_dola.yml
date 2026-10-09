@@ -4,27 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       video_count:
-        description: "Jumlah video (diambil berurutan dari prompts.json)"
+        description: "Jumlah video (diambil berurutan dari daftar di step 'Daftar video')"
         type: choice
         options: ["1", "3", "5", "10", "12", "15"]
-        default: "10"
+        default: "3"
       concurrency:
-        description: "Chat paralel (makin besar makin cepat, tapi lebih rawan overload)"
+        description: "Jumlah tab/chat yang jalan bersamaan"
         type: choice
         options: ["1", "2", "3", "4", "5"]
         default: "3"
-      product_name:
-        description: "Nama/deskripsi produk (kosong = ikut gambar atau prompts.json)"
-        required: false
-        default: ""
-      style_notes:
-        description: "Arahan tambahan untuk semua video (opsional)"
-        required: false
-        default: ""
-      send_rules:
-        description: "Kirim prompt aturan dulu di tiap chat (lebih lambat, lebih patuh)"
-        type: boolean
-        default: false
       delete_chats:
         description: "Hapus chat dari Dola setelah video tersimpan"
         type: boolean
@@ -47,14 +35,103 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cek produk.png dan prompts.json
+      # ==========================================================
+      # DAFTAR VIDEO: edit JSON di bawah ini.
+      #  - "images": gambar referensi di root repo (1-2 file per video), contoh:
+      #        {"id": "duo", "scene": "...", "images": ["produk.png", "produk2.png"]}
+      #    Jika tidak diisi, memakai defaults.images.
+      #  - "scene": ide adegan, dimasukkan ke template prompt premium
+      #  - "prompt": (opsional) isi adegan kustom penuh, menggantikan "scene"
+      #  - "notes": arahan tambahan untuk video itu saja
+      #  - "product": deskripsi produk (opsional, menimpa defaults.product)
+      # ==========================================================
+      - name: Daftar video (edit di sini)
         run: |
-          test -f produk.png || { echo "::error::produk.png tidak ditemukan di root repo"; exit 1; }
-          if [ -f prompts.json ]; then
-            python3 -c "import json; d=json.load(open('prompts.json', encoding='utf-8')); v=d if isinstance(d, list) else d.get('videos', []); print('prompts.json OK:', len(v), 'prompt')"
-          else
-            echo "prompts.json tidak ada, memakai 12 skenario bawaan"
-          fi
+          cat > jobs.json <<'JOBSEOF'
+          {
+            "defaults": {
+              "images": [
+                "produk.png"
+              ],
+              "product": "",
+              "duration_s": 15,
+              "notes": ""
+            },
+            "videos": [
+              {
+                "id": "morning-routine",
+                "scene": "morning routine: bright bathroom, she applies the product right after washing her face, fresh dewy finish"
+              },
+              {
+                "id": "unboxing",
+                "scene": "unboxing: hands open the packaging on a vanity, reveal the product, first touch of the texture"
+              },
+              {
+                "id": "texture-macro",
+                "scene": "texture macro: close-up of the texture on a fingertip in slow motion, then spreading on the back of her hand"
+              },
+              {
+                "id": "grwm-vanity",
+                "scene": "get ready with me: vanity mirror with soft ring light, the product is her first step"
+              },
+              {
+                "id": "night-routine",
+                "scene": "night routine: cozy bedside lamp lighting, calm and relaxed mood, applying before sleep"
+              },
+              {
+                "id": "quick-refresh",
+                "scene": "quick refresh: sitting by a window in daylight before leaving home, confident smile"
+              },
+              {
+                "id": "shelf-aesthetic",
+                "scene": "shelf aesthetic: the product on a minimal shelf, her hand picks it up, soft sunlight, slow push-in"
+              },
+              {
+                "id": "ugc-selfie",
+                "scene": "UGC selfie style: handheld framing, she shows the product to the camera and smiles naturally"
+              },
+              {
+                "id": "travel-pouch",
+                "scene": "travel pouch: she packs the product into a pouch, then uses it in a hotel bathroom"
+              },
+              {
+                "id": "gift-idea",
+                "scene": "gift idea: the product on a table with a ribbon, a hand slides it toward the camera"
+              },
+              {
+                "id": "glow-closeup",
+                "scene": "beauty close-up: glowing skin, she holds the product beside her cheek, shallow depth of field"
+              },
+              {
+                "id": "cafe-lifestyle",
+                "scene": "cafe lifestyle: sitting by a cafe window, a quick touch-up with the product, warm tones",
+                "notes": "warm golden tones"
+              }
+            ]
+          }
+          JOBSEOF
+
+      - name: Validasi daftar video dan gambar
+        env:
+          VIDEO_COUNT: ${{ inputs.video_count }}
+        run: |
+          python3 - <<'CHK'
+          import json, os, sys
+          d = json.load(open("jobs.json", encoding="utf-8"))
+          dflt = d.get("defaults", {})
+          vids = d["videos"][:int(os.environ["VIDEO_COUNT"])]
+          missing, used = set(), set()
+          for v in vids:
+              imgs = v.get("images") or dflt.get("images") or ["produk.png"]
+              for p in ([imgs] if isinstance(imgs, str) else imgs):
+                  used.add(p)
+                  if not os.path.exists(p):
+                      missing.add(p)
+          print(f"{len(vids)} video, gambar dipakai: {sorted(used)}")
+          if missing:
+              print(f"::error::gambar tidak ditemukan di root repo: {sorted(missing)}")
+              sys.exit(1)
+          CHK
 
       - name: Install system packages
         run: |
@@ -103,12 +180,10 @@ jobs:
           from patchright.async_api import async_playwright
 
           TARGET_URL = "https://www.dola.com/chat"
-          IMAGE_PATH = os.path.abspath(os.environ.get("PRODUCT_IMAGE", "produk.png"))
-          PROMPTS_FILE = os.environ.get("PROMPTS_FILE", "prompts.json")
+          PROMPTS_FILE = os.environ.get("PROMPTS_FILE", "jobs.json")
           VIDEO_COUNT = int(os.environ.get("VIDEO_COUNT", "10"))
           CONCURRENCY = max(1, int(os.environ.get("CONCURRENCY", "3")))
-          MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
-          SEND_RULES = os.environ.get("SEND_RULES", "0") == "1"
+          MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "5"))   # total pesan per video (generate + perbaikan)
           DELETE_CHATS = os.environ.get("DELETE_CHATS", "1") == "1"
           RETRY_FAILED = os.environ.get("RETRY_FAILED", "1") == "1"
           DEADLINE = time.time() + int(os.environ.get("DEADLINE_MIN", "200")) * 60
@@ -123,7 +198,7 @@ jobs:
           STAGGER_S = 12
           BACKOFF_S = [60, 180, 300]
 
-          CFG = {"product": "", "style": "", "duration": 15}
+          CFG = {"product": "", "notes": "", "duration": 15, "images": ["produk.png"]}
           NET = {}                      # id(page) -> daftar URL video dari jaringan
           PASTE_LOCK = asyncio.Lock()   # clipboard dipakai bersama, paste harus bergantian
           TAG = contextvars.ContextVar("tag", default="")
@@ -173,94 +248,114 @@ jobs:
           # --------------------------------------------------------------------------
           RULES_PROMPT = (
               "RULES for this whole chat. Follow them for every message from now on.\n"
-              "1) When I ask for a video, generate it immediately with your built-in video generation "
-              "tool and show the finished video inline in your reply as a playable video preview. "
-              "Never deliver it as a file, file card or download link, and never make it with code.\n"
-              "2) When I attach a product image, treat it as the exact visual reference of the "
-              "product and keep the product identical in the video.\n"
-              "3) Never ask me questions, never ask for confirmation, never offer options or "
-              "alternatives. If something is unspecified, choose a sensible default yourself.\n"
-              "4) Never answer with only a script, storyboard, description or apology instead "
-              "of the video.\n"
-              "5) If you cannot produce the video for any reason (tool busy, queue full, rate "
-              f"limit, quota, error), reply with exactly this one word and nothing else: {SENT_OVERLOAD}\n"
-              "6) Never say the video is ready unless the video file is actually attached.\n"
+              "1) VIDEO TOOL: when I ask for a video, make it with your built-in video generation tool. "
+              "Never make it with code, scripts, ffmpeg, slideshows or by assembling still images.\n"
+              "2) REFERENCE IMAGES: attached images are the exact visual reference of the product. "
+              "Use them directly as the image input of the video tool and keep the product identical.\n"
+              "3) OUTPUT FORMAT: when the video is ready, start your reply with exactly this sentence: "
+              "'Video attached below.' and then show the video right there in the chat as the inline "
+              "playable video preview with its 'Download the video' link, the way generated videos are "
+              "normally shown. The video must be displayed in the chat itself. Never reply with only a URL "
+              "or a link, and never deliver it as a document, file card, file name or file link. "
+              "Never write HTML or markup tags (for example video tags) as text in your reply. If the preview "
+              "does not show, present or generate it again instead of describing it.\n"
+              "4) ERRORS: if a generation attempt fails or returns an error, call the video generation tool "
+              "again with the same inputs (up to 3 tries) before giving up. Do not switch to other methods.\n"
+              "5) Never ask me questions, never ask for confirmation, never offer options or alternatives. "
+              "If something is unspecified, choose a sensible default yourself.\n"
+              "6) Never answer with only a script, storyboard, description or apology instead of the video. "
+              "Never say the video is ready unless the playable preview is shown.\n"
+              "7) DEFAULT SPEC: every video is exactly 15 seconds, vertical 9:16, photorealistic live-action.\n"
+              "8) If you truly cannot produce the video (tool busy, queue full, rate limit, quota), reply with "
+              f"exactly this one word and nothing else: {SENT_OVERLOAD}\n"
               f"To confirm you understood, reply with exactly: {SENT_READY}"
           )
 
-          DELIVERY = (
-              "DELIVERY FORMAT (mandatory): make the video with your built-in video generation tool "
-              "(image-to-video, using the attached reference image). Never make it with code, scripts, "
-              "ffmpeg, slideshows or by assembling still images. Show the finished video inline in this "
-              "chat as a playable video preview, exactly like a normal generated video. Do NOT create, "
-              "attach or link it as a downloadable document or file, do NOT show a file card, file name "
-              "or file link, and do NOT add any extra watermark, logo or text overlay of your own."
-          )
-
           FIDELITY = (
-              "PRODUCT FIDELITY (highest priority): reproduce the product from the reference image "
-              "exactly: same shape, proportions, color, cap or pump, packaging and label layout. "
-              "Do not redesign, recolor or invent any text. Keep the label sharp, legible and "
-              "unaltered. The product must be clearly visible in most shots."
+              "PRODUCT FIDELITY (highest priority): reproduce the product exactly as in the reference "
+              "image(s): same shape, proportions, color, cap or pump, packaging and label layout. "
+              "Do not redesign, recolor or invent any text. Keep the label sharp, legible and unaltered. "
+              "The product must be clearly visible in most shots."
           )
           TALENT = (
-              "TALENT: one natural-looking woman with realistic skin texture (visible pores, "
-              "no plastic or over-smoothed skin), tidy and aspirational."
+              "TALENT: one natural-looking woman with realistic skin texture (visible pores, no plastic "
+              "or over-smoothed skin), natural expressions, tidy and aspirational."
           )
           STRUCTURE = (
-              "SHOT STRUCTURE: opening HOOK (hand picks up the product and turns it to camera, "
-              "quick glance and soft smile), then APPLICATION (macro of the texture, smooth realistic "
-              "application), then RESULT (soft glowing skin, relaxed satisfied expression), "
-              "ending on a HERO frame (product beside her face, label facing the camera, slow "
-              "push-in, clean stable final frame)."
+              "SHOT STRUCTURE: opening HOOK (hand picks up the product and turns it to camera, quick glance "
+              "and soft smile), then APPLICATION (macro of the texture, smooth realistic application), then "
+              "RESULT (soft glowing skin, relaxed satisfied expression), ending on a HERO frame (product "
+              "beside her face, label facing the camera, slow push-in, clean stable final frame)."
           )
           STYLE_AUDIO = (
-              "STYLE: natural light, warm soft highlights, shallow depth of field, handheld "
-              "smartphone feel with gentle stabilization, smooth continuous motion, consistent "
-              "lighting and exposure, high-end beauty commercial look, sharp 4K detail.\n"
-              "AUDIO: soft upbeat lo-fi background music, no speech. No captions, subtitles, "
-              "watermarks or logos other than the product's own label."
+              "STYLE: natural light, warm soft highlights, shallow depth of field, handheld smartphone feel "
+              "with gentle stabilization, smooth continuous motion, consistent lighting and exposure, "
+              "high-end beauty commercial look, sharp detail.\n"
+              "AUDIO: soft upbeat lo-fi background music, no speech. No captions, subtitles, watermarks or "
+              "logos other than the product's own label."
           )
           COMPLIANCE_AVOID = (
-              "COMPLIANCE: no medical or miracle claims, no exaggerated before/after, "
-              "only believable everyday results.\n"
-              "AVOID: distorted hands or extra fingers, warped or morphing packaging, garbled text, "
-              "flicker, sudden cuts, uncanny face."
+              "COMPLIANCE: no medical or miracle claims, no exaggerated before/after, only believable "
+              "everyday results.\n"
+              "AVOID: distorted hands or extra fingers, warped or morphing packaging, garbled text, flicker, "
+              "sudden cuts, uncanny face, cartoon or CGI look."
           )
+
+
+          def job_images(job):
+              imgs = job.get("images") or CFG["images"]
+              if isinstance(imgs, str):
+                  imgs = [imgs]
+              return [os.path.abspath(p) for p in imgs[:3]]
 
 
           def build_prompt(job):
-              product = CFG["product"] or "the beauty product in the reference image"
+              dur = CFG["duration"]
+              n = len(job_images(job))
+              refs = ("1 reference image is attached" if n == 1 else
+                      f"{n} reference images are attached; use all of them as exact product references")
+              product = job.get("product") or CFG["product"] or "the product shown in the reference image"
               parts = [
-                  f"Create a premium {CFG['duration']}-second vertical (9:16) UGC-style beauty ad video "
-                  f"for TikTok/Reels featuring {product}, exactly as shown in the attached reference image.",
+                  f"Create a premium {dur}-second vertical 9:16 UGC-style beauty ad video for TikTok/Reels "
+                  f"featuring {product}. {refs}.",
+                  f"VIDEO SPEC: exactly {dur} seconds, vertical 9:16 aspect ratio (1080x1920), photorealistic "
+                  "live-action footage that looks like real camera footage from a high-end smartphone. "
+                  "Realistic skin, real-world lighting and physics. Not animation, not CGI, not cartoon, "
+                  "not illustration, not a slideshow.",
                   FIDELITY,
               ]
-              if job.get("prompt"):                       # prompt kustom penuh dari JSON
+              if job.get("prompt"):
                   parts.append(str(job["prompt"]).strip())
               else:
-                  parts += [f"CREATIVE ANGLE: {job.get('scene', '').strip()}", TALENT, STRUCTURE]
+                  parts += [f"CREATIVE ANGLE: {str(job.get('scene', '')).strip()}", TALENT, STRUCTURE]
               parts += [STYLE_AUDIO, COMPLIANCE_AVOID]
-              extra = " ".join(x for x in (CFG["style"], str(job.get("notes", "")).strip()) if x)
+              extra = " ".join(x for x in (CFG["notes"], str(job.get("notes", "")).strip()) if x)
               if extra:
                   parts.append(f"EXTRA DIRECTION: {extra}")
               return (
                   "Generate this video now. No questions, no confirmation. "
-                  f"If you cannot, reply with exactly: {SENT_OVERLOAD}\n\n" + DELIVERY + "\n\n" + "\n\n".join(parts)
+                  f"If you truly cannot, reply with exactly: {SENT_OVERLOAD}\n"
+                  "Reply with 'Video attached below.' and display the video in the chat as the inline "
+                  "playable video preview with the 'Download the video' link. Do not reply with only a URL "
+                  "or a file link (not a file, not text tags, not made with code).\n\n" + "\n\n".join(parts)
               )
 
 
           NUDGE_PROMPT = (
-              "Do not ask or explain anything. Generate the video now with your video generation tool "
-              "and show it inline as a playable video preview (not a file or download link). "
-              f"If you cannot, reply with exactly: {SENT_OVERLOAD}"
+              "Do not ask or explain anything. Generate the video now with your built-in video generation "
+              "tool. Reply with 'Video attached below.' and display it in the chat as the inline playable "
+              "video preview with the 'Download the video' link, not as a URL or file link. "
+              f"If you truly cannot, reply with exactly: {SENT_OVERLOAD}"
           )
 
-          FILECARD_PROMPT = (
-              "That was delivered as a file. Do not send a file. Generate the video again with your "
-              "built-in video generation tool and show it inline in the chat as a playable video preview, "
-              "not as a document, file card or download link. Do not use code. "
-              f"If you cannot, reply with exactly: {SENT_OVERLOAD}"
+          FIX_PROMPT = (
+              "Your last reply did not show a playable video preview in the chat (it was a URL, a file, a "
+              "broken tag, or nothing). Reply with 'Video attached below.' and display the generated video "
+              "now in the chat as the inline playable video preview with its 'Download the video' link, the "
+              "same way generated videos are normally shown. Do not reply with only a URL or file link, do "
+              "not write markup tags as text, do not attach a file, do not use code. If no video exists yet, generate "
+              "it again with the video generation tool using the same reference image(s) and the same "
+              f"description. If you truly cannot, reply with exactly: {SENT_OVERLOAD}"
           )
 
 
@@ -272,12 +367,13 @@ jobs:
                       videos = data
                   else:
                       defaults, videos = data.get("defaults", {}) or {}, data.get("videos")
-                  info(f"{PROMPTS_FILE}: {len(videos or [])} prompt")
+                  info(f"{PROMPTS_FILE}: {len(videos or [])} video")
               if not videos:
-                  videos = [{"id": f"v{i + 1:02d}", "scene": s} for i, s in enumerate(DEFAULT_SCENES)]
-                  info(f"prompts.json tidak ada/kosong, memakai {len(videos)} skenario bawaan")
-              CFG["product"] = os.environ.get("PRODUCT_NAME", "").strip() or str(defaults.get("product_name", "")).strip()
-              CFG["style"] = os.environ.get("STYLE_NOTES", "").strip() or str(defaults.get("style_notes", "")).strip()
+                  raise SystemExit(f"{PROMPTS_FILE} kosong atau tidak ada")
+              imgs = defaults.get("images") or defaults.get("image") or ["produk.png"]
+              CFG["images"] = [imgs] if isinstance(imgs, str) else list(imgs)
+              CFG["product"] = str(defaults.get("product", defaults.get("product_name", ""))).strip()
+              CFG["notes"] = str(defaults.get("notes", defaults.get("style_notes", ""))).strip()
               CFG["duration"] = defaults.get("duration_s", 15)
 
               jobs = []
@@ -287,7 +383,7 @@ jobs:
                   vid = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(v.get("id") or f"v{i + 1:02d}")).strip("-")[:40]
                   jobs.append({**v, "id": vid or f"v{i + 1:02d}"})
               if len(videos) < VIDEO_COUNT:
-                  info(f"diminta {VIDEO_COUNT} video, tersedia {len(videos)} prompt")
+                  info(f"diminta {VIDEO_COUNT} video, tersedia {len(videos)}")
               return jobs
 
 
@@ -550,7 +646,7 @@ jobs:
               return False
 
 
-          async def send_message(page, text, image=None, shot=None):
+          async def send_message(page, text, images=None, shot=None):
               for sel in ("textarea", "div[contenteditable='true']"):
                   loc = page.locator(sel)
                   if await loc.count() == 0:
@@ -559,16 +655,20 @@ jobs:
                   await el.click()
                   await el.fill(text)
                   await page.wait_for_timeout(500)
-                  if image:
+                  if images:
                       async with PASTE_LOCK:        # clipboard dipakai bersama antar tab
                           await page.bring_to_front()
                           await el.focus()
-                          good = await attach_image(page, image)
+                          good = True
+                          for path in images:
+                              if not await attach_image(page, path):
+                                  good = False
+                                  break
+                              await el.focus()
                       if not good:
                           if shot:
                               await page.screenshot(path=shot("attach_failed"))
                           return False
-                      await el.focus()
                   await page.wait_for_timeout(1000)
                   await page.keyboard.press("Enter")
                   return True
@@ -592,13 +692,22 @@ jobs:
           # --------------------------------------------------------------------------
           # Deteksi respons chat
           # --------------------------------------------------------------------------
-          BIGIMG_JS = """() => [...document.querySelectorAll('img')]
-              .filter(i => i.naturalWidth >= 200 && i.offsetParent !== null).length"""
-          VIDEO_SRC_JS = """() => [...document.querySelectorAll('video')].map(v =>
-              v.currentSrc || v.src || (v.querySelector('source') && v.querySelector('source').src) || '')"""
+          # Gambar "besar" hanya yang berada di area chat (bukan foto profil/sidebar)
+          BIGIMG_JS = """() => [...document.querySelectorAll('img')].filter(i => {
+              const r = i.getBoundingClientRect();
+              return r.width >= 120 && r.height >= 120 && r.left > 290 && i.offsetParent !== null;
+          }).length"""
+          MEDIA_JS = """() => ({
+              vids: [...document.querySelectorAll('video')].map(v =>
+                  v.currentSrc || v.src || (v.querySelector('source') && v.querySelector('source').src) || ''),
+              links: [...document.querySelectorAll('a[href]')].map(a => a.href)
+                  .filter(h => /mime_type=video|\\/video\\/tos\\/|\\.mp4(\\?|$)/i.test(h))
+          })"""
           LAST_BIGIMG_POS_JS = """() => {
-              const imgs = [...document.querySelectorAll('img')]
-                  .filter(i => i.naturalWidth >= 200 && i.offsetParent !== null);
+              const imgs = [...document.querySelectorAll('img')].filter(i => {
+                  const r = i.getBoundingClientRect();
+                  return r.width >= 120 && r.height >= 120 && r.left > 290 && i.offsetParent !== null;
+              });
               const e = imgs[imgs.length - 1];
               if (!e) return null;
               e.scrollIntoView({block: 'center'});
@@ -624,6 +733,11 @@ jobs:
               return "generating" in text[-150:].lower()
 
 
+          def bad_score(text):
+              """Tag video yang tampil sebagai teks mentah (embed gagal render)."""
+              return text.count("</video>") + text.count("<video")
+
+
           def overload_score(text):
               low = text.lower()
               return text.count(SENT_OVERLOAD) + sum(low.count(p) for p in DEMAND_PATTERNS)
@@ -647,20 +761,20 @@ jobs:
           async def snapshot(page):
               text = await body_text(page)
               try:
-                  vids = await page.evaluate(VIDEO_SRC_JS)
+                  media = await page.evaluate(MEDIA_JS)
               except Exception:
-                  vids = []
+                  media = {"vids": [], "links": []}
               try:
                   big = await page.evaluate(BIGIMG_JS)
               except Exception:
                   big = 0
               urls = []
-              for u in [v for v in vids if v] + NET.get(id(page), []):
+              for u in [v for v in media["vids"] if v] + media["links"] + NET.get(id(page), []):
                   if u not in urls:
                       urls.append(u)
-              return {"text": text, "vcount": len(vids), "urls": urls, "big": big,
+              return {"text": text, "vcount": len(media["vids"]), "urls": urls, "big": big,
                       "overload": overload_score(text), "file": file_score(text),
-                      "generating": is_generating(text)}
+                      "bad": bad_score(text), "generating": is_generating(text)}
 
 
           async def wait_idle_after_rules(page, base_ready, max_s=240):
@@ -678,7 +792,8 @@ jobs:
 
 
           async def wait_reply(page, base, limit_s):
-              """state: video | video_poster | file_card | overload | done_no_media | text_only | timeout"""
+              """state: video | video_poster | broken_embed | file_card | overload |
+              done_no_media | text_only | timeout"""
               elapsed = stable = finished_for = last_print = 0
               seen_gen = False
               last_text, s = base["text"], base
@@ -692,8 +807,6 @@ jobs:
                       return "video", s
                   if s["overload"] > base["overload"]:
                       return "overload", s
-                  if not s["generating"] and s["file"] > base["file"] and stable >= 20:
-                      return "file_card", s
                   if s["generating"]:
                       if not seen_gen:
                           info(f"mulai generate ({elapsed}s)")
@@ -703,6 +816,12 @@ jobs:
                       if seen_gen:
                           finished_for += POLL_S
                   last_text = s["text"]
+
+                  quiet = (not s["generating"]) and stable >= 20
+                  if quiet and s["bad"] > base["bad"]:
+                      return "broken_embed", s          # AI menulis tag video sebagai teks
+                  if quiet and s["file"] > base["file"]:
+                      return "file_card", s             # hasil berupa kartu file
                   if seen_gen and not s["generating"]:
                       if (s["big"] > base["big"] or s["vcount"] > base["vcount"]) and finished_for >= 10:
                           return "video_poster", s
@@ -799,7 +918,7 @@ jobs:
               const r = e.getBoundingClientRect();
               return {x: r.x + r.width / 2, y: r.y + r.height / 2, t: (e.innerText || '').trim(),
                       top: r.top, w: r.width};
-          }).filter(o => o.top >= 0 && o.top < 60 && o.x > 300 && o.w > 0 && o.t === '')
+          }).filter(o => o.top >= 0 && o.top < 60 && o.x > 700 && o.w > 0 && o.t === '')
             .sort((a, b) => b.x - a.x)"""
           MENU_TEXT_JS = """() => [...document.querySelectorAll('[role=menuitem],[role=menu] *,[class*=popover] *,[class*=dropdown] *')]
               .map(e => (e.innerText || '').trim()).filter(t => t && t.length < 30)"""
@@ -851,9 +970,16 @@ jobs:
           # --------------------------------------------------------------------------
           async def process_job(context, job, idx, total, pass_no):
               TAG.set(job["id"])
+              images = job_images(job)
               res = {"no": idx + 1, "id": job["id"], "scene": job.get("scene") or "(prompt kustom)",
-                     "state": "none", "saved": False, "file": "", "size_kb": 0, "duration_s": None,
-                     "attempts": 0, "chat_url": "", "chat_deleted": "-", "pass": pass_no, "note": ""}
+                     "images": [os.path.basename(p) for p in images], "state": "none", "saved": False,
+                     "file": "", "size_kb": 0, "duration_s": None, "attempts": 0, "chat_url": "",
+                     "chat_deleted": "-", "pass": pass_no, "note": ""}
+              missing = [p for p in images if not os.path.exists(p)]
+              if missing:
+                  res["state"] = "image_missing"
+                  warn("gambar tidak ada: " + ", ".join(os.path.basename(p) for p in missing))
+                  return res
               if time.time() > DEADLINE:
                   res["state"] = "skipped_deadline"
                   warn("batas waktu habis, dilewati")
@@ -865,27 +991,31 @@ jobs:
               page = await context.new_page()
               attach_net(page)
               try:
-                  step(f"mulai ({idx + 1}/{total})")
+                  step(f"mulai ({idx + 1}/{total}) · gambar: {', '.join(res['images'])}")
                   await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
                   await page.wait_for_timeout(8000)
                   await handle_captcha(page)
                   await dismiss_banners(page)
 
-                  if SEND_RULES:
-                      if await send_message(page, RULES_PROMPT, shot=shot):
-                          await page.wait_for_timeout(4000)
-                          await wait_idle_after_rules(page, (await body_text(page)).count(SENT_READY))
-                      await page.wait_for_timeout(3000)
+                  # Prompt 1: aturan (wajib di setiap chat)
+                  if await send_message(page, RULES_PROMPT, shot=shot):
+                      await page.wait_for_timeout(4000)
+                      await wait_idle_after_rules(page, (await body_text(page)).count(SENT_READY))
+                      ok("aturan terkirim")
+                  else:
+                      warn("aturan gagal terkirim")
+                  await page.wait_for_timeout(3000)
 
-                  prompt, use_image, nudges, cards = build_prompt(job), True, 0, 0
+                  # Prompt 2: generate (+ perbaikan bila tampilan video tidak valid)
+                  prompt, use_images, nudges, fixes = build_prompt(job), True, 0, 0
                   state, snap, base = "none", None, None
                   for attempt in range(1, MAX_ATTEMPTS + 1):
                       res["attempts"] = attempt
-                      if not await send_message(page, prompt, IMAGE_PATH if use_image else None, shot=shot):
+                      if not await send_message(page, prompt, images if use_images else None, shot=shot):
                           warn("gagal mengirim prompt")
                           state = "send_failed"
                           break
-                      ok(f"prompt terkirim (percobaan {attempt}/{MAX_ATTEMPTS})")
+                      ok(f"prompt terkirim ({attempt}/{MAX_ATTEMPTS})")
                       await page.wait_for_timeout(4000)
                       res["chat_url"] = page.url
                       base = await snapshot(page)
@@ -896,29 +1026,28 @@ jobs:
                           await page.screenshot(path=shot(f"attempt{attempt}_{state}"), full_page=True)
                           with open(f"logs/{idx + 1:02d}-{job['id']}.txt", "a", encoding="utf-8") as f:
                               f.write(f"== attempt {attempt} / {state} ==\n{snap['text'][-3000:]}\n")
-                      if state in ("video", "video_poster", "done_no_media", "timeout"):
+                      if state in ("video", "video_poster", "timeout"):
                           break
-                      if state == "file_card":
-                          if cards >= 2:
+                      if state in ("file_card", "broken_embed", "done_no_media"):
+                          if fixes >= 2:
                               break
-                          cards += 1
-                          info("hasil berupa file card, minta tampil inline")
-                          prompt, use_image = FILECARD_PROMPT, False
-                          continue
-                      if state == "overload":
+                          fixes += 1
+                          info(f"tampilan video tidak valid, minta tampil inline ({fixes}/2)")
+                          prompt, use_images = FIX_PROMPT, False
+                      elif state == "overload":
                           wait_s = BACKOFF_S[min(attempt - 1, len(BACKOFF_S) - 1)]
                           info(f"overload, tunggu {wait_s}s")
                           await page.wait_for_timeout(wait_s * 1000)
-                          prompt, use_image = build_prompt(job), True
+                          prompt, use_images = build_prompt(job), True
                       elif state == "text_only":
                           if nudges >= 1:
                               break
                           nudges += 1
                           info("hanya teks, kirim nudge")
-                          prompt, use_image = NUDGE_PROMPT, False
+                          prompt, use_images = NUDGE_PROMPT, False
                   res["state"] = state
 
-                  if state in ("video", "video_poster", "done_no_media", "file_card"):
+                  if state in ("video", "video_poster", "file_card"):
                       new = [u for u in snap["urls"] if u not in base["urls"]]
                       if not new:
                           await (activate_card(page) if state == "file_card" else activate_media(page))
@@ -929,10 +1058,10 @@ jobs:
                       if size:
                           res.update(saved=True, file=path, size_kb=size // 1024,
                                      duration_s=probe_duration(path))
+                          ok(f"video tersimpan ({res['size_kb']} KB, {res['duration_s']} dtk)")
                           if state == "file_card":
                               res["note"] = "dari file card (kemungkinan berwatermark)"
                               warn(res["note"])
-                          ok(f"video tersimpan ({res['size_kb']} KB, {res['duration_s']} dtk)")
                       else:
                           await page.screenshot(path=shot("download_failed"), full_page=True)
                           warn("video terdeteksi tapi gagal diunduh")
@@ -1044,20 +1173,16 @@ jobs:
           DOLA_COOKIES: ${{ secrets.DOLA_COOKIES }}
           VIDEO_COUNT: ${{ inputs.video_count }}
           CONCURRENCY: ${{ inputs.concurrency }}
-          PRODUCT_NAME: ${{ inputs.product_name }}
-          STYLE_NOTES: ${{ inputs.style_notes }}
-          SEND_RULES: ${{ inputs.send_rules && '1' || '0' }}
           DELETE_CHATS: ${{ inputs.delete_chats && '1' || '0' }}
-          PRODUCT_IMAGE: produk.png
-          PROMPTS_FILE: prompts.json
-          MAX_ATTEMPTS: "3"
+          PROMPTS_FILE: jobs.json
+          MAX_ATTEMPTS: "5"
         run: xvfb-run -a python -u dola_bot.py 2>&1 | tee dola.log
 
       - name: Disconnect VPN
         if: always()
         run: sudo wg-quick down wg0 2>/dev/null || true
 
-      # Kumpulan video: unduh dari halaman run, atau `gh run download <run-id> -n dola-videos-<nomor>`
+      # Unduh dari halaman run, atau: gh run download <run-id> -n dola-videos-<nomor>
       - name: Simpan video ke artifact
         if: always()
         uses: actions/upload-artifact@v4
