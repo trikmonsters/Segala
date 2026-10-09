@@ -1,80 +1,72 @@
-name: Premium Skincare Commercial - Skin Engineered
+name: Render Original Skincare Motion Ad
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skincare-motion-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 90
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      
 
-      - name: Install system dependencies
+      - name: Install system packages
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
-            imagemagick \
-            fonts-inter \
-            fonts-noto-core \
-            libnss3 \
-            libatk1.0-0 \
-            libatk-bridge2.0-0 \
-            libcups2 \
-            libdrm2 \
-            libxkbcommon0 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrandr2 \
-            libgbm1 \
-            libasound2t64
+          sudo apt-get install -y imagemagick fonts-inter fonts-noto-core fonts-liberation
 
-      - name: Prepare project
+      - name: Prepare product asset and project
         shell: bash
         run: |
-          set -e
-
+          set -euo pipefail
           mkdir -p src public out
-
-          if [ -f "produk.png" ]; then
-            cp "produk.png" "public/product.png"
-          elif [ -f "produk.jpg" ]; then
-            magick "produk.jpg" -strip "public/product.png"
-          elif [ -f "produk.jpeg" ]; then
-            magick "produk.jpeg" -strip "public/product.png"
+          if [[ -f produk.png ]]; then
+            cp produk.png public/product.png
+          elif [[ -f produk.jpg ]]; then
+            convert produk.jpg -strip -colorspace sRGB public/product.png
+          elif [[ -f produk.jpeg ]]; then
+            convert produk.jpeg -strip -colorspace sRGB public/product.png
+          elif [[ -f produk.webp ]]; then
+            convert produk.webp -strip -colorspace sRGB public/product.png
+          elif [[ -f product.png ]]; then
+            cp product.png public/product.png
           else
-            echo "ERROR: produk.png / produk.jpg / produk.jpeg tidak ditemukan di root repository."
+            echo 'ERROR: Put your product image in the repository root as produk.png, produk.jpg, produk.jpeg, produk.webp, or product.png.'
             exit 1
           fi
+          identify public/product.png
 
           cat > package.json <<'EOF'
           {
+            "name": "skin-in-motion-ad",
+            "version": "1.0.0",
             "private": true,
-            "scripts": {
-              "build": "tsc --noEmit"
-            },
+            "scripts": {"typecheck": "tsc --noEmit"},
             "dependencies": {
-              "@remotion/cli": "latest",
-              "remotion": "latest",
-              "react": "latest",
-              "react-dom": "latest"
+              "@remotion/cli": "4.0.320",
+              "@remotion/renderer": "4.0.320",
+              "react": "18.3.1",
+              "react-dom": "18.3.1",
+              "remotion": "4.0.320"
             },
             "devDependencies": {
-              "@types/react": "latest",
-              "@types/react-dom": "latest",
-              "typescript": "latest"
+              "@types/react": "18.3.24",
+              "@types/react-dom": "18.3.7",
+              "typescript": "5.8.3"
             }
           }
           EOF
@@ -82,1366 +74,250 @@ jobs:
           cat > tsconfig.json <<'EOF'
           {
             "compilerOptions": {
-              "target": "ES2022",
-              "lib": ["DOM", "ES2022"],
+              "target": "ES2020",
+              "lib": ["DOM", "ES2020"],
               "module": "ESNext",
               "moduleResolution": "Bundler",
               "jsx": "react-jsx",
               "strict": true,
+              "esModuleInterop": true,
               "skipLibCheck": true,
-              "noEmit": true,
-              "allowJs": false
+              "noEmit": true
             },
             "include": ["src"]
           }
           EOF
 
           cat > remotion.config.ts <<'EOF'
-          import { Config } from "@remotion/cli/config";
-
+          import {Config} from '@remotion/cli/config';
           Config.setOverwriteOutput(true);
-          Config.setConcurrency(2);
-          Config.setCodec("h264");
-          Config.setPixelFormat("yuv420p");
-          Config.setJpegQuality(96);
+          Config.setVideoImageFormat('jpeg');
           EOF
 
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+
+      - name: Write Remotion composition
+        shell: bash
+        run: |
+          set -euo pipefail
           cat > src/index.tsx <<'EOF'
-          import React from "react";
-          import { registerRoot } from "remotion";
-          import { Composition } from "remotion";
-          import { PremiumSkincare } from "./PremiumSkincare";
-
-          const Root: React.FC = () => {
-            return (
-              <Composition
-                id="PremiumSkincare"
-                component={PremiumSkincare}
-                durationInFrames={900}
-                fps={30}
-                width={1080}
-                height={1920}
-                defaultProps={{}}
-              />
-            );
-          };
-
+          import React from 'react';
+          import {Composition, registerRoot} from 'remotion';
+          import {SkinInMotion} from './SkinInMotion';
+          const Root: React.FC = () => <Composition id="SkinInMotion" component={SkinInMotion} durationInFrames={900} fps={30} width={1080} height={1920} />;
           registerRoot(Root);
           EOF
 
-          cat > src/PremiumSkincare.tsx <<'EOF'
-          import React from "react";
-          import {
-            AbsoluteFill,
-            Easing,
-            Img,
-            interpolate,
-            spring,
-            staticFile,
-            useCurrentFrame,
-            useVideoConfig,
-          } from "remotion";
+          cat > src/SkinInMotion.tsx <<'EOF'
+          import React from 'react';
+          import {AbsoluteFill, Img, Sequence, Easing, interpolate, spring, staticFile, useCurrentFrame} from 'remotion';
 
-          const W = 1080;
-          const H = 1920;
+          const W = 1080, H = 1920, FPS = 30;
+          const P = staticFile('product.png');
+          const C = {ink:'#12110F', paper:'#F2ECE4', sand:'#D9C7B4', copper:'#B66F54', pale:'#F9F4EE', muted:'#8B7A6C', gold:'#D9B98B', white:'#FFFDF9'};
+          const FONT = 'Inter, Arial, sans-serif';
+          const CLAMP = {extrapolateLeft:'clamp' as const, extrapolateRight:'clamp' as const};
+          const OUT = Easing.bezier(0.16,1,0.3,1);
+          const INOUT = Easing.bezier(0.65,0,0.35,1);
+          const fade = (f:number, d:number, a=12, b=12) => interpolate(f,[0,a,Math.max(a+1,d-b),d],[0,1,1,0],CLAMP);
+          const move = (f:number, input:[number,number], output:[number,number]) => interpolate(f,input,output,{easing:OUT,...CLAMP});
 
-          const C = {
-            ink: "#111111",
-            paper: "#F3EFE8",
-            cream: "#E9E0D5",
-            nude: "#D4C1B0",
-            rose: "#B86E63",
-            roseDark: "#6E3934",
-            champagne: "#D4B486",
-            white: "#FFFFFF",
-            muted: "#7E746C",
-            line: "rgba(17,17,17,0.16)",
-            lineLight: "rgba(255,255,255,0.20)",
+          const Text: React.FC<{children:React.ReactNode;size?:number;color?:string;weight?:number;tracking?:number;leading?:number;align?:'left'|'center'|'right';style?:React.CSSProperties}> = ({children,size=28,color=C.ink,weight=600,tracking=0,leading=1.05,align='left',style={}}) => <div style={{fontFamily:FONT,fontSize:size,color,fontWeight:weight,letterSpacing:tracking,lineHeight:leading,textAlign:align,...style}}>{children}</div>;
+
+          const Product: React.FC<{width?:number; x?:number; y?:number; scale?:number; rotate?:number; dark?:boolean; shadow?:number; opacity?:number}> = ({width=760,x=0,y=0,scale=1,rotate=0,dark=false,shadow=0.34,opacity=1}) => <Img src={P} style={{width, height:'auto',objectFit:'contain',transform:`translate3d(${x}px,${y}px,0) scale(${scale}) rotate(${rotate}deg)`,filter:`${dark?'brightness(.9) contrast(1.08)':'brightness(1.02) contrast(1.03)'} drop-shadow(0 34px 42px rgba(0,0,0,${shadow}))`,opacity}} />;
+
+          const Grain: React.FC<{opacity?:number}> = ({opacity=0.035}) => {
+            const f=useCurrentFrame();
+            return <AbsoluteFill style={{pointerEvents:'none',opacity,mixBlendMode:'soft-light',backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='2' seed='${f%7}' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.8'/%3E%3C/svg%3E")`}} />;
           };
 
-          const ease = Easing.bezier(0.22, 1, 0.36, 1);
+          const Brandline: React.FC<{light?:boolean; index:string; label:string}> = ({light=false,index,label}) => <div style={{position:'absolute',left:64,right:64,top:64,display:'flex',justifyContent:'space-between',alignItems:'center',color:light?'rgba(255,253,249,.78)':'rgba(18,17,15,.72)',fontFamily:FONT,fontSize:15,fontWeight:700,letterSpacing:3,zIndex:20}}><span>SKIN / STUDIO</span><span>{index} &nbsp;—&nbsp; {label}</span></div>;
 
-          function clamp(value: number, min = 0, max = 1) {
-            return Math.min(max, Math.max(min, value));
-          }
+          const ThinRule: React.FC<{y:number; light?:boolean; progress?:number}> = ({y,light=false,progress=1}) => <div style={{position:'absolute',top:y,left:64,right:64,height:1,background:light?'rgba(255,255,255,.25)':'rgba(18,17,15,.18)',transform:`scaleX(${progress})`,transformOrigin:'left'}} />;
 
-          function fadeIn(frame: number, start: number, duration = 18) {
-            return interpolate(frame, [start, start + duration], [0, 1], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-          }
+          const Orb: React.FC<{size:number; x:number; y:number; color:string; opacity?:number; rotate?:number}> = ({size,x,y,color,opacity=.7,rotate=0}) => <div style={{position:'absolute',left:x,top:y,width:size,height:size,borderRadius:'50%',border:`1px solid ${color}`,opacity,transform:`rotate(${rotate}deg)`,boxShadow:`inset 0 0 50px ${color}18, 0 0 36px ${color}15`}}><div style={{position:'absolute',left:'50%',top:-4,width:8,height:8,borderRadius:'50%',background:color,boxShadow:`0 0 22px ${color}`}} /></div>;
 
-          function fadeOut(
-            frame: number,
-            end: number,
-            duration = 18
-          ) {
-            return interpolate(frame, [end - duration, end], [1, 0], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-          }
-
-          function reveal(
-            frame: number,
-            start: number,
-            duration = 28
-          ) {
-            return interpolate(frame, [start, start + duration], [0, 1], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-          }
-
-          function Product({
-            scale = 1,
-            x = 0,
-            y = 0,
-            rotate = 0,
-            opacity = 1,
-            shadow = true,
-          }: {
-            scale?: number;
-            x?: number;
-            y?: number;
-            rotate?: number;
-            opacity?: number;
-            shadow?: boolean;
-          }) {
-            return (
-              <Img
-                src={staticFile("product.png")}
-                style={{
-                  position: "absolute",
-                  width: 660,
-                  height: 980,
-                  objectFit: "contain",
-                  left: W / 2 - 330,
-                  top: H / 2 - 490,
-                  transform: `translate3d(${x}px, ${y}px, 0) scale(${scale}) rotate(${rotate}deg)`,
-                  opacity,
-                  filter: shadow
-                    ? "drop-shadow(0 45px 55px rgba(25,15,12,.20))"
-                    : "none",
-                }}
-              />
-            );
-          }
-
-          function Grain() {
-            const frame = useCurrentFrame();
-            const offset = Math.sin(frame * 1.77) * 4;
-            return (
-              <AbsoluteFill
-                style={{
-                  pointerEvents: "none",
-                  opacity: 0.045,
-                  mixBlendMode: "multiply",
-                  backgroundImage:
-                    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E\")",
-                  transform: `translate(${offset}px, ${offset}px)`,
-                }}
-              />
-            );
-          }
-
-          function TopMark({
-            dark = true,
-            label = "HS BEAUTY",
-          }: {
-            dark?: boolean;
-            label?: string;
-          }) {
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 72,
-                  left: 72,
-                  right: 72,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  fontFamily: "Inter, Arial, sans-serif",
-                  fontSize: 19,
-                  letterSpacing: 4.2,
-                  color: dark ? C.ink : C.white,
-                  zIndex: 20,
-                }}
-              >
-                <span>{label}</span>
-                <span style={{ fontSize: 12, letterSpacing: 2.5, opacity: 0.58 }}>
-                  SKIN / 01
-                </span>
-              </div>
-            );
-          }
-
-          function FineRule({
-            top,
-            left = 72,
-            right = 72,
-            color = C.line,
-            opacity = 1,
-          }: {
-            top: number;
-            left?: number;
-            right?: number;
-            color?: string;
-            opacity?: number;
-          }) {
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  top,
-                  left,
-                  right,
-                  height: 1,
-                  background: color,
-                  opacity,
-                }}
-              />
-            );
-          }
-
-          function Kicker({
-            children,
-            top,
-            dark = true,
-            opacity = 1,
-          }: {
-            children: React.ReactNode;
-            top: number;
-            dark?: boolean;
-            opacity?: number;
-          }) {
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  top,
-                  left: 72,
-                  fontFamily: "Inter, Arial, sans-serif",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  letterSpacing: 4,
-                  color: dark ? C.roseDark : C.white,
-                  opacity,
-                }}
-              >
-                {children}
-              </div>
-            );
-          }
-
-          function HeroTitle({
-            children,
-            top,
-            size = 116,
-            dark = true,
-            opacity = 1,
-            scale = 1,
-          }: {
-            children: React.ReactNode;
-            top: number;
-            size?: number;
-            dark?: boolean;
-            opacity?: number;
-            scale?: number;
-          }) {
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  top,
-                  left: 68,
-                  right: 50,
-                  fontFamily: "Inter, Arial, sans-serif",
-                  fontSize: size,
-                  lineHeight: 0.86,
-                  fontWeight: 700,
-                  letterSpacing: -6,
-                  color: dark ? C.ink : C.white,
-                  opacity,
-                  transform: `scale(${scale})`,
-                  transformOrigin: "left top",
-                }}
-              >
-                {children}
-              </div>
-            );
-          }
-
-          function SmallCopy({
-            children,
-            top,
-            dark = true,
-            opacity = 1,
-          }: {
-            children: React.ReactNode;
-            top: number;
-            dark?: boolean;
-            opacity?: number;
-          }) {
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  top,
-                  left: 72,
-                  width: 430,
-                  fontFamily: "Inter, Arial, sans-serif",
-                  fontSize: 22,
-                  lineHeight: 1.35,
-                  fontWeight: 400,
-                  letterSpacing: -0.4,
-                  color: dark ? C.muted : "rgba(255,255,255,.70)",
-                  opacity,
-                }}
-              >
-                {children}
-              </div>
-            );
-          }
-
-          function Scene01() {
-            const f = useCurrentFrame();
-            const local = f;
-
-            const intro = fadeIn(local, 0, 24);
-            const title = reveal(local, 15, 32);
-            const product = reveal(local, 38, 34);
-            const exit = fadeOut(local, 118, 18);
-
-            const pScale = interpolate(
-              local,
-              [35, 120],
-              [0.88, 1.02],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: ease }
-            );
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.paper, opacity: exit }}>
-                <TopMark />
-                <FineRule top={116} />
-                <Kicker top={280} opacity={intro}>
-                  THE DAILY RITUAL
-                </Kicker>
-
-                <HeroTitle
-                  top={350}
-                  size={142}
-                  opacity={title}
-                  scale={interpolate(local, [15, 50], [0.96, 1], {
-                    extrapolateLeft: "clamp",
-                    extrapolateRight: "clamp",
-                    easing: ease,
-                  })}
-                >
-                  SKIN,
-                  <br />
-                  RESET.
-                </HeroTitle>
-
-                <SmallCopy top={700} opacity={fadeIn(local, 44, 24)}>
-                  A considered skincare system built around
-                  <br />
-                  the ingredients your skin actually needs.
-                </SmallCopy>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 110,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 13,
-                    letterSpacing: 2.5,
-                    color: C.muted,
-                    opacity: fadeIn(local, 70, 20),
-                  }}
-                >
-                  01 — FORMULATED FOR EVERYDAY USE
-                </div>
-
-                <Product
-                  scale={pScale}
-                  x={270}
-                  y={310}
-                  opacity={product}
-                  rotate={interpolate(local, [38, 120], [3, -1], {
-                    extrapolateLeft: "clamp",
-                    extrapolateRight: "clamp",
-                    easing: ease,
-                  })}
-                />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    width: 540,
-                    height: 540,
-                    borderRadius: "50%",
-                    left: 470,
-                    top: 680,
-                    background:
-                      "radial-gradient(circle, rgba(184,110,99,.17) 0%, rgba(184,110,99,0) 68%)",
-                    opacity: product,
-                  }}
-                />
-              </AbsoluteFill>
-            );
-          }
-
-          function Scene02() {
-            const f = useCurrentFrame();
-            const local = f;
-            const exit = fadeOut(local, 103, 18);
-            const intro = fadeIn(local, 0, 18);
-
-            const scale = spring({
-              frame: local,
-              fps: 30,
-              config: { damping: 16, stiffness: 70, mass: 0.8 },
-            });
-
-            const labels = [
-              ["01", "GLYCOLIC ACID", "REFINE"],
-              ["02", "NIACINAMIDE", "BALANCE"],
-              ["03", "HYALURONIC ACID", "HYDRATE"],
-              ["04", "CERAMIDE", "REPAIR"],
-            ];
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.ink, opacity: exit }}>
-                <TopMark dark={false} label="HS BEAUTY" />
-                <FineRule top={116} color={C.lineLight} />
-                <Kicker top={250} dark={false} opacity={intro}>
-                  THE FORMULA
-                </Kicker>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 335,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 100,
-                    lineHeight: 0.88,
-                    fontWeight: 650,
-                    letterSpacing: -5,
-                    color: C.white,
-                    opacity: intro,
-                  }}
-                >
-                  FOUR
-                  <br />
-                  ACTIVES.
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 740,
-                    left: 72,
-                    width: 900,
-                    height: 1,
-                    background: C.lineLight,
-                    opacity: 0.8,
-                  }}
-                />
-
-                {labels.map(([num, ingredient, benefit], i) => {
-                  const y = 805 + i * 200;
-                  const a = fadeIn(local, 18 + i * 12, 22);
-                  const x = interpolate(
-                    local,
-                    [18 + i * 12, 45 + i * 12],
-                    [35, 0],
-                    {
-                      extrapolateLeft: "clamp",
-                      extrapolateRight: "clamp",
-                      easing: ease,
-                    }
-                  );
-
-                  return (
-                    <div
-                      key={ingredient}
-                      style={{
-                        position: "absolute",
-                        left: 72,
-                        top: y,
-                        width: 900,
-                        display: "flex",
-                        alignItems: "center",
-                        opacity: a,
-                        transform: `translateX(${x}px)`,
-                        fontFamily: "Inter, Arial, sans-serif",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: 72,
-                          fontSize: 13,
-                          letterSpacing: 2,
-                          color: "rgba(255,255,255,.42)",
-                        }}
-                      >
-                        {num}
-                      </div>
-                      <div
-                        style={{
-                          width: 470,
-                          fontSize: 28,
-                          letterSpacing: 1.2,
-                          fontWeight: 600,
-                          color: C.white,
-                        }}
-                      >
-                        {ingredient}
-                      </div>
-                      <div
-                        style={{
-                          marginLeft: "auto",
-                          fontSize: 16,
-                          letterSpacing: 3,
-                          color: C.champagne,
-                        }}
-                      >
-                        {benefit}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                <Product
-                  scale={0.58 + scale * 0.04}
-                  x={245}
-                  y={-20}
-                  opacity={0.18}
-                  rotate={-4}
-                  shadow={false}
-                />
-              </AbsoluteFill>
-            );
-          }
-
-          function OrbitLine({
-            size,
-            rotation,
-            opacity,
-          }: {
-            size: number;
-            rotation: number;
-            opacity: number;
-          }) {
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  width: size,
-                  height: size * 0.52,
-                  border: `1px solid rgba(17,17,17,${opacity})`,
-                  borderRadius: "50%",
-                  left: W / 2 - size / 2,
-                  top: H / 2 - size * 0.26,
-                  transform: `rotate(${rotation}deg)`,
-                }}
-              />
-            );
-          }
-
-          function OrbitLabel({
-            text,
-            benefit,
-            angle,
-            radius,
-            frame,
-            start,
-          }: {
-            text: string;
-            benefit: string;
-            angle: number;
-            radius: number;
-            frame: number;
-            start: number;
-          }) {
-            const t = clamp((frame - start) / 32);
-            const a = (angle + frame * 0.45) * Math.PI / 180;
-            const x = Math.cos(a) * radius;
-            const y = Math.sin(a) * radius * 0.52;
-
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  left: W / 2 + x - 105,
-                  top: H / 2 + y - 30,
-                  width: 210,
-                  opacity: t,
-                  fontFamily: "Inter, Arial, sans-serif",
-                  textAlign: "center",
-                  transform: `scale(${0.94 + t * 0.06})`,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 15,
-                    letterSpacing: 2.4,
-                    fontWeight: 600,
-                    color: C.ink,
-                  }}
-                >
-                  {text}
-                </div>
-                <div
-                  style={{
-                    marginTop: 7,
-                    fontSize: 10,
-                    letterSpacing: 2,
-                    color: C.roseDark,
-                  }}
-                >
-                  {benefit}
-                </div>
-              </div>
-            );
-          }
-
-          function Scene03() {
-            const f = useCurrentFrame();
-            const exit = fadeOut(f, 103, 18);
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.paper, opacity: exit }}>
-                <TopMark />
-                <FineRule top={116} />
-
-                <Kicker top={240}>ACTIVE 01</Kicker>
-                <HeroTitle top={310} size={128}>
-                  REFINE.
-                </HeroTitle>
-
-                <SmallCopy top={500}>
-                  Glycolic Acid helps renew the look of the
-                  <br />
-                  skin surface for a smoother appearance.
-                </SmallCopy>
-
-                <OrbitLine size={940} rotation={-13} opacity={0.12} />
-                <OrbitLine size={700} rotation={16} opacity={0.08} />
-
-                <Product
-                  scale={0.66}
-                  x={0}
-                  y={20}
-                  rotate={-2}
-                  opacity={0.96}
-                />
-
-                <OrbitLabel
-                  text="GLYCOLIC ACID"
-                  benefit="SURFACE RENEWAL"
-                  angle={-35}
-                  radius={420}
-                  frame={f}
-                  start={12}
-                />
-
-                <OrbitLabel
-                  text="TEXTURE"
-                  benefit="REFINED"
-                  angle={145}
-                  radius={420}
-                  frame={f}
-                  start={28}
-                />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 120,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 12,
-                    letterSpacing: 2.4,
-                    color: C.muted,
-                  }}
-                >
-                  FORMULATED WITH PURPOSE
-                </div>
-              </AbsoluteFill>
-            );
-          }
-
-          function Scene04() {
-            const f = useCurrentFrame();
-            const exit = fadeOut(f, 103, 18);
-
-            const left = interpolate(f, [0, 45, 103], [-80, 0, 35], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.cream, opacity: exit }}>
-                <TopMark />
-                <FineRule top={116} />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 210,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 15,
-                    letterSpacing: 4,
-                    color: C.roseDark,
-                  }}
-                >
-                  ACTIVE 02 / 03 / 04
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 290,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 88,
-                    lineHeight: 0.91,
-                    fontWeight: 650,
-                    letterSpacing: -4.5,
-                    color: C.ink,
-                    transform: `translateX(${left}px)`,
-                  }}
-                >
-                  BALANCE.
-                  <br />
-                  HYDRATE.
-                  <br />
-                  REPAIR.
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 160,
-                    width: 500,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 19,
-                    lineHeight: 1.45,
-                    color: C.muted,
-                  }}
-                >
-                  Niacinamide. Hyaluronic Acid. Ceramide.
-                  <br />
-                  Three complementary steps for a more
-                  <br />
-                  comfortable, hydrated-looking finish.
-                </div>
-
-                <Product
-                  scale={0.61}
-                  x={285}
-                  y={245}
-                  rotate={3}
-                  opacity={0.98}
-                />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    right: 70,
-                    bottom: 155,
-                    width: 245,
-                    height: 245,
-                    borderRadius: "50%",
-                    border: `1px solid rgba(110,57,52,.22)`,
-                  }}
-                />
-              </AbsoluteFill>
-            );
-          }
-
-          function Scene05() {
-            const f = useCurrentFrame();
-            const exit = fadeOut(f, 103, 18);
-            const split = interpolate(f, [22, 65], [0, 1], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            const lineX = interpolate(f, [20, 68], [W / 2, W / 2 - 150], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.ink, opacity: exit }}>
-                <TopMark dark={false} />
-                <FineRule top={116} color={C.lineLight} />
-
-                <Kicker top={250} dark={false}>
-                  THE FINISH
-                </Kicker>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 335,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 90,
-                    lineHeight: 0.9,
-                    fontWeight: 650,
-                    letterSpacing: -4,
-                    color: C.white,
-                  }}
-                >
-                  MORE
-                  <br />
-                  RADIANCE.
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 720,
-                    left: 72,
-                    width: 870,
-                    height: 650,
-                    border: "1px solid rgba(255,255,255,.13)",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background:
-                        "radial-gradient(circle at 70% 40%, rgba(212,180,134,.18), transparent 40%), linear-gradient(135deg,#171313,#3a2925)",
-                    }}
-                  />
-
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: `${Math.max(50, split * 100)}%`,
-                      background:
-                        "linear-gradient(145deg,#211d1c,#6a5149)",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: 72,
-                        top: 74,
-                        fontFamily: "Inter, Arial, sans-serif",
-                        fontSize: 13,
-                        letterSpacing: 3,
-                        color: "rgba(255,255,255,.55)",
-                      }}
-                    >
-                      BEFORE
-                    </div>
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: 72,
-                        bottom: 68,
-                        fontFamily: "Inter, Arial, sans-serif",
-                        fontSize: 18,
-                        color: "rgba(255,255,255,.65)",
-                      }}
-                    >
-                      DULL / DRY
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: `${Math.max(50, split * 100)}%`,
-                      top: 0,
-                      bottom: 0,
-                      width: `${100 - Math.max(50, split * 100)}%`,
-                      background:
-                        "linear-gradient(145deg,#c7aa98,#ead7c8)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        position: "absolute",
-                        right: 40,
-                        top: 74,
-                        fontFamily: "Inter, Arial, sans-serif",
-                        fontSize: 13,
-                        letterSpacing: 3,
-                        color: C.roseDark,
-                      }}
-                    >
-                      AFTER
-                    </div>
-                    <div
-                      style={{
-                        position: "absolute",
-                        right: 40,
-                        bottom: 68,
-                        fontFamily: "Inter, Arial, sans-serif",
-                        fontSize: 18,
-                        color: C.roseDark,
-                      }}
-                    >
-                      SMOOTH / LUMINOUS
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: lineX,
-                      top: 0,
-                      bottom: 0,
-                      width: 1,
-                      background: "rgba(255,255,255,.8)",
-                      boxShadow: "0 0 24px rgba(255,255,255,.35)",
-                    }}
-                  />
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 100,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 12,
-                    letterSpacing: 2.2,
-                    color: "rgba(255,255,255,.42)",
-                  }}
-                >
-                  VISUALIZED FINISH — NOT A MEDICAL CLAIM
-                </div>
-              </AbsoluteFill>
-            );
-          }
-
-          function Scene06() {
-            const f = useCurrentFrame();
-            const exit = fadeOut(f, 118, 18);
-
-            const p = spring({
-              frame: f,
-              fps: 30,
-              config: { damping: 18, stiffness: 55, mass: 0.9 },
-            });
-
-            const orbit = f * 0.55;
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.paper, opacity: exit }}>
-                <TopMark />
-                <FineRule top={116} />
-
-                <Kicker top={225}>THE SYSTEM</Kicker>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 280,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 86,
-                    lineHeight: 0.9,
-                    fontWeight: 650,
-                    letterSpacing: -4,
-                    color: C.ink,
-                  }}
-                >
-                  ONE
-                  <br />
-                  ROUTINE.
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 650,
-                    left: 0,
-                    width: W,
-                    height: 900,
-                  }}
-                >
-                  <OrbitLine size={860} rotation={-18} opacity={0.10} />
-                  <OrbitLine size={670} rotation={22} opacity={0.08} />
-                  <OrbitLine size={520} rotation={-42} opacity={0.06} />
-
-                  <Product
-                    scale={0.68 + p * 0.03}
-                    x={0}
-                    y={40}
-                    rotate={-2}
-                    opacity={1}
-                  />
-
-                  {[
-                    ["GLYCOLIC", "REFINE", -30, 440, 0],
-                    ["NIACINAMIDE", "BALANCE", 55, 410, 18],
-                    ["HYALURONIC", "HYDRATE", 145, 440, 34],
-                    ["CERAMIDE", "REPAIR", 215, 410, 50],
-                  ].map(([a, b, angle, radius, start]) => (
-                    <OrbitLabel
-                      key={String(a)}
-                      text={String(a)}
-                      benefit={String(b)}
-                      angle={Number(angle) + orbit}
-                      radius={Number(radius)}
-                      frame={f}
-                      start={Number(start)}
-                    />
-                  ))}
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 105,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 13,
-                    letterSpacing: 2.5,
-                    color: C.muted,
-                  }}
-                >
-                  FOUR ACTIVES / ONE CONSIDERED RITUAL
-                </div>
-              </AbsoluteFill>
-            );
-          }
-
-          function Scene07() {
-            const f = useCurrentFrame();
-            const exit = fadeOut(f, 133, 22);
-
-            const titleOpacity = fadeIn(f, 8, 22);
-            const productOpacity = fadeIn(f, 30, 26);
-
-            const productY = interpolate(f, [25, 80], [90, 0], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            return (
-              <AbsoluteFill style={{ backgroundColor: C.roseDark, opacity: exit }}>
-                <TopMark dark={false} label="HS BEAUTY" />
-                <FineRule top={116} color={C.lineLight} />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 270,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 15,
-                    letterSpacing: 4,
-                    color: "rgba(255,255,255,.60)",
-                    opacity: titleOpacity,
-                  }}
-                >
-                  THE COMPLETE RITUAL
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 335,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 92,
-                    lineHeight: 0.9,
-                    fontWeight: 650,
-                    letterSpacing: -4.5,
-                    color: C.white,
-                    opacity: titleOpacity,
-                  }}
-                >
-                  SIMPLE.
-                  <br />
-                  COMPLETE.
-                </div>
-
-                <Product
-                  scale={0.69}
-                  x={0}
-                  y={productY}
-                  rotate={-2}
-                  opacity={productOpacity}
-                />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    right: 72,
-                    bottom: 250,
-                    width: 290,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 17,
-                    lineHeight: 1.5,
-                    color: "rgba(255,255,255,.68)",
-                    opacity: fadeIn(f, 48, 22),
-                  }}
-                >
-                  Designed to make your daily routine feel
-                  <br />
-                  intentional, not complicated.
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 120,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 12,
-                    letterSpacing: 2.6,
-                    color: "rgba(255,255,255,.48)",
-                    opacity: fadeIn(f, 60, 20),
-                  }}
-                >
-                  CLEANSE / TREAT / HYDRATE / REPAIR
-                </div>
-              </AbsoluteFill>
-            );
-          }
-
-          function Scene08() {
-            const f = useCurrentFrame();
-
-            const bg = interpolate(f, [0, 60], [0, 1], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            const productScale = interpolate(f, [0, 80], [0.62, 0.69], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            const productY = interpolate(f, [0, 80], [40, -20], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: ease,
-            });
-
-            const title = fadeIn(f, 28, 24);
-
-            return (
-              <AbsoluteFill
-                style={{
-                  backgroundColor: C.ink,
-                }}
-              >
-                <AbsoluteFill
-                  style={{
-                    background:
-                      "radial-gradient(circle at 50% 34%, rgba(184,110,99,.32), transparent 35%), linear-gradient(145deg,#111111,#231715)",
-                    opacity: bg,
-                  }}
-                />
-
-                <TopMark dark={false} label="HS BEAUTY" />
-                <FineRule top={116} color={C.lineLight} />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 240,
-                    left: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 15,
-                    letterSpacing: 4,
-                    color: "rgba(255,255,255,.55)",
-                    opacity: title,
-                  }}
-                >
-                  YOUR DAILY RITUAL
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 315,
-                    left: 72,
-                    right: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 90,
-                    lineHeight: 0.9,
-                    fontWeight: 650,
-                    letterSpacing: -5,
-                    color: C.white,
-                    opacity: title,
-                  }}
-                >
-                  MAKE IT
-                  <br />
-                  YOUR RITUAL.
-                </div>
-
-                <Product
-                  scale={productScale}
-                  x={0}
-                  y={productY}
-                  rotate={-1}
-                  opacity={fadeIn(f, 16, 28)}
-                />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    right: 72,
-                    bottom: 130,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "flex-end",
-                    opacity: fadeIn(f, 55, 22),
-                    fontFamily: "Inter, Arial, sans-serif",
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        letterSpacing: 3,
-                        color: "rgba(255,255,255,.45)",
-                      }}
-                    >
-                      DISCOVER
-                    </div>
-                    <div
-                      style={{
-                        marginTop: 10,
-                        fontSize: 23,
-                        letterSpacing: 0.5,
-                        color: C.white,
-                      }}
-                    >
-                      Your complete skincare system
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      width: 82,
-                      height: 82,
-                      borderRadius: "50%",
-                      border: "1px solid rgba(255,255,255,.45)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 12,
-                      letterSpacing: 2,
-                      color: C.white,
-                    }}
-                  >
-                    SHOP
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    position: "absolute",
-                    left: 72,
-                    bottom: 72,
-                    fontFamily: "Inter, Arial, sans-serif",
-                    fontSize: 10,
-                    letterSpacing: 2,
-                    color: "rgba(255,255,255,.28)",
-                  }}
-                >
-                  SKIN / ENGINEERED
-                </div>
-              </AbsoluteFill>
-            );
-          }
-
-          export const PremiumSkincare: React.FC = () => {
-            const frame = useCurrentFrame();
-
-            return (
-              <AbsoluteFill
-                style={{
-                  width: W,
-                  height: H,
-                  overflow: "hidden",
-                  backgroundColor: C.paper,
-                  fontFamily: "Inter, Arial, sans-serif",
-                }}
-              >
-                {frame < 120 && <Scene01 />}
-                {frame >= 120 && frame < 225 && <Scene02 />}
-                {frame >= 225 && frame < 330 && <Scene03 />}
-                {frame >= 330 && frame < 435 && <Scene04 />}
-                {frame >= 435 && frame < 540 && <Scene05 />}
-                {frame >= 540 && frame < 660 && <Scene06 />}
-                {frame >= 660 && frame < 795 && <Scene07 />}
-                {frame >= 795 && <Scene08 />}
-
-                <Grain />
-
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    pointerEvents: "none",
-                    background:
-                      "linear-gradient(180deg, rgba(255,255,255,.03), transparent 22%, transparent 78%, rgba(0,0,0,.05))",
-                  }}
-                />
-              </AbsoluteFill>
-            );
+          const LiquidRibbon: React.FC<{f:number; dark?:boolean}> = ({f,dark=false}) => {
+            const drift=move(f,[0,100],[100,-80]);
+            return <AbsoluteFill style={{overflow:'hidden',pointerEvents:'none'}}>
+              <div style={{position:'absolute',width:1250,height:530,left:-170,top:460,transform:`translateX(${drift}px) rotate(-17deg)`,borderRadius:'50%',background:dark?'linear-gradient(100deg, transparent 0%, rgba(213,177,137,.06) 22%, rgba(255,244,225,.28) 45%, rgba(169,105,76,.16) 61%, transparent 83%)':'linear-gradient(100deg, transparent 0%, rgba(255,255,255,.12) 15%, rgba(255,255,255,.8) 40%, rgba(182,111,84,.18) 56%, transparent 82%)',filter:'blur(3px)',borderTop:`2px solid ${dark?'rgba(255,245,225,.3)':'rgba(255,255,255,.8)'}`}} />
+              <div style={{position:'absolute',width:1050,height:250,left:100,top:780,transform:`translateX(${-drift*1.2}px) rotate(21deg)`,borderRadius:'50%',background:dark?'linear-gradient(90deg,transparent,rgba(182,111,84,.18),rgba(255,255,255,.1),transparent)':'linear-gradient(90deg,transparent,rgba(255,255,255,.6),rgba(217,185,139,.2),transparent)',filter:'blur(8px)'}} />
+            </AbsoluteFill>;
           };
+
+          function Scene01(){
+            const f=useCurrentFrame(), d=120;
+            const zoom=move(f,[0,d],[1.2,1.03]);
+            const titleY=move(f,[0,28],[90,0]);
+            const titleOpacity=interpolate(f,[0,12,80,105],[0,1,1,0],CLAMP);
+            const prodY=move(f,[0,d],[180,-20]);
+            return <AbsoluteFill style={{background:C.ink,overflow:'hidden',opacity:fade(f,d,5,9)}}>
+              <AbsoluteFill style={{background:'radial-gradient(ellipse at 48% 62%, #5B3B2D 0%, #211815 33%, #12110F 72%)'}} />
+              <LiquidRibbon f={f} dark />
+              <div style={{position:'absolute',left:-160,top:240,width:780,height:780,borderRadius:'50%',border:'1px solid rgba(255,255,255,.12)',transform:`scale(${zoom}) rotate(${f*.05}deg)`}} />
+              <div style={{position:'absolute',right:-280,top:480,width:900,height:900,borderRadius:'50%',border:'1px solid rgba(217,185,139,.22)',transform:`scale(${zoom})`}} />
+              <Brandline light index="01" label="THE FIRST IMPRESSION" />
+              <div style={{position:'absolute',left:66,top:245,opacity:titleOpacity,transform:`translateY(${titleY}px)`,zIndex:10}}>
+                <Text size={17} color={C.gold} weight={700} tracking={6}>A NEW SKIN RITUAL</Text>
+                <div style={{height:28}} />
+                <Text size={120} color={C.white} weight={800} tracking={-7} leading={.84}>SKIN<br/><span style={{color:C.gold}}>IN</span><br/>MOTION.</Text>
+              </div>
+              <div style={{position:'absolute',left:0,right:0,bottom:-20,display:'flex',justifyContent:'center',transform:`translateY(${prodY}px) scale(${move(f,[0,d],[.96,1.08])})`}}><Product width={850} shadow={.65}/></div>
+              <Text size={15} color="rgba(255,253,249,.58)" tracking={4} style={{position:'absolute',left:66,bottom:75}}>FORMULATED FOR YOUR EVERYDAY</Text>
+              <Grain opacity={.055}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene02(){
+            const f=useCurrentFrame(), d=105;
+            const productX=move(f,[0,d],[120,-80]);
+            const titleX=move(f,[0,25],[100,0]);
+            const line=interpolate(f,[12,52],[0,1],CLAMP);
+            return <AbsoluteFill style={{background:C.paper,overflow:'hidden',opacity:fade(f,d,8,8)}}>
+              <div style={{position:'absolute',right:-250,top:210,width:1000,height:1250,borderRadius:'50%',background:'linear-gradient(135deg,#E5D3C1 0%,#F7F1E9 46%,#C79B7C 100%)',transform:`rotate(${f*.08}deg)`}} />
+              <div style={{position:'absolute',right:0,top:0,width:550,height:H,background:'linear-gradient(90deg,transparent,rgba(255,255,255,.25))'}} />
+              <Brandline index="02" label="THE REVEAL"/><ThinRule y={135} progress={line}/>
+              <div style={{position:'absolute',left:64,top:245,zIndex:5,transform:`translateX(${titleX}px)`}}>
+                <Text size={16} color={C.copper} weight={800} tracking={5}>MEET YOUR NEW ESSENTIAL</Text><div style={{height:24}}/>
+                <Text size={94} weight={800} tracking={-5} leading={.88}>LESS<br/>NOISE.<br/><span style={{color:C.copper}}>MORE</span><br/>CARE.</Text>
+                <div style={{height:28}}/><Text size={24} color="#65584E" weight={450} leading={1.4}>A focused ritual.<br/>A considered formula.</Text>
+              </div>
+              <div style={{position:'absolute',right:-160,bottom:125,transform:`translateX(${productX}px) rotate(-5deg) scale(${move(f,[0,d],[.88,1.03])})`}}><Product width={800} shadow={.32}/></div>
+              <div style={{position:'absolute',left:64,bottom:86,width:350,height:4,background:C.copper,transform:`scaleX(${line})`,transformOrigin:'left'}}/>
+              <Grain opacity={.035}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene03(){
+            const f=useCurrentFrame(), d=105;
+            const prodScale=move(f,[0,d],[.86,1.04]);
+            const ring=move(f,[0,d],[-28,24]);
+            const headline=move(f,[0,24],[80,0]);
+            return <AbsoluteFill style={{background:'#181513',overflow:'hidden',opacity:fade(f,d,8,8)}}>
+              <AbsoluteFill style={{background:'radial-gradient(ellipse at 50% 58%, rgba(182,111,84,.36), transparent 48%)'}}/>
+              <Brandline light index="03" label="THE FORMULA"/><ThinRule y={135} light/>
+              <div style={{position:'absolute',left:64,top:220,zIndex:5,transform:`translateY(${headline}px)`}}><Text size={16} color={C.gold} weight={800} tracking={5}>PURPOSE IN EVERY DETAIL</Text><div style={{height:20}}/><Text size={88} color={C.white} weight={800} tracking={-5} leading={.9}>MADE TO<br/><span style={{color:C.gold}}>MATTER.</span></Text></div>
+              <div style={{position:'absolute',left:'50%',top:820,transform:`translate(-50%,-50%) rotate(${ring}deg)`}}><Orb size={720} x={-360} y={-360} color={C.gold} opacity={.45}/><Orb size={560} x={-280} y={-280} color="#F4DCC0" opacity={.32} rotate={32}/><Orb size={390} x={-195} y={-195} color={C.copper} opacity={.5} rotate={-18}/></div>
+              <div style={{position:'absolute',left:0,right:0,top:550,display:'flex',justifyContent:'center',transform:`scale(${prodScale}) rotate(-3deg)`}}><Product width={690} dark shadow={.7}/></div>
+              <div style={{position:'absolute',left:64,right:64,bottom:130,display:'flex',justifyContent:'space-between',alignItems:'end',borderTop:'1px solid rgba(255,255,255,.25)',paddingTop:22}}><Text size={17} color="rgba(255,255,255,.68)" tracking={2}>THOUGHTFUL BY DESIGN</Text><Text size={17} color={C.gold} tracking={2}>01 — 03</Text></div>
+              <Grain opacity={.05}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene04(){
+            const f=useCurrentFrame(), d=105;
+            const scale=move(f,[0,d],[1.08,.92]);
+            const reveal=interpolate(f,[10,50],[0,1],{easing:OUT,...CLAMP});
+            return <AbsoluteFill style={{background:'#C78F72',overflow:'hidden',opacity:fade(f,d,8,8)}}>
+              <div style={{position:'absolute',inset:0,background:'linear-gradient(145deg,#DAB9A0 0%,#BD7B5E 42%,#7D4B3A 100%)'}}/>
+              <div style={{position:'absolute',left:-200,top:460,width:1300,height:500,borderRadius:'50%',background:'linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.6),rgba(255,255,255,.04))',filter:'blur(18px)',transform:`rotate(-24deg) translateX(${move(f,[0,d],[-80,100])}px)`}}/>
+              <Brandline light index="04" label="TEXTURE / LIGHT"/>
+              <div style={{position:'absolute',left:64,top:250,zIndex:5}}><Text size={16} color="rgba(255,255,255,.78)" tracking={5} weight={800}>A SENSORY EXPERIENCE</Text><div style={{height:20}}/><Text size={92} color={C.white} weight={800} tracking={-5} leading={.86}>FEEL THE<br/><span style={{color:'#2A1D18'}}>DIFFERENCE.</span></Text></div>
+              <div style={{position:'absolute',left:0,right:0,bottom:50,display:'flex',justifyContent:'center',transform:`translateY(${move(f,[0,d],[120,-30])}px) scale(${scale})`}}><Product width={870} shadow={.4}/></div>
+              <div style={{position:'absolute',left:64,right:64,bottom:100,height:2,background:'rgba(255,255,255,.45)',transform:`scaleX(${reveal})`,transformOrigin:'left'}}/>
+              <Grain opacity={.05}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene05(){
+            const f=useCurrentFrame(), d=105;
+            const prodY=move(f,[0,d],[130,-30]);
+            const reveal=interpolate(f,[0,30],[0,1],{easing:OUT,...CLAMP});
+            return <AbsoluteFill style={{background:C.ink,overflow:'hidden',opacity:fade(f,d,8,8)}}>
+              <AbsoluteFill style={{background:'radial-gradient(ellipse at 52% 65%, #5C3A2D 0%, #211714 42%, #12110F 74%)'}}/>
+              <Brandline light index="05" label="THE RITUAL"/><ThinRule y={135} light/>
+              <div style={{position:'absolute',left:64,top:235,zIndex:8}}><Text size={16} color={C.gold} weight={800} tracking={5}>A MOMENT, JUST FOR YOU</Text><div style={{height:20}}/><Text size={102} color={C.white} weight={800} tracking={-6} leading={.86}>MAKE<br/>SPACE<br/><span style={{color:C.gold}}>FOR YOU.</span></Text></div>
+              <div style={{position:'absolute',left:-80,top:700,width:1200,height:700,borderRadius:'50%',border:'1px solid rgba(255,255,255,.16)',transform:`rotate(${f*.1}deg) scale(${.8+reveal*.2})`}}/>
+              <div style={{position:'absolute',left:0,right:0,bottom:-30,display:'flex',justifyContent:'center',transform:`translateY(${prodY}px) scale(${.9+reveal*.1}) rotate(2deg)`}}><Product width={810} shadow={.65}/></div>
+              <Text size={15} color="rgba(255,255,255,.62)" tracking={4} style={{position:'absolute',left:64,bottom:82}}>YOUR ROUTINE. YOUR MOMENT.</Text>
+              <Grain opacity={.055}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene06(){
+            const f=useCurrentFrame(), d=105;
+            const productScale=move(f,[0,d],[.84,1.02]);
+            const title=move(f,[0,22],[55,0]);
+            const line=interpolate(f,[15,48],[0,1],CLAMP);
+            return <AbsoluteFill style={{background:C.paper,overflow:'hidden',opacity:fade(f,d,8,8)}}>
+              <div style={{position:'absolute',right:-270,top:360,width:980,height:980,borderRadius:'50%',background:'linear-gradient(145deg,#E8D6C4,#F8F2EB 50%,#CFA58A)',transform:`rotate(${f*.04}deg)`}}/>
+              <Brandline index="06" label="THE SIGNATURE"/><ThinRule y={135} progress={line}/>
+              <div style={{position:'absolute',left:64,top:260,zIndex:5,transform:`translateY(${title}px)`}><Text size={16} color={C.copper} weight={800} tracking={5}>INTENTIONALLY SIMPLE</Text><div style={{height:22}}/><Text size={98} weight={800} tracking={-6} leading={.84}>YOUR<br/><span style={{color:C.copper}}>NEW</span><br/>STANDARD.</Text></div>
+              <div style={{position:'absolute',right:-90,bottom:150,transform:`scale(${productScale}) rotate(-4deg)`}}><Product width={760} shadow={.3}/></div>
+              <div style={{position:'absolute',left:64,bottom:145,width:380,borderTop:`2px solid ${C.copper}`,paddingTop:18}}><Text size={18} color="#66564B" weight={600} tracking={1}>CONSIDERED DESIGN</Text><div style={{height:8}}/><Text size={18} color="#66564B" weight={450}>A daily essential, elevated.</Text></div>
+              <Grain opacity={.035}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene07(){
+            const f=useCurrentFrame(), d=120;
+            const pop=spring({frame:f-8,fps:FPS,config:{damping:18,stiffness:80,mass:1}});
+            const scale=interpolate(pop,[0,1],[.86,1]);
+            const rise=move(f,[0,d],[80,-10]);
+            const line=interpolate(f,[15,52],[0,1],CLAMP);
+            return <AbsoluteFill style={{background:'#151210',overflow:'hidden',opacity:fade(f,d,8,8)}}>
+              <AbsoluteFill style={{background:'radial-gradient(ellipse at 50% 58%,rgba(182,111,84,.42),transparent 48%)'}}/>
+              <div style={{position:'absolute',left:-220,top:540,width:1500,height:900,border:'1px solid rgba(217,185,139,.25)',borderRadius:'50%',transform:`rotate(${f*.07}deg)`}}/>
+              <div style={{position:'absolute',left:-80,top:690,width:1240,height:660,border:'1px solid rgba(255,255,255,.14)',borderRadius:'50%',transform:`rotate(${-f*.1}deg)`}}/>
+              <Brandline light index="07" label="THE HERO"/><ThinRule y={135} light progress={line}/>
+              <div style={{position:'absolute',top:220,left:0,right:0,textAlign:'center',transform:`translateY(${rise}px)`}}><Text size={16} color={C.gold} weight={800} tracking={6} align="center">THE FINISHING TOUCH</Text><div style={{height:24}}/><Text size={94} color={C.white} weight={800} tracking={-5} leading={.9} align="center">OWN YOUR<br/><span style={{color:C.gold}}>RITUAL.</span></Text></div>
+              <div style={{position:'absolute',left:0,right:0,bottom:30,display:'flex',justifyContent:'center',transform:`scale(${scale})`}}><Product width={800} shadow={.7}/></div>
+              <Text size={15} color="rgba(255,255,255,.6)" tracking={4} align="center" style={{position:'absolute',left:64,right:64,bottom:76}}>SKIN / STUDIO — DAILY CARE, RECONSIDERED</Text>
+              <Grain opacity={.06}/>
+            </AbsoluteFill>;
+          }
+
+          function Scene08(){
+            const f=useCurrentFrame(), d=135;
+            const p=spring({frame:f-4,fps:FPS,config:{damping:20,stiffness:90,mass:.9}});
+            const prodScale=interpolate(p,[0,1],[.9,1]);
+            const opacity=interpolate(f,[0,10],[0,1],CLAMP);
+            const line=interpolate(f,[12,48],[0,1],CLAMP);
+            return <AbsoluteFill style={{background:C.paper,overflow:'hidden',opacity:fade(f,d,5,4)}}>
+              <div style={{position:'absolute',left:-350,top:650,width:1100,height:1100,borderRadius:'50%',background:'linear-gradient(140deg,#E5D1BE,#F8F3EC 55%,#C89D80)'}}/>
+              <Brandline index="08" label="MAKE IT YOURS"/><ThinRule y={135} progress={line}/>
+              <div style={{position:'absolute',left:64,top:245,zIndex:5}}><Text size={16} color={C.copper} weight={800} tracking={5}>YOUR EVERYDAY, ELEVATED</Text><div style={{height:22}}/><Text size={94} weight={800} tracking={-6} leading={.86}>START<br/>YOUR<br/><span style={{color:C.copper}}>RITUAL.</span></Text></div>
+              <div style={{position:'absolute',right:-100,bottom:245,transform:`scale(${prodScale})`,opacity}}><Product width={720} shadow={.32}/></div>
+              <div style={{position:'absolute',left:64,right:64,bottom:80,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid rgba(18,17,15,.22)',paddingTop:24}}><div><Text size={16} color="#65584E" weight={800} tracking={2}>SKIN / STUDIO</Text><div style={{height:7}}/><Text size={14} color="#75665B" tracking={1}>DISCOVER YOUR DAILY ESSENTIAL</Text></div><div style={{background:C.ink,color:C.white,padding:'20px 25px',fontFamily:FONT,fontSize:17,fontWeight:800,letterSpacing:1,opacity:line,borderRadius:2}}>SHOP NOW ↗</div></div>
+              <Grain opacity={.035}/>
+            </AbsoluteFill>;
+          }
+
+          export const SkinInMotion: React.FC = () => <AbsoluteFill style={{background:C.ink}}>
+            <Sequence from={0} durationInFrames={120}><Scene01/></Sequence>
+            <Sequence from={120} durationInFrames={105}><Scene02/></Sequence>
+            <Sequence from={225} durationInFrames={105}><Scene03/></Sequence>
+            <Sequence from={330} durationInFrames={105}><Scene04/></Sequence>
+            <Sequence from={435} durationInFrames={105}><Scene05/></Sequence>
+            <Sequence from={540} durationInFrames={105}><Scene06/></Sequence>
+            <Sequence from={645} durationInFrames={120}><Scene07/></Sequence>
+            <Sequence from={765} durationInFrames={135}><Scene08/></Sequence>
+          </AbsoluteFill>;
           EOF
 
-      - name: Install npm packages
-        run: npm install --no-audit --no-fund
+      - name: Type-check source
+        run: npm run typecheck
 
-      - name: Type check
-        run: npm run build
-
-      - name: Render 1080x1920 commercial
+      - name: Render MP4
         run: |
-          npx remotion render \
-            src/index.tsx \
-            PremiumSkincare \
-            out/premium-skincare-skin-engineered.mp4 \
-            --codec=h264 \
-            --crf=15 \
-            --concurrency=2 \
-            --pixel-format=yuv420p
+          set -euo pipefail
+          npx remotion render src/index.tsx SkinInMotion out/skin-in-motion-skincare-ad.mp4 \
+            --codec=h264 --crf=15 --pixel-format=yuv420p --concurrency=2
 
-      - name: Upload rendered video
+      - name: Verify rendered video
+        run: |
+          set -euo pipefail
+          test -s out/skin-in-motion-skincare-ad.mp4
+          ls -lh out/skin-in-motion-skincare-ad.mp4
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 out/skin-in-motion-skincare-ad.mp4
+
+      - name: Upload video artifact
         uses: actions/upload-artifact@v4
         with:
-          name: premium-skincare-skin-engineered
-          path: out/premium-skincare-skin-engineered.mp4
+          name: skin-in-motion-skincare-ad
+          path: out/skin-in-motion-skincare-ad.mp4
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
