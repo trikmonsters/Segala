@@ -20,7 +20,7 @@ on:
       retention_days:
         description: "Lama video disimpan di artifact (hari)"
         type: choice
-        options: ["7", "14", "30", "90"]
+        options: ["1", "14", "30", "90"]
         default: "30"
 
 permissions:
@@ -166,12 +166,16 @@ jobs:
           import asyncio
           import base64
           import contextvars
+          import glob
+          import hashlib
           import json
           import os
           import random
           import re
+          import shutil
           import subprocess
           import sys
+          import tempfile
           import time
           import traceback
 
@@ -768,11 +772,14 @@ jobs:
                   big = await page.evaluate(BIGIMG_JS)
               except Exception:
                   big = 0
-              urls = []
-              for u in [v for v in media["vids"] if v] + media["links"] + NET.get(id(page), []):
-                  if u not in urls:
+              urls, labels = [], {}
+              tagged = ([(v, "player") for v in media["vids"] if v] + [(l, "link") for l in media["links"]]
+                        + [(n, "net") for n in NET.get(id(page), [])])
+              for u, lab in tagged:
+                  if u not in labels:
+                      labels[u] = lab
                       urls.append(u)
-              return {"text": text, "vcount": len(media["vids"]), "urls": urls, "big": big,
+              return {"text": text, "vcount": len(media["vids"]), "urls": urls, "labels": labels, "big": big,
                       "overload": overload_score(text), "file": file_score(text),
                       "bad": bad_score(text), "generating": is_generating(text)}
 
@@ -879,6 +886,152 @@ jobs:
                   pass
 
 
+          # --------------------------------------------------------------------------
+          # Watermark "Dola AI": deteksi posisi, pilih varian dengan 1 watermark di kanan bawah
+          # --------------------------------------------------------------------------
+          WM_TPL_B64 = "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"
+          WM_THRESHOLD = 0.5
+          MAX_VARIANTS = 6
+          _WM_TPL = None
+
+
+          def _tophat(g):
+              k = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+              return cv2.morphologyEx(g, cv2.MORPH_TOPHAT, k).astype(np.float32)
+
+
+          def wm_template():
+              global _WM_TPL
+              if _WM_TPL is None:
+                  g = cv2.imdecode(np.frombuffer(base64.b64decode(WM_TPL_B64), np.uint8), cv2.IMREAD_GRAYSCALE)
+                  _WM_TPL = _tophat(g)
+              return _WM_TPL
+
+
+          def analyze_watermark(path):
+              """Return {pojok: [(mulai, selesai), ...]} untuk BR/TR/BL/TL, atau None bila gagal dianalisis."""
+              tmp = tempfile.mkdtemp(prefix="wm_")
+              try:
+                  subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-vf", "fps=4,scale=720:-2",
+                                  f"{tmp}/f_%03d.png"], capture_output=True, timeout=120)
+                  files = sorted(glob.glob(f"{tmp}/f_*.png"))
+                  if not files:
+                      return None
+                  tpl = wm_template()
+                  present = {"BR": [], "TR": [], "BL": [], "TL": []}
+                  for i, p in enumerate(files):
+                      g = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+                      H, W = g.shape
+                      for k, (rx, ry) in {"BR": (W - 300, H - 150), "TR": (W - 300, 0),
+                                          "BL": (0, H - 150), "TL": (0, 0)}.items():
+                          area = _tophat(g[max(ry, 0):ry + 150, max(rx, 0):rx + 300])
+                          if area.shape[0] < tpl.shape[0] or area.shape[1] < tpl.shape[1]:
+                              continue
+                          if cv2.matchTemplate(area, tpl, cv2.TM_CCOEFF_NORMED).max() >= WM_THRESHOLD:
+                              present[k].append(i)
+                  segs = {}
+                  for k, idxs in present.items():
+                      groups, cur = [], []
+                      for i in idxs:
+                          if cur and i - cur[-1] > 2:
+                              groups.append(cur)
+                              cur = []
+                          cur.append(i)
+                      if cur:
+                          groups.append(cur)
+                      segs[k] = [(round(g[0] / 4, 1), round((g[-1] + 1) / 4, 1)) for g in groups if len(g) >= 2]
+                  return {k: v for k, v in segs.items() if v}
+              except Exception:
+                  return None
+              finally:
+                  shutil.rmtree(tmp, ignore_errors=True)
+
+
+          def wm_score(wm):
+              """Makin kecil makin baik. Target: tepat 1 watermark di kanan bawah, tidak ada di pojok lain."""
+              if wm is None:
+                  return 5
+              non_br = sum(len(v) for k, v in wm.items() if k != "BR")
+              return non_br * 10 + abs(len(wm.get("BR", [])) - 1)
+
+
+          def wm_text(wm):
+              if wm is None:
+                  return "tidak diketahui"
+              if not wm:
+                  return "tidak ada"
+              return ", ".join(f"{k}x{len(v)}" for k, v in wm.items())
+
+
+          def url_variants(u):
+              """URL asli + versi dengan/tanpa download=true (rendisi bisa berbeda)."""
+              out = [u]
+              if "download=true" in u:
+                  v = u.replace("?download=true&", "?").replace("&download=true", "")
+                  if v.endswith("?download=true"):
+                      v = v[: -len("?download=true")]
+                  out.append(v)
+              elif u.startswith("http") and "?" in u:
+                  out.append(u + "&download=true")
+              return out
+
+
+          async def fetch_video_bytes(context, page, src):
+              data = b""
+              try:
+                  if not src.startswith("blob:"):
+                      resp = await context.request.get(src, headers={"Referer": "https://www.dola.com/"})
+                      if resp.ok:
+                          data = await resp.body()
+                  if len(data) < 10_000 and (src.startswith("blob:") or "dola.com" in src[:80]):
+                      data = base64.b64decode(await page.evaluate(FETCH_B64_JS, src))
+              except Exception:
+                  pass
+              return data if len(data) >= 10_000 else b""
+
+
+          async def save_best_variant(context, page, snap, base, path, res, prefix):
+              """Unduh semua sumber video yang terdeteksi, pilih yang watermark-nya paling sesuai."""
+              labels = snap.get("labels", {})
+              order = {"player": 0, "link": 1, "net": 2}
+              new = [u for u in snap["urls"] if u not in base["urls"]]
+              new.sort(key=lambda u: order.get(labels.get(u, "net"), 2))
+              cands = []
+              for u in new:
+                  for v in url_variants(u):
+                      if v not in [c[0] for c in cands]:
+                          cands.append((v, labels.get(u, "net") + ("" if v == u else "-alt")))
+              cands = cands[:MAX_VARIANTS]
+              os.makedirs("variants", exist_ok=True)
+              kept, seen = [], set()
+              for i, (u, label) in enumerate(cands):
+                  data = await fetch_video_bytes(context, page, u)
+                  if not data:
+                      continue
+                  h = hashlib.sha1(data).hexdigest()
+                  if h in seen:
+                      continue
+                  seen.add(h)
+                  tmp = f"variants/{prefix}_{label}.mp4"
+                  with open(tmp, "wb") as f:
+                      f.write(data)
+                  wm = analyze_watermark(tmp)
+                  info(f"varian {label}: {len(data) // 1024} KB · watermark: {wm_text(wm)}")
+                  kept.append({"file": tmp, "label": label, "wm": wm, "size": len(data),
+                               "key": (wm_score(wm), order.get(label.split("-")[0], 2), i)})
+              if not kept:
+                  return 0
+              best = min(kept, key=lambda k: k["key"])
+              shutil.copyfile(best["file"], path)
+              if len(kept) == 1:
+                  os.remove(best["file"])          # hanya satu varian, tidak perlu salinan
+              wm_ok = best["wm"] is not None and wm_score(best["wm"]) == 0
+              res.update(watermark=wm_text(best["wm"]), source=best["label"], variants=len(kept), wm_ok=wm_ok)
+              if best["wm"] is not None and not wm_ok:
+                  warn(f"watermark belum sesuai target (1x kanan bawah): {wm_text(best['wm'])}")
+              return best["size"]
+
+
           def probe_duration(path):
               try:
                   out = subprocess.run(
@@ -974,7 +1127,8 @@ jobs:
               res = {"no": idx + 1, "id": job["id"], "scene": job.get("scene") or "(prompt kustom)",
                      "images": [os.path.basename(p) for p in images], "state": "none", "saved": False,
                      "file": "", "size_kb": 0, "duration_s": None, "attempts": 0, "chat_url": "",
-                     "chat_deleted": "-", "pass": pass_no, "note": ""}
+                     "chat_deleted": "-", "pass": pass_no, "note": "",
+                     "watermark": "-", "source": "-", "variants": 0, "wm_ok": None}
               missing = [p for p in images if not os.path.exists(p)]
               if missing:
                   res["state"] = "image_missing"
@@ -1051,10 +1205,12 @@ jobs:
                       new = [u for u in snap["urls"] if u not in base["urls"]]
                       if not new:
                           await (activate_card(page) if state == "file_card" else activate_media(page))
-                          snap = await snapshot(page)
-                          new = [u for u in snap["urls"] if u not in base["urls"]]
+                      else:
+                          await page.wait_for_timeout(6000)     # beri waktu link/sumber lain muncul
+                      snap = await snapshot(page)
                       path = f"videos/{idx + 1:02d}-{job['id']}.mp4"
-                      size = await save_video(context, page, pick_src(new), path)
+                      size = await save_best_variant(context, page, snap, base, path, res,
+                                                     f"{idx + 1:02d}-{job['id']}")
                       if size:
                           res.update(saved=True, file=path, size_kb=size // 1024,
                                      duration_s=probe_duration(path))
@@ -1111,15 +1267,16 @@ jobs:
                   mark = "✓" if r["saved"] else "✗"
                   det = f"{r['size_kb']} KB, {r['duration_s']} dtk" if r["saved"] else r["state"]
                   log(f" {mark} {r['no']:02d} {r['id'][:24]:24s} {det:22s} chat:{r['chat_deleted']}"
-                      + (f"  ⚠ {r['note']}" if r["note"] else ""))
+                      + f"  wm:{r['watermark']}" + (f"  ⚠ {r['note']}" if r["note"] else ""))
               log(f"\nTotal: {saved}/{total} video tersimpan")
               path = os.environ.get("GITHUB_STEP_SUMMARY")
               if path:
                   with open(path, "a", encoding="utf-8") as f:
-                      f.write(f"## Dola bulk: {saved}/{total} video\n\n| # | id | hasil | ukuran | durasi | chat dihapus |\n|---|---|---|---|---|---|\n")
+                      f.write(f"## Dola bulk: {saved}/{total} video\n\n| # | id | hasil | ukuran | durasi | watermark | sumber | chat dihapus |\n|---|---|---|---|---|---|---|---|\n")
                       for r in rows:
                           f.write(f"| {r['no']} | {r['id']} | {('⚠️ file card' if r['note'] else '✅') if r['saved'] else '❌ ' + r['state']} | "
-                                  f"{r['size_kb']} KB | {r['duration_s'] or '-'} | {r['chat_deleted']} |\n")
+                                  f"{r['size_kb']} KB | {r['duration_s'] or '-'} | {r['watermark']}{' ✅' if r['wm_ok'] else ''} | "
+                                  f"{r['source']} | {r['chat_deleted']} |\n")
               return saved
 
 
@@ -1127,6 +1284,7 @@ jobs:
               os.makedirs("videos", exist_ok=True)
               os.makedirs("logs", exist_ok=True)
               os.makedirs("shots", exist_ok=True)
+              os.makedirs("variants", exist_ok=True)
               jobs = load_jobs()
               total = len(jobs)
               log(f"Rencana: {total} video · {CONCURRENCY} chat paralel · hapus chat: {'ya' if DELETE_CHATS else 'tidak'}")
@@ -1204,5 +1362,6 @@ jobs:
             dola.log
             logs/
             shots/
+            variants/
           if-no-files-found: ignore
-          retention-days: 3
+          retention-days: 1
