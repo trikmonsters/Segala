@@ -1,0 +1,125 @@
+name: Auto Detect & Remove Watermark
+
+on:
+  workflow_dispatch:
+
+jobs:
+  auto-remove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install FFmpeg & Python deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install opencv-python-headless numpy
+
+      - name: Verify input
+        run: |
+          test -f vid_water.mp4 || (echo "❌ vid_water.mp4 tidak ada!" && exit 1)
+          ls -lh vid_water.mp4
+
+      - name: Detect watermark area (auto)
+        id: detect
+        run: |
+          cat > detect.py << 'EOF'
+          import cv2
+          import numpy as np
+          import json
+
+          cap = cv2.VideoCapture("vid_water.mp4")
+          total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+          W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+          H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+          print(f"Video: {W}x{H}, {total} frames")
+
+          # Sample 30 frame tersebar merata
+          n_samples = min(30, total)
+          indices = np.linspace(0, total - 1, n_samples, dtype=int)
+
+          frames = []
+          for idx in indices:
+              cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+              ret, frame = cap.read()
+              if ret:
+                  frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+          cap.release()
+
+          if len(frames) < 5:
+              raise SystemExit("Frame sample kurang")
+
+          # Hitung variance antar frame per piksel
+          stack = np.stack(frames, axis=0).astype(np.float32)
+          variance = np.var(stack, axis=0)
+
+          # Piksel dengan variance sangat rendah = statis = kandidat watermark
+          static_mask = (variance < 5).astype(np.uint8) * 255
+
+          # Bersihkan noise
+          kernel = np.ones((5, 5), np.uint8)
+          static_mask = cv2.morphologyEx(static_mask, cv2.MORPH_CLOSE, kernel)
+          static_mask = cv2.morphologyEx(static_mask, cv2.MORPH_OPEN, kernel)
+
+          # Cari contour terbesar di area pojok kanan bawah (30% area)
+          region = np.zeros_like(static_mask)
+          region[int(H*0.7):, int(W*0.7):] = static_mask[int(H*0.7):, int(W*0.7):]
+
+          contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+          if not contours:
+              raise SystemExit("❌ Watermark tidak terdeteksi di pojok kanan bawah")
+
+          # Ambil contour terbesar
+          c = max(contours, key=cv2.contourArea)
+          x, y, w, h = cv2.boundingRect(c)
+
+          # Tambah margin 8px
+          x = max(0, x - 8)
+          y = max(0, y - 8)
+          w = min(W - x, w + 16)
+          h = min(H - y, h + 16)
+
+          print(f"🎯 Detected: x={x} y={y} w={w} h={h}")
+
+          with open("coords.json", "w") as f:
+              json.dump({"x": x, "y": y, "w": w, "h": h, "vw": W, "vh": H}, f)
+
+          # Simpan visualisasi untuk verifikasi
+          vis = frames[-1].copy()
+          cv2.rectangle(vis, (x, y), (x+w, y+h), (0, 255, 0), 3)
+          cv2.imwrite("detected_area.jpg", vis)
+          EOF
+          python detect.py
+
+          X=$(python -c "import json;print(json.load(open('coords.json'))['x'])")
+          Y=$(python -c "import json;print(json.load(open('coords.json'))['y'])")
+          Wd=$(python -c "import json;print(json.load(open('coords.json'))['w'])")
+          Hd=$(python -c "import json;print(json.load(open('coords.json'))['h'])")
+
+          echo "x=$X" >> $GITHUB_OUTPUT
+          echo "y=$Y" >> $GITHUB_OUTPUT
+          echo "w=$Wd" >> $GITHUB_OUTPUT
+          echo "h=$Hd" >> $GITHUB_OUTPUT
+
+      - name: Remove watermark
+        run: |
+          ffmpeg -y -i vid_water.mp4 \
+            -vf "delogo=x=${{ steps.detect.outputs.x }}:y=${{ steps.detect.outputs.y }}:w=${{ steps.detect.outputs.w }}:h=${{ steps.detect.outputs.h }}:band=6" \
+            -c:v libx264 -preset medium -crf 20 \
+            -c:a copy \
+            vid_water_clean.mp4
+          ls -lh vid_water_clean.mp4
+
+      - name: Upload hasil
+        uses: actions/upload-artifact@v4
+        with:
+          name: watermark-removal-result
+          path: |
+            vid_water_clean.mp4
+            detected_area.jpg
+          retention-days: 7
