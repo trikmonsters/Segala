@@ -1,284 +1,34 @@
-name: Auto Detect & Remove Watermark
+name: Remove Watermark (Manual Coords)
 
 on:
   workflow_dispatch:
     inputs:
-      threshold_mode:
-        description: 'Detection mode: auto | force-default'
-        required: false
-        default: 'auto'
+      x: { description: 'X', required: true, default: '560' }
+      y: { description: 'Y', required: true, default: '1220' }
+      w: { description: 'W', required: true, default: '155' }
+      h: { description: 'H', required: true, default: '55' }
 
 jobs:
-  auto-remove:
+  remove:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          lfs: true
+      - uses: actions/checkout@v4
+        with: { lfs: true }
 
-      - name: Install FFmpeg & Python deps
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Remove watermark
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          pip install --quiet opencv-python-headless numpy
-
-      - name: Verify input file
-        run: |
-          test -f vid_water.mp4 || (echo "❌ vid_water.mp4 tidak ada di root repo!" && exit 1)
-          ls -lh vid_water.mp4
-          ffprobe -v error -select_streams v:0 \
-            -show_entries stream=width,height,duration,nb_frames \
-            -of default=noprint_wrappers=1 vid_water.mp4
-
-      # ============================================================
-      # STEP 1: DEBUG - Analisa variance untuk cari area statis
-      # ============================================================
-      - name: Debug - Analyze static pixels
-        run: |
-          cat > debug.py << 'PYEOF'
-          import cv2
-          import numpy as np
-
-          cap = cv2.VideoCapture("vid_water.mp4")
-          total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-          W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-          H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-          fps = cap.get(cv2.CAP_PROP_FPS)
-          print(f"=== VIDEO INFO ===")
-          print(f"Resolution : {W}x{H}")
-          print(f"Frames     : {total}")
-          print(f"FPS        : {fps:.2f}")
-          print(f"Duration   : {total/fps:.2f}s")
-          print()
-
-          # Sample 30 frame merata
-          n_samples = min(30, total)
-          indices = np.linspace(0, total - 1, n_samples, dtype=int)
-
-          frames = []
-          for idx in indices:
-              cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
-              ret, frame = cap.read()
-              if ret:
-                  frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-          cap.release()
-
-          print(f"=== SAMPLED {len(frames)} FRAMES ===")
-
-          stack = np.stack(frames, axis=0).astype(np.float32)
-          variance = np.var(stack, axis=0)
-
-          print(f"Variance min : {variance.min():.2f}")
-          print(f"Variance max : {variance.max():.2f}")
-          print(f"Variance mean: {variance.mean():.2f}")
-          print()
-
-          # Cek persentase area statis di berbagai threshold
-          print("=== STATIC PIXELS DI POJOK KANAN BAWAH (40% area) ===")
-          corner = variance[int(H*0.6):, int(W*0.6):]
-          for th in [2, 5, 10, 15, 20, 30, 50, 80]:
-              pct = (corner < th).sum() / corner.size * 100
-              bar = '█' * int(pct / 2)
-              print(f"Threshold {th:3d}: {pct:6.2f}% {bar}")
-          print()
-
-          # Heatmap variance untuk visual
-          v_norm = cv2.normalize(variance, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-          heatmap = cv2.applyColorMap(v_norm, cv2.COLORMAP_JET)
-          cv2.imwrite("debug_variance_heatmap.jpg", heatmap)
-
-          # Simpan frame sample (tengah video)
-          mid_frame = frames[len(frames)//2]
-          cv2.imwrite("debug_frame_sample.jpg", mid_frame)
-
-          # Simpan overlay: frame + heatmap blended
-          mid_bgr = cv2.cvtColor(mid_frame, cv2.COLOR_GRAY2BGR)
-          blended = cv2.addWeighted(mid_bgr, 0.6, heatmap, 0.4, 0)
-          cv2.imwrite("debug_overlay.jpg", blended)
-
-          print("✅ Debug files saved: debug_variance_heatmap.jpg, debug_frame_sample.jpg, debug_overlay.jpg")
-          PYEOF
-          python debug.py
-
-      - name: Upload debug artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-analysis
-          path: |
-            debug_variance_heatmap.jpg
-            debug_frame_sample.jpg
-            debug_overlay.jpg
-          if-no-files-found: warn
-
-      # ============================================================
-      # STEP 2: DETECT - Multi-threshold, fallback ke default
-      # ============================================================
-      - name: Detect watermark area (robust multi-threshold)
-        id: detect
-        run: |
-          cat > detect.py << 'PYEOF'
-          import cv2
-          import numpy as np
-          import json
-
-          cap = cv2.VideoCapture("vid_water.mp4")
-          total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-          W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-          H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-          # Sample lebih banyak biar lebih stabil
-          n_samples = min(50, total)
-          indices = np.linspace(0, total - 1, n_samples, dtype=int)
-
-          frames = []
-          for idx in indices:
-              cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
-              ret, frame = cap.read()
-              if ret:
-                  frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-          cap.release()
-
-          stack = np.stack(frames, axis=0).astype(np.float32)
-          variance = np.var(stack, axis=0)
-
-          # Area pencarian: 50% pojok kanan bawah (lebih longgar)
-          y_start = int(H * 0.5)
-          x_start = int(W * 0.5)
-
-          found = None
-
-          # Coba threshold naik bertahap
-          for th in [5, 10, 15, 20, 25, 30, 40, 50]:
-              static_mask = (variance < th).astype(np.uint8) * 255
-
-              # Hanya proses area pojok kanan bawah
-              region = np.zeros_like(static_mask)
-              region[y_start:, x_start:] = static_mask[y_start:, x_start:]
-
-              # Morphology ringan (jangan sampai hilangkan watermark kecil)
-              kernel = np.ones((3, 3), np.uint8)
-              region = cv2.morphologyEx(region, cv2.MORPH_CLOSE, kernel)
-
-              contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-              # Filter contour: minimal 300px area, maksimal 30% video
-              max_area = W * H * 0.3
-              valid = [c for c in contours if 300 < cv2.contourArea(c) < max_area]
-
-              if valid:
-                  c = max(valid, key=cv2.contourArea)
-                  x, y, w, h = cv2.boundingRect(c)
-                  print(f"✅ Found at threshold {th}: x={x} y={y} w={w} h={h} (area={cv2.contourArea(c):.0f})")
-                  found = (x, y, w, h, th)
-                  break
-              else:
-                  print(f"   Threshold {th}: no valid contour")
-
-          if found is None:
-              # FALLBACK: asumsi watermark pojok kanan bawah
-              # Ukuran umum watermark: ~22% lebar, ~7% tinggi
-              w = int(W * 0.22)
-              h = int(H * 0.07)
-              x = W - w - int(W * 0.03)   # margin 3% dari kanan
-              y = H - h - int(H * 0.03)   # margin 3% dari bawah
-              th = 'FALLBACK'
-              print(f"⚠️ No detection. Using FALLBACK: x={x} y={y} w={w} h={h}")
-          else:
-              x, y, w, h, th = found
-              # Tambah margin 12px biar aman
-              margin = 12
-              x = max(0, x - margin)
-              y = max(0, y - margin)
-              w = min(W - x, w + margin * 2)
-              h = min(H - y, h + margin * 2)
-              print(f"🎯 After margin +{margin}: x={x} y={y} w={w} h={h}")
-
-          with open("coords.json", "w") as f:
-              json.dump({"x": x, "y": y, "w": w, "h": h,
-                         "vw": W, "vh": H, "threshold": str(th)}, f)
-
-          # Visualisasi: kotak hijau di frame sample
-          vis = cv2.cvtColor(frames[len(frames)//2], cv2.COLOR_GRAY2BGR)
-          cv2.rectangle(vis, (x, y), (x+w, y+h), (0, 255, 0), 3)
-          cv2.putText(vis, f"delogo area (th={th})", (10, 30),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-          cv2.imwrite("debug_detected_area.jpg", vis)
-
-          print("✅ Coordinates saved to coords.json")
-          PYEOF
-          python detect.py
-
-          # Export ke GITHUB_OUTPUT
-          X=$(python -c "import json;print(json.load(open('coords.json'))['x'])")
-          Y=$(python -c "import json;print(json.load(open('coords.json'))['y'])")
-          Wd=$(python -c "import json;print(json.load(open('coords.json'))['w'])")
-          Hd=$(python -c "import json;print(json.load(open('coords.json'))['h'])")
-          echo "x=$X" >> $GITHUB_OUTPUT
-          echo "y=$Y" >> $GITHUB_OUTPUT
-          echo "w=$Wd" >> $GITHUB_OUTPUT
-          echo "h=$Hd" >> $GITHUB_OUTPUT
-
-      - name: Upload detection preview
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: detection-preview
-          path: debug_detected_area.jpg
-          if-no-files-found: warn
-
-      # ============================================================
-      # STEP 3: REMOVE - Delogo (interpolasi tepi, ringan)
-      # ============================================================
-      - name: Remove watermark (delogo)
-        run: |
-          echo "🎬 Using coordinates: x=${{ steps.detect.outputs.x }} y=${{ steps.detect.outputs.y }} w=${{ steps.detect.outputs.w }} h=${{ steps.detect.outputs.h }}"
           ffmpeg -y -i vid_water.mp4 \
-            -vf "delogo=x=${{ steps.detect.outputs.x }}:y=${{ steps.detect.outputs.y }}:w=${{ steps.detect.outputs.w }}:h=${{ steps.detect.outputs.h }}" \
-            -c:v libx264 -preset medium -crf 20 \
-            -pix_fmt yuv420p \
-            -c:a copy \
+            -vf "delogo=x=${{ inputs.x }}:y=${{ inputs.y }}:w=${{ inputs.w }}:h=${{ inputs.h }}" \
+            -c:v libx264 -crf 18 -preset medium \
+            -c:a copy -movflags +faststart \
             vid_water_clean.mp4
           ls -lh vid_water_clean.mp4
-          ffprobe -v error -select_streams v:0 \
-            -show_entries stream=width,height,duration \
-            -of default=noprint_wrappers=1 vid_water_clean.mp4
 
-      # ============================================================
-      # STEP 4: Preview hasil (frame sebelum & sesudah)
-      # ============================================================
-      - name: Generate before/after preview
-        run: |
-          # Frame tengah dari video asli
-          MID=$(ffprobe -v error -select_streams v:0 \
-            -show_entries stream=nb_frames -of csv=p=0 vid_water.mp4)
-          MID=$((MID / 2))
-
-          ffmpeg -y -ss 5 -i vid_water.mp4 -frames:v 1 -update 1 before.jpg
-          ffmpeg -y -ss 5 -i vid_water_clean.mp4 -frames:v 1 -update 1 after.jpg
-
-          # Gabungkan side-by-side
-          ffmpeg -y -i before.jpg -i after.jpg \
-            -filter_complex "[0:v][1:v]hstack=inputs=2" \
-            -update 1 comparison.jpg
-
-          ls -lh before.jpg after.jpg comparison.jpg
-
-      # ============================================================
-      # STEP 5: Upload hasil akhir
-      # ============================================================
-      - name: Upload cleaned video & previews
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: watermark-removal-result
-          path: |
-            vid_water_clean.mp4
-            comparison.jpg
-            before.jpg
-            after.jpg
-            debug_detected_area.jpg
+          name: cleaned-video
+          path: vid_water_clean.mp4
           retention-days: 7
-          if-no-files-found: error
