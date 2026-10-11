@@ -237,7 +237,7 @@ jobs:
         run: |
           echo "🎬 Using coordinates: x=${{ steps.detect.outputs.x }} y=${{ steps.detect.outputs.y }} w=${{ steps.detect.outputs.w }} h=${{ steps.detect.outputs.h }}"
           ffmpeg -y -i vid_water.mp4 \
-            -vf "delogo=x=${{ steps.detect.outputs.x }}:y=${{ steps.detect.outputs.y }}:w=${{ steps.detect.outputs.w }}:h=${{ steps.detect.outputs.h }}:band=8" \
+            -vf "delogo=x=${{ steps.detect.outputs.x }}:y=${{ steps.detect.outputs.y }}:w=${{ steps.detect.outputs.w }}:h=${{ steps.detect.outputs.h }}" \
             -c:v libx264 -preset medium -crf 20 \
             -pix_fmt yuv420p \
             -c:a copy \
