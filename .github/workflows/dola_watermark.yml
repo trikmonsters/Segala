@@ -1,34 +1,123 @@
-name: Remove Watermark (Manual Coords)
+name: Remove Watermark (LaMa Deep Learning)
 
 on:
   workflow_dispatch:
     inputs:
-      x: { description: 'X', required: true, default: '560' }
-      y: { description: 'Y', required: true, default: '1220' }
-      w: { description: 'W', required: true, default: '155' }
-      h: { description: 'H', required: true, default: '55' }
+      x:
+        description: 'X coordinate (left)'
+        required: true
+        default: '560'
+      y:
+        description: 'Y coordinate (top)'
+        required: true
+        default: '1220'
+      w:
+        description: 'Width'
+        required: true
+        default: '155'
+      h:
+        description: 'Height'
+        required: true
+        default: '55'
+      dilation:
+        description: 'Dilation (pixel expansion)'
+        required: false
+        default: '15'
 
 jobs:
-  remove:
+  remove-watermark:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+
     steps:
-      - uses: actions/checkout@v4
-        with: { lfs: true }
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
 
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Remove watermark
+      - name: Install FFmpeg
         run: |
-          ffmpeg -y -i vid_water.mp4 \
-            -vf "delogo=x=${{ inputs.x }}:y=${{ inputs.y }}:w=${{ inputs.w }}:h=${{ inputs.h }}" \
-            -c:v libx264 -crf 18 -preset medium \
-            -c:a copy -movflags +faststart \
-            vid_water_clean.mp4
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install static-ghost & IOPaint
+        run: |
+          pip install --quiet iopaint
+          pip install --quiet static-ghost
+          echo "✅ Installation complete"
+          static-ghost --help || true
+
+      - name: Verify input video
+        run: |
+          test -f vid_water.mp4 || (echo "❌ vid_water.mp4 tidak ada!" && exit 1)
+          ls -lh vid_water.mp4
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width,height,duration \
+            -of default=noprint_wrappers=1 vid_water.mp4
+
+      - name: Remove watermark (LaMa Deep Learning)
+        run: |
+          echo "🎬 Running static-ghost with region: ${{ inputs.x }},${{ inputs.y }},${{ inputs.w }},${{ inputs.h }}"
+          echo "   Dilation: ${{ inputs.dilation }}"
+          
+          static-ghost remove vid_water.mp4 \
+            --region ${{ inputs.x }},${{ inputs.y }},${{ inputs.w }},${{ inputs.h }} \
+            --dilation ${{ inputs.dilation }} \
+            --device cpu \
+            -o vid_water_clean.mp4
+          
+          echo "✅ Done"
           ls -lh vid_water_clean.mp4
 
-      - uses: actions/upload-artifact@v4
+      - name: Verify output
+        run: |
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width,height,duration,codec_name \
+            -of default=noprint_wrappers=1 vid_water_clean.mp4
+
+      - name: Generate before/after comparison
+        run: |
+          # Ekstrak frame dari video asli dan bersih
+          ffmpeg -y -ss 5 -i vid_water.mp4 -frames:v 1 -update 1 before.jpg
+          ffmpeg -y -ss 5 -i vid_water_clean.mp4 -frames:v 1 -update 1 after.jpg
+          
+          # Crop + zoom area watermark (4x zoom)
+          ffmpeg -y -i before.jpg -vf "crop=220:100:500:1180,scale=880:400:flags=neighbor" before_zoom.jpg
+          ffmpeg -y -i after.jpg -vf "crop=220:100:500:1180,scale=880:400:flags=neighbor" after_zoom.jpg
+          
+          # Gabung side-by-side
+          ffmpeg -y -i before_zoom.jpg -i after_zoom.jpg \
+            -filter_complex "[0:v][1:v]hstack=inputs=2" comparison_zoom.jpg
+          
+          # Full frame comparison
+          ffmpeg -y -i before.jpg -i after.jpg \
+            -filter_complex "[0:v][1:v]hstack=inputs=2" comparison_full.jpg
+          
+          ls -lh comparison_zoom.jpg comparison_full.jpg
+
+      - name: Upload cleaned video
+        uses: actions/upload-artifact@v4
         with:
           name: cleaned-video
           path: vid_water_clean.mp4
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload comparison previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-preview
+          path: |
+            comparison_zoom.jpg
+            comparison_full.jpg
+            before_zoom.jpg
+            after_zoom.jpg
+          if-no-files-found: warn
           retention-days: 7
