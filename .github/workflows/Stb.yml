@@ -1,0 +1,390 @@
+name: Blender STB IndiHome Turntable (9:16, Image + Video)
+
+on:
+  workflow_dispatch:
+    inputs:
+      frame_end:
+        description: "Frame terakhir animasi (30 fps, 150 = 5 detik)"
+        required: false
+        default: "150"
+      samples:
+        description: "Jumlah Cycles samples"
+        required: false
+        default: "24"
+      width:
+        description: "Lebar render (px)"
+        required: false
+        default: "720"
+      height:
+        description: "Tinggi render (px) — 9:16"
+        required: false
+        default: "1280"
+      shards:
+        description: "Jumlah job paralel untuk membagi frame"
+        required: false
+        default: "5"
+
+env:
+  BLENDER_VERSION: "4.2.3"
+  BLENDER_SERIES: "4.2"
+  FRAME_END: ${{ github.event.inputs.frame_end || '150' }}
+  SAMPLES: ${{ github.event.inputs.samples || '24' }}
+  WIDTH: ${{ github.event.inputs.width || '720' }}
+  HEIGHT: ${{ github.event.inputs.height || '1280' }}
+  SHARDS: ${{ github.event.inputs.shards || '5' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shard_list: ${{ steps.gen.outputs.list }}
+    steps:
+      - id: gen
+        run: |
+          n=${SHARDS}
+          list=$(python3 -c "import json;print(json.dumps(list(range($n))))")
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  render:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shard_list) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Blender install
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: /opt/blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+
+      - name: Download & install Blender
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o blender.tar.xz \
+            "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          mkdir -p /opt/blender
+          tar -xJf blender.tar.xz -C /opt/blender --strip-components=1
+
+      - name: Add Blender to PATH
+        run: echo "/opt/blender" >> "$GITHUB_PATH"
+
+      - name: Prepare folders
+        run: mkdir -p output/frames output/stills
+
+      - name: Compute frame range for this shard
+        id: range
+        run: |
+          python3 -c "
+          total = int('${FRAME_END}')
+          shards = int('${SHARDS}')
+          shard = int('${{ matrix.shard }}')
+          per = -(-total // shards)
+          start = shard * per + 1
+          end = min(total, start + per - 1)
+          print(f'start={start}')
+          print(f'end={end}')
+          " >> "$GITHUB_OUTPUT"
+
+      - name: Write Blender script (STB IndiHome)
+        run: |
+          cat > generate_scene.py << 'PYEOF'
+          import bpy
+          import math
+          import os
+
+          TOTAL_FRAMES = int(os.environ["FRAME_END"])
+          SAMPLES      = int(os.environ["SAMPLES"])
+          WIDTH        = int(os.environ["WIDTH"])
+          HEIGHT       = int(os.environ["HEIGHT"])
+          SHARD_START  = int(os.environ["SHARD_START"])
+          SHARD_END    = int(os.environ["SHARD_END"])
+
+          bpy.ops.wm.read_factory_settings(use_empty=True)
+          scene = bpy.context.scene
+
+          # ---------- Dimensi STB (mm -> m) ----------
+          S = 0.001
+          W = 100 * S
+          D = 100 * S
+          H = 23  * S
+
+          # ---------- Helper: flat cel-shaded material ----------
+          def make_toon_material(name, color, size=0.9, smooth=0.15):
+              mat = bpy.data.materials.new(name=name)
+              mat.use_nodes = True
+              nodes = mat.node_tree.nodes
+              nodes.clear()
+              toon = nodes.new('ShaderNodeBsdfToon')
+              toon.component = 'DIFFUSE'
+              toon.inputs['Color'].default_value = (*color, 1)
+              toon.inputs['Size'].default_value = size
+              toon.inputs['Smooth'].default_value = smooth
+              out = nodes.new('ShaderNodeOutputMaterial')
+              mat.node_tree.links.new(toon.outputs[0], out.inputs['Surface'])
+              return mat
+
+          # ---------- World: gradient pastel ----------
+          world = bpy.data.worlds.new("World")
+          scene.world = world
+          world.use_nodes = True
+          nt = world.node_tree
+          nt.nodes.clear()
+          tex_coord = nt.nodes.new('ShaderNodeTexCoord')
+          gradient  = nt.nodes.new('ShaderNodeTexGradient')
+          gradient.gradient_type = 'LINEAR'
+          ramp = nt.nodes.new('ShaderNodeValToRGB')
+          ramp.color_ramp.elements[0].color = (1.0, 0.80, 0.65, 1)
+          ramp.color_ramp.elements[1].color = (0.45, 0.55, 0.95, 1)
+          bg = nt.nodes.new('ShaderNodeBackground')
+          bg.inputs['Strength'].default_value = 1.3
+          wout = nt.nodes.new('ShaderNodeOutputWorld')
+          nt.links.new(tex_coord.outputs['Generated'], gradient.inputs['Vector'])
+          nt.links.new(gradient.outputs['Color'], ramp.inputs['Fac'])
+          nt.links.new(ramp.outputs['Color'], bg.inputs['Color'])
+          nt.links.new(bg.outputs['Background'], wout.inputs['Surface'])
+
+          # ---------- Render settings ----------
+          scene.render.engine = 'CYCLES'
+          scene.cycles.device = 'CPU'
+          scene.cycles.samples = SAMPLES
+          scene.cycles.use_denoising = True
+          scene.cycles.use_adaptive_sampling = True
+          scene.cycles.adaptive_threshold = 0.05
+          scene.render.use_persistent_data = True
+
+          scene.render.use_freestyle = True
+          vl = bpy.context.view_layer
+          lineset = vl.freestyle_settings.linesets.new("Outline")
+          lineset.select_silhouette = True
+          lineset.select_border = True
+          lineset.select_crease = True
+          lineset.linestyle.color = (0.03, 0.03, 0.05)
+          lineset.linestyle.thickness = 2.2
+
+          scene.render.resolution_x = WIDTH
+          scene.render.resolution_y = HEIGHT
+          scene.render.fps = 30
+          scene.frame_start = SHARD_START
+          scene.frame_end   = SHARD_END
+          scene.render.image_settings.file_format = 'PNG'
+          scene.view_settings.view_transform = 'Standard'
+
+          # ---------- Bahan material ----------
+          mat_body   = make_toon_material("BodyBlack",  (0.05, 0.05, 0.06), size=0.9,  smooth=0.12)
+          mat_inset  = make_toon_material("InsetGray",  (0.10, 0.10, 0.12), size=0.9,  smooth=0.15)
+          mat_port   = make_toon_material("PortDark",   (0.02, 0.02, 0.03), size=1.0,  smooth=0.05)
+          mat_port_m = make_toon_material("PortMetal",  (0.55, 0.55, 0.58), size=1.0,  smooth=0.05)
+          mat_foot   = make_toon_material("FootRubber", (0.01, 0.01, 0.01), size=1.0,  smooth=0.1)
+          mat_accent = make_toon_material("AccentRed",  (0.85, 0.10, 0.15), size=0.9,  smooth=0.1)  # aksen IndiHome
+          mat_ground = make_toon_material("GroundMat",  (0.35, 0.78, 0.62), size=0.9,  smooth=0.15)
+
+          # ---------- Helper: kotak dengan bevel ----------
+          def add_box(name, loc, size, mat, bevel=0.0):
+              bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
+              obj = bpy.context.active_object
+              obj.name = name
+              obj.scale = size
+              bpy.ops.object.transform_apply(scale=True)
+              if bevel > 0:
+                  m = obj.modifiers.new(name="Bevel", type='BEVEL')
+                  m.width = bevel
+                  m.segments = 3
+                  m.limit_method = 'ANGLE'
+              obj.data.materials.append(mat)
+              return obj
+
+          # ---------- Body utama STB ----------
+          body = add_box("STB_Body", (0, 0, H/2), (W, D, H), mat_body, bevel=1.5*S)
+
+          # ---------- Inset di atas (area logo) ----------
+          add_box("STB_TopInset", (0, 0, H - 0.3*S), (W*0.55, D*0.55, 0.6*S), mat_inset, bevel=0.3*S)
+
+          # ---------- Aksen merah IndiHome di depan ----------
+          add_box("IndiHome_Accent", (0, -D/2 + 0.4*S, H*0.55),
+                  (W*0.35, 0.8*S, H*0.18), mat_accent, bevel=0.1*S)
+
+          # ---------- Port USB kiri (2 buah) ----------
+          usb_w, usb_h, usb_d = 12*S, 5*S, 6*S
+          add_box("USB_1", (-W/2 + 0.5*S, -15*S, H*0.4), (usb_d, usb_h, usb_w), mat_port)
+          add_box("USB_2", (-W/2 + 0.5*S,  15*S, H*0.4), (usb_d, usb_h, usb_w), mat_port)
+
+          # ---------- Port belakang ----------
+          back_y = D/2 - 0.5*S
+          pz = H * 0.4
+          add_box("Port_HDMI",  ( 20*S, back_y, pz), (14*S, 5*S, 6*S), mat_port_m)
+          add_box("Port_LAN",   (  0*S, back_y, pz), (12*S, 5*S, 8*S), mat_port_m)
+          add_box("Port_AV",    (-18*S, back_y, pz), ( 6*S, 5*S, 6*S), mat_port)
+          add_box("Port_Power", (-40*S, back_y, pz), ( 8*S, 5*S, 8*S), mat_port)
+
+          # ---------- Kaki karet ----------
+          foot_positions = [
+              (-W/2 + 8*S, -D/2 + 8*S),
+              ( W/2 - 8*S, -D/2 + 8*S),
+              (-W/2 + 8*S,  D/2 - 8*S),
+              ( W/2 - 8*S,  D/2 - 8*S),
+          ]
+          for i, (fx, fy) in enumerate(foot_positions, 1):
+              bpy.ops.mesh.primitive_cylinder_add(radius=4*S, depth=1.5*S,
+                                                  location=(fx, fy, 0.75*S))
+              f = bpy.context.active_object
+              f.name = f"Foot_{i}"
+              f.data.materials.append(mat_foot)
+
+          # ---------- Gabungkan semua bagian STB jadi satu objek ----------
+          bpy.ops.object.select_all(action='DESELECT')
+          stb_parts = [o for o in bpy.data.objects if o.name.startswith((
+              "STB_", "USB_", "Port_", "Foot_", "IndiHome_"))]
+          for o in stb_parts:
+              o.select_set(True)
+          bpy.context.view_layer.objects.active = body
+          bpy.ops.object.join()
+          stb = bpy.context.active_object
+          stb.name = "STB_IndiHome"
+
+          # Pindahkan origin ke tengah body untuk rotasi turntable yang mulus
+          bpy.context.scene.cursor.location = (0, 0, H/2)
+          bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+          bpy.context.scene.cursor.location = (0, 0, 0)
+
+          # ---------- Ground (horizon melengkung) ----------
+          bpy.ops.mesh.primitive_uv_sphere_add(radius=14, location=(0, 0, -14))
+          ground = bpy.context.active_object
+          ground.name = "Ground"
+          ground.scale = (1, 1, 0.35)
+          ground.data.materials.append(mat_ground)
+
+          # ---------- Kamera: framing 9:16, sedikit di atas objek ----------
+          bpy.ops.object.camera_add(location=(0, -0.35, 0.10))
+          cam = bpy.context.active_object
+          cam.rotation_euler = (math.radians(72), 0, 0)
+          cam.data.lens = 50
+          scene.camera = cam
+
+          # ---------- Lighting ----------
+          bpy.ops.object.light_add(type='SUN', location=(0.3, -0.3, 0.5))
+          sun = bpy.context.active_object
+          sun.data.energy = 3.0
+          sun.rotation_euler = (math.radians(55), 0, math.radians(35))
+
+          bpy.ops.object.light_add(type='AREA', location=(-0.3, -0.2, 0.3))
+          rim = bpy.context.active_object
+          rim.data.energy = 25
+          rim.data.size = 0.3
+          rim.data.color = (0.6, 0.75, 1.0)
+
+          # ---------- Animasi: turntable 360° + sedikit naik-turun ----------
+          for frame in range(SHARD_START, SHARD_END + 1):
+              scene.frame_set(frame)
+              t = (frame - 1) / max(1, TOTAL_FRAMES - 1)   # 0..1
+
+              # Rotasi penuh 360° (loop mulus)
+              stb.rotation_euler = (0, 0, t * math.tau)
+              # Sedikit naik-turun agar tidak terasa statis
+              stb.location = (0, 0, H/2 + math.sin(t * math.tau) * 0.008)
+
+              # Kamera sedikit orbit berlawanan arah untuk parallax halus
+              cam.location.x = math.sin(t * math.tau) * 0.05
+
+              scene.render.filepath = f'output/frames/frame_{frame:06d}.png'
+              bpy.ops.render.render(write_still=True)
+
+          print(f"Shard done: frames {SHARD_START}-{SHARD_END}")
+          PYEOF
+
+      - name: Run Blender headless render (this shard only)
+        env:
+          FRAME_END: ${{ env.FRAME_END }}
+          SAMPLES: ${{ env.SAMPLES }}
+          WIDTH: ${{ env.WIDTH }}
+          HEIGHT: ${{ env.HEIGHT }}
+          SHARD_START: ${{ steps.range.outputs.start }}
+          SHARD_END: ${{ steps.range.outputs.end }}
+        run: |
+          blender --background --python-exit-code 1 --python generate_scene.py
+
+      - name: Upload shard frames
+        uses: actions/upload-artifact@v4
+        with:
+          name: frames-shard-${{ matrix.shard }}
+          path: output/frames/
+          retention-days: 3
+
+  combine:
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Download all frame shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: frames-shard-*
+          path: all_frames_downloads
+          merge-multiple: false
+
+      - name: Merge, sort numerically, and renumber frames
+        run: |
+          mkdir -p all_frames
+          python3 << 'PYEOF'
+          import glob, os, re, shutil
+          files = glob.glob('all_frames_downloads/**/frame_*.png', recursive=True)
+          def frame_num(p):
+              m = re.search(r'frame_(\d+)\.png$', os.path.basename(p))
+              return int(m.group(1)) if m else None
+          numbered = [(frame_num(f), f) for f in files]
+          numbered = [nf for nf in numbered if nf[0] is not None]
+          numbered.sort(key=lambda nf: nf[0])
+          print(f"Ditemukan {len(numbered)} file frame.")
+          seen, out_index = set(), 1
+          for n, f in numbered:
+              if n in seen:
+                  print(f"PERINGATAN: duplikat frame {n}: {f}"); continue
+              seen.add(n)
+              shutil.copy2(f, f"all_frames/frame_{out_index:06d}.png")
+              out_index += 1
+          expected = int(os.environ.get("FRAME_END", "0"))
+          if expected and len(seen) != expected:
+              missing = sorted(set(range(1, expected + 1)) - seen)
+              print(f"::warning::Total unik = {len(seen)}, diharapkan {expected}.")
+              print(f"Frame hilang: {missing[:30]}")
+          PYEOF
+
+      - name: Verify frames
+        run: |
+          count=$(ls all_frames/frame_*.png 2>/dev/null | wc -l)
+          echo "Total frame final: $count"
+          if [ "$count" -lt 2 ]; then
+            echo "::error::Frame < 2, video tidak bisa dibuat."; exit 1
+          fi
+
+      - name: Convert PNG frames to MP4 (9:16)
+        run: |
+          mkdir -p output
+          ffmpeg -y -framerate 30 \
+            -start_number 1 \
+            -i 'all_frames/frame_%06d.png' \
+            -c:v libx264 -pix_fmt yuv420p \
+            -crf 18 -preset slow \
+            output/stb_indihome_turntable.mp4
+
+      - name: Upload MP4 video
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-mp4
+          path: output/stb_indihome_turntable.mp4
+          retention-days: 14
+
+      - name: Upload merged frames
+        uses: actions/upload-artifact@v4
+        with:
+          name: frames-png-merged
+          path: all_frames/
+          retention-days: 14
