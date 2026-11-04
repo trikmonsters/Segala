@@ -1,34 +1,6 @@
 {
   "rendered": [
     {
-      "id": "neural-bloom",
-      "type": "neural-network",
-      "concept": "GROWTH vs DECAY — neurons unfurl like bioluminescent roots",
-      "renderedAt": "2026-09-30T22:12:55.484Z",
-      "run": "3"
-    },
-    {
-      "id": "tidal-fragments",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — particles snap into a perfect ring then dissolve",
-      "renderedAt": "2026-09-30T22:12:55.484Z",
-      "run": "3"
-    },
-    {
-      "id": "data-river",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — packets rush while the background holds perfectly still",
-      "renderedAt": "2026-09-30T22:12:55.484Z",
-      "run": "3"
-    },
-    {
-      "id": "root-memory",
-      "type": "organic-growth",
-      "concept": "FRAGILITY vs STRENGTH — thin branches thicken into a resilient root system",
-      "renderedAt": "2026-09-30T22:12:55.484Z",
-      "run": "3"
-    },
-    {
       "id": "prism-fold",
       "type": "geometric-transform",
       "concept": "ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
@@ -6494,6 +6466,76 @@
       "codeMode": "template",
       "renderedAt": "2026-11-03T21:32:43.463Z",
       "run": "103"
+    },
+    {
+      "id": "ai-neural-network-processor-node-neon",
+      "concept": "Morphing data pulses rippling across interlinked grid nodes with dynamic overshoot",
+      "topic": "AI & automation",
+      "motion": "scan-and-reveal: a light bar sweeps the hero, revealing details layer by layer, then dissolves back",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "AI neural network processor node",
+      "stockTitle": "Glowing neon line AI neural network processor chip icon animation on pure black background. Artificial intelligence hardware acceleration and compute engine concept. 4K video motion graphic, seamless ",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T04:08:36.184Z",
+      "run": "104"
+    },
+    {
+      "id": "ai-automation-neon-gear-pipeline",
+      "concept": "Staggered rotation release with follow-through inertia on secondary interlocking teeth",
+      "topic": "AI & automation",
+      "motion": "scan-and-reveal: a light bar sweeps the hero, revealing details layer by layer, then dissolves back",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "automated workflow execution pipeline",
+      "stockTitle": "Glowing neon line automated workflow pipeline processing gear animation on pure black background. Interlocking cogs transferring data packets, enterprise tech concept. 4K video motion graphic, seamles",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T04:08:36.184Z",
+      "run": "104"
+    },
+    {
+      "id": "ai-ml-data-query-magnifier-neon-node",
+      "concept": "Orbiting focal ring scaling down with elastic anticipation before locking onto the center",
+      "topic": "AI & automation",
+      "motion": "scan-and-reveal: a light bar sweeps the hero, revealing details layer by layer, then dissolves back",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "intelligent machine learning data query",
+      "stockTitle": "Glowing neon line AI data query icon animation with magnifying glass on black background. Big data analytics search, automated insight discovery concept. 4K motion graphic loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T04:08:36.184Z",
+      "run": "104"
+    },
+    {
+      "id": "neon-automated-algorithm-validation-check-icon",
+      "concept": "Secondary action ripple expanding outward as the final checkstroke snaps into place",
+      "topic": "AI & automation",
+      "motion": "scan-and-reveal: a light bar sweeps the hero, revealing details layer by layer, then dissolves back",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "automated algorithm decision check",
+      "stockTitle": "Glowing neon line automated algorithm validation check icon animation on pure black background. Compliance testing and CI/CD pipeline concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T04:08:36.184Z",
+      "run": "104"
+    },
+    {
+      "id": "neon-ml-security-shield-ai-automation",
+      "concept": "Simultaneous scan-sweep revealing an inner cryptographic core with smooth dissolve-back",
+      "topic": "AI & automation",
+      "motion": "scan-and-reveal: a light bar sweeps the hero, revealing details layer by layer, then dissolves back",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "machine learning security safeguard shield",
+      "stockTitle": "Glowing neon line automated machine learning security shield animation on pure black background. AI safety governance, enterprise model protection symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T04:08:36.184Z",
+      "run": "104"
     }
   ],
   "version": 1
