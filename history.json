@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "prism-fold",
-      "type": "geometric-transform",
-      "concept": "ISOLATION vs CONNECTION — nested polygons fold inward until they intersect",
-      "renderedAt": "2026-09-30T22:12:55.484Z",
-      "run": "3"
-    },
-    {
-      "id": "glass-monoliths-connect",
-      "type": "neural-network",
-      "concept": "ISOLATION vs CONNECTION — A desolate expanse of dark glass pillars slowly bridges together through hyper-detailed filaments of glowing light.",
-      "renderedAt": "2026-10-01T04:11:42.896Z",
-      "run": "7"
-    },
-    {
-      "id": "magnetic-sand-disruption",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — A flat, perfectly ordered plain of amber dust explodes into a chaotic pink magnetic swirl before freezing in gravity-defying stasis.",
-      "renderedAt": "2026-10-01T04:11:42.896Z",
-      "run": "7"
-    },
-    {
-      "id": "dormant-riverbed-pulse",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — Heavy basalt stone plates remain stubbornly still while liquid light data surges through the cracks at warp speed.",
-      "renderedAt": "2026-10-01T04:11:42.896Z",
-      "run": "7"
-    },
-    {
-      "id": "timber-decay-reclamation",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — Dead, flaking wooden textures are gradually consumed and reclaimed by hyper-vibrant, bioluminescent flora.",
-      "renderedAt": "2026-10-01T04:11:42.896Z",
-      "run": "7"
-    },
-    {
       "id": "obsidian-shatter-equilibrium",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — A monolithic, solid obsidian block shatters into thousands of microscopic, paper-thin floating violet glass panes.",
@@ -6536,6 +6501,75 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-04T04:08:36.184Z",
       "run": "104"
+    },
+    {
+      "id": "frosted-glass-live-chat-bubble-sync-node",
+      "concept": "Anticipation scale-up followed by an overshoot pop and a secondary ripple pulse radiating outward from the chat bubble tail.",
+      "topic": "customer support & chat",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "customer support live-chat bubble",
+      "stockTitle": "Neon line customer support live chat bubble icon floating on dark gradient background. Glowing glassmorphism messaging card animation for helpdesk platform landing page. 4K loopable motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T16:33:07.407Z",
+      "run": "105"
+    },
+    {
+      "id": "frosted-glass-help-desk-ticket-resolution-check",
+      "concept": "Morphing line animation where the document contour smoothly transforms into a crisp verification checkmark.",
+      "topic": "customer support & chat",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "help-desk ticket resolution check",
+      "stockTitle": "Glowing neon line help-desk ticket resolution check icon animation on black background. customer support & chat concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-04T16:33:07.407Z",
+      "run": "105"
+    },
+    {
+      "id": "support-agent-user-profile-frosted-glass",
+      "concept": "Orbital rotation with staggered node ignition that highlights active operator status in sequence.",
+      "topic": "customer support & chat",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "support agent user profile",
+      "stockTitle": "Glowing neon support agent user profile icon animation on dark frosted glass background. Customer service avatar with active orbital status rings. 4K motion graphic loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T16:33:07.407Z",
+      "run": "105"
+    },
+    {
+      "id": "frosted-glass-feedback-rating-star-icon",
+      "concept": "Follow-through oscillation where internal geometric facets settle with a gentle elastic spring back.",
+      "topic": "customer support & chat",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "customer feedback rating star",
+      "stockTitle": "Frosted glass customer feedback rating star icon animation on dark gradient background. Customer satisfaction CSAT metric display and review platform promo motion graphic, 4K video loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T16:33:07.407Z",
+      "run": "105"
+    },
+    {
+      "id": "customer-support-knowledge-base-search-magnifier",
+      "concept": "Magnifier sweep reveal featuring staggered line drawing and a sudden illumination pulse at focus center.",
+      "topic": "customer support & chat",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "knowledge base search magnifier",
+      "stockTitle": "Glowing neon line knowledge base search magnifier icon on black background with frosted glassmorphism data grid. FAQ self-service concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T16:33:07.407Z",
+      "run": "105"
     }
   ],
   "version": 1
