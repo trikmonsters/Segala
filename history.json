@@ -1,57 +1,6 @@
 {
   "rendered": [
     {
-      "id": "obsidian-shatter-equilibrium",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — A monolithic, solid obsidian block shatters into thousands of microscopic, paper-thin floating violet glass panes.",
-      "renderedAt": "2026-10-01T04:11:42.896Z",
-      "run": "7"
-    },
-    {
-      "id": "serene-glass-harmonograph-loop",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — paper-thin etched glass panes resiliently anchor complex, looping light pendulums.",
-      "technique": "harmonograph / Lissajous multi-pendulum light trails",
-      "material": "frosted glass layers",
-      "stockTitle": "calm gradient motion background for presentation featuring frosted glass layers and ink indigo coral light trails seamless loop 4K",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-01T11:20:34.200Z",
-      "run": "5"
-    },
-    {
-      "id": "minimalist-tech-brushed-metal-emerald-loop",
-      "type": "geometric-transform",
-      "concept": "ORDER vs CHAOS — Structured anodized metal tiles are disrupted and illuminated by a fluid, domain-warped digital light field that warps along their brushed grain.",
-      "technique": "domain-warped fbm light field rendered on a low-res buffer and upscaled",
-      "material": "brushed anodized metal with a light sweep",
-      "stockTitle": "Minimalist Technology Background Loop with Brushed Metal Grid and Abstract Emerald Light Sweeps 4K",
-      "codeMode": "builtin",
-      "renderedAt": "2026-10-01T11:20:34.200Z",
-      "run": "5"
-    },
-    {
-      "id": "quasicrystal-ink-lattice-loop",
-      "type": "geometric-transform",
-      "concept": "ORGANIC vs MECHANICAL — chaotic fluid ink finds order when caught in a mathematical, ten-fold quasicrystal electromagnetic trap.",
-      "technique": "quasicrystal / Penrose-like interference lattice",
-      "material": "ink and smoke",
-      "stockTitle": "Abstract Technology Background Loop with Golden Quasicrystal Lattice and Fluid Teal Smoke in 4K",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-01T11:20:34.200Z",
-      "run": "5"
-    },
-    {
-      "id": "caustic-starlight-dust-growth-decay",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — pulsing starlight dust builds intricate caustic light webs that slowly dissolve back into deep graphite shadows.",
-      "technique": "caustic light-web from summed waves",
-      "material": "starlight dust",
-      "stockTitle": "abstract technology background loop dark graphite starlight dust caustic light web 4K seamless loop",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-01T11:20:34.200Z",
-      "run": "5"
-    },
-    {
       "id": "halftone-paper-matrix-isolation-connection",
       "type": "data-flow",
       "concept": "ISOLATION vs CONNECTION — Isolated dark paper cutouts are unified as travelling wave fronts ignite connected dot-matrix topographies across depths.",
@@ -6570,6 +6519,76 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-04T16:33:07.407Z",
       "run": "105"
+    },
+    {
+      "id": "holopay-vault-phone-gateway-4k",
+      "concept": "Interlocking holographic lock-rings inside the phone shell counter-rotate at 2:1 gear ratios, suddenly snapping into alignment as a horizontal laser light bar scans through, triggering a golden checkmark pulse.",
+      "topic": "fintech & online payments",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "digital payment transaction gateway",
+      "stockTitle": "Neon line payment gateway phone icon on black background, mechanical vault door unlocking. Digital fintech transaction security concept, 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T21:49:58.188Z",
+      "run": "106"
+    },
+    {
+      "id": "holopay-cross-border-globe-wireframe-4k",
+      "concept": "Concentric latitude tick-mark rings revolve like clockwork gears at differential speeds until their orbiting data nodes align along the equator, triggering a high-speed energy bolt that circles the globe.",
+      "topic": "fintech & online payments",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "cross-border currency transfer globe",
+      "stockTitle": "3D holographic wireframe globe money transfer animation on dark navy background. International remittance, global banking, and cross-border currency payment concept. 4K video motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T21:49:58.189Z",
+      "run": "106"
+    },
+    {
+      "id": "holopay-blueprint-pos-terminal",
+      "concept": "A central wireframe microchip expands with gear teeth that drive radiating concentric HUD circles in staggered clockwork cadence, emitting an expanding golden NFC wave upon final lock-in.",
+      "topic": "fintech & online payments",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "contactless pos payment terminal",
+      "stockTitle": "Blueprint smart payment chip card terminal animation on dark navy background. Contactless POS hardware symbol, retail tech concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T21:49:58.189Z",
+      "run": "106"
+    },
+    {
+      "id": "holopay-hud-credit-score-shield-animation",
+      "concept": "Radial chart arcs rotate like nested clockwork gears while vertical bar graph columns rise like mechanical rack-and-pinions, forming a complete protective shield silhouette at peak alignment.",
+      "topic": "fintech & online payments",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "financial credit score rating chart",
+      "stockTitle": "Glowing holographic HUD credit score chart shield animation loop on dark navy background. Financial risk evaluation concept, 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T21:49:58.189Z",
+      "run": "106"
+    },
+    {
+      "id": "holopay-vault-database-lock-animation",
+      "concept": "Multiple stacked database discs spin at independent clockwork speeds like a safe combination tumbler, lining up keyway slots to reveal a glowing gold core that radiates outward in a iris-aperture sweep.",
+      "topic": "fintech & online payments",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "multi-currency digital wallet vault",
+      "stockTitle": "Holographic digital vault database lock animation on dark background. Multi-currency digital wallet security concept, crypto storage blueprint. 4K motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-04T21:49:58.189Z",
+      "run": "106"
     }
   ],
   "version": 1
