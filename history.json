@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "violet-prism-lattice",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — Impossibly thin, paper-like translucent planes withstand extreme folding dynamics without breaking.",
-      "renderedAt": "2026-10-01T15:23:27.116Z",
-      "run": "8"
-    },
-    {
-      "id": "indigo-synapse-mesh",
-      "type": "neural-network",
-      "concept": "ISOLATION vs CONNECTION — isolated points of light form a unified, pulsing web of thought.",
-      "renderedAt": "2026-10-01T21:05:40.451Z",
-      "run": "9"
-    },
-    {
-      "id": "amber-dust-drift",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — microscopic mineral dust snaps from random turbulence into a strict crystalline lattice.",
-      "renderedAt": "2026-10-01T21:05:40.452Z",
-      "run": "9"
-    },
-    {
-      "id": "emerald-stream-flow",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — blazing luminescent data currents carve paths through immutable midnight planes.",
-      "renderedAt": "2026-10-01T21:05:40.452Z",
-      "run": "9"
-    },
-    {
-      "id": "forest-spore-rebirth",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — decomposing bark surfaces are consumed by aggressive, luminous neon flora.",
-      "renderedAt": "2026-10-01T21:05:40.452Z",
-      "run": "9"
-    },
-    {
       "id": "violet-prism-fold",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — paper-thin glass planes withstand violent geometric folding without shattering.",
@@ -6619,6 +6584,71 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-05T04:25:43.519Z",
       "run": "107"
+    },
+    {
+      "id": "cloud-data-storage",
+      "concept": "light trace runs around the icon",
+      "topic": "cloud computing & cybersecurity",
+      "motion": "light trace",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "cloud data storage",
+      "stockTitle": "Glowing neon line cloud data storage icon animation on black background. cloud computing & cybersecurity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-05T16:21:24.419Z",
+      "run": "108"
+    },
+    {
+      "id": "cybersecurity-shield",
+      "concept": "light trace runs around the icon",
+      "topic": "cloud computing & cybersecurity",
+      "motion": "light trace",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "cybersecurity shield",
+      "stockTitle": "Glowing neon line cybersecurity shield icon animation on black background. cloud computing & cybersecurity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-05T16:21:24.420Z",
+      "run": "108"
+    },
+    {
+      "id": "medical-record-folder",
+      "concept": "light trace runs around the icon",
+      "topic": "cloud computing & cybersecurity",
+      "motion": "light trace",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "medical record folder",
+      "stockTitle": "Glowing neon line medical record folder icon animation on black background. cloud computing & cybersecurity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-05T16:21:24.420Z",
+      "run": "108"
+    },
+    {
+      "id": "data-analytics-chart",
+      "concept": "light trace runs around the icon",
+      "topic": "cloud computing & cybersecurity",
+      "motion": "light trace",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "data analytics chart",
+      "stockTitle": "Glowing neon line data analytics chart icon animation on black background. cloud computing & cybersecurity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-05T16:21:24.420Z",
+      "run": "108"
+    },
+    {
+      "id": "telemedicine-phone",
+      "concept": "light trace runs around the icon",
+      "topic": "cloud computing & cybersecurity",
+      "motion": "light trace",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "telemedicine phone",
+      "stockTitle": "Glowing neon line telemedicine phone icon animation on black background. cloud computing & cybersecurity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-05T16:21:24.420Z",
+      "run": "108"
     }
   ],
   "version": 1
