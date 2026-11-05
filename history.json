@@ -1,45 +1,6 @@
 {
   "rendered": [
     {
-      "id": "halftone-paper-matrix-isolation-connection",
-      "type": "data-flow",
-      "concept": "ISOLATION vs CONNECTION — Isolated dark paper cutouts are unified as travelling wave fronts ignite connected dot-matrix topographies across depths.",
-      "technique": "halftone / dot-matrix field modulated by travelling waves",
-      "material": "layered paper-cut depth",
-      "stockTitle": "Abstract Technology Background Loop with Glowing Dot Matrix Waves and Layered Paper Cutout Depth in 4K",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-01T11:20:34.200Z",
-      "run": "5"
-    },
-    {
-      "id": "neural-tapestry-pulse",
-      "type": "neural-network",
-      "concept": "ISOLATION vs CONNECTION — Isolated nodes of indigo light reach across a void, spinning an intricate web of luminous communication.",
-      "renderedAt": "2026-10-01T15:23:27.116Z",
-      "run": "8"
-    },
-    {
-      "id": "amber-dust-storm",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — Wild, unpredictable particulate chaos abruptly locks into a pristine mathematical arrangement.",
-      "renderedAt": "2026-10-01T15:23:27.116Z",
-      "run": "8"
-    },
-    {
-      "id": "emerald-data-stream",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — Blistering digital velocity cuts through immobile, eternal geological structures.",
-      "renderedAt": "2026-10-01T15:23:27.116Z",
-      "run": "8"
-    },
-    {
-      "id": "forest-spore-reclamation",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — Decaying organic matter is completely overtaken by a surge of aggressive, glowing flora.",
-      "renderedAt": "2026-10-01T15:23:27.116Z",
-      "run": "8"
-    },
-    {
       "id": "violet-prism-lattice",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — Impossibly thin, paper-like translucent planes withstand extreme folding dynamics without breaking.",
@@ -6589,6 +6550,75 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-04T21:49:58.189Z",
       "run": "106"
+    },
+    {
+      "id": "global-shipping-cargo-container-animation-green",
+      "concept": "Container sides pull back in anticipation, snap open with easeOutBack, and reveal a glowing inner cargo grid via a smooth vertical slide-up reveal",
+      "topic": "logistics & supply chain",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 3,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "global shipping cargo container",
+      "stockTitle": "3D global shipping cargo container animation on solid chroma key green background. International freight, logistics, and supply chain motion graphics concept. 4K video loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-05T04:25:43.518Z",
+      "run": "107"
+    },
+    {
+      "id": "express-flash-delivery-bolt",
+      "concept": "Pin bounces down, compresses with anticipation, and shoots upward while the energy bolt strikes across the center with an elastic overshoot and secondary trail fade",
+      "topic": "logistics & supply chain",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "express flash delivery bolt",
+      "stockTitle": "Glowing neon line express flash delivery bolt icon animation on black background. logistics & supply chain concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-05T04:25:43.519Z",
+      "run": "107"
+    },
+    {
+      "id": "global-order-tracking-globe-animation",
+      "concept": "Globe scales up from zero with overshoot, while an orbital path rotates around it, dropping a pulsing location marker that ripples outward on impact",
+      "topic": "logistics & supply chain",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "global order tracking location globe",
+      "stockTitle": "Rotating wireframe globe with orbiting delivery route arc and pulsing destination node on green screen background. International parcel tracking, shipping supply chain logistics concept 4K video motio",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-05T04:25:43.519Z",
+      "run": "107"
+    },
+    {
+      "id": "secure-payment-checkout-shield-logistics",
+      "concept": "Shield facets rotate inward in staggered sequence, snap shut with a rigid lock mechanism, and flash an orange accent highlight across the surface",
+      "topic": "logistics & supply chain",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "secure payment checkout shield",
+      "stockTitle": "Matte 3D secure payment checkout shield locking over a shipping manifest on green screen background. Logistics and trade verification motion graphics 4K video loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-05T04:25:43.519Z",
+      "run": "107"
+    },
+    {
+      "id": "automated-warehouse-inventory-gear-sorting",
+      "concept": "Gears compress slightly in anticipation, mesh together with an elastic spin, and trigger a cascading wave of upward-moving inventory blocks",
+      "topic": "logistics & supply chain",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "automated warehouse inventory gear",
+      "stockTitle": "Automated warehouse inventory gear sorting animation on solid chroma key green background. Smart logistics and supply chain fulfillment concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-05T04:25:43.519Z",
+      "run": "107"
     }
   ],
   "version": 1
