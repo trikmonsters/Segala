@@ -1,57 +1,6 @@
 {
   "rendered": [
     {
-      "id": "plum-prism-unfolding",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — paper-thin translucent facets endure extreme geometric transformations without breaking.",
-      "renderedAt": "2026-10-02T04:06:25.009Z",
-      "run": "10"
-    },
-    {
-      "id": "green-energy-solar-battery-charging-icon",
-      "concept": "the central lightning bolt pulses and splits into tiny clean-energy leaves that float upward",
-      "topic": "green energy & sustainability",
-      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
-      "subject": "renewable energy solar charging battery",
-      "stockTitle": "Glowing neon line renewable energy solar charging battery icon animation on black background. green energy & sustainability concept symbol. 4K video motion graphic, seamless loop.",
-      "codeMode": "template",
-      "renderedAt": "2026-10-02T04:51:40.262Z",
-      "run": "10"
-    },
-    {
-      "id": "eco-smart-home-gear-leaf-icon-anim",
-      "concept": "a central gear opens up to reveal a blooming minimalist flower before resetting seamlessly",
-      "topic": "green energy & sustainability",
-      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
-      "subject": "eco smart home control gear",
-      "stockTitle": "Smart home eco gear and leaf icon animation on light soft pastel background. IoT sustainability concept, modern flat duotone motion graphic, seamless loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T04:51:40.263Z",
-      "run": "10"
-    },
-    {
-      "id": "global-sustainability-carbon-network-duo",
-      "concept": "the globe spins slightly and a glowing meridian sweeps around it like a solar orbit",
-      "topic": "green energy & sustainability",
-      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
-      "subject": "global sustainability carbon network",
-      "stockTitle": "Global sustainability network globe icon with data links on soft pastel background. Carbon footprint and supply chain concept. Modern flat duotone 4K video motion graphic, seamless loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T04:51:40.263Z",
-      "run": "10"
-    },
-    {
-      "id": "green-energy-efficiency-growth-chart-animation",
-      "concept": "a sweeping trendline draws itself dynamically, leaving a trail of glowing ecological sparkles",
-      "topic": "green energy & sustainability",
-      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
-      "subject": "green energy efficiency analytics chart",
-      "stockTitle": "Modern flat duotone green energy efficiency growth chart icon animation on soft pastel background. ESG analytics and sustainable investment concept. 4K video motion graphic, seamless loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T04:51:40.263Z",
-      "run": "10"
-    },
-    {
       "id": "eco-friendly-cloud-data-storage-icon-animation",
       "concept": "the cloud puffs upward with an elastic spring while a checkmark icon stamp-animates inside",
       "topic": "green energy & sustainability",
@@ -6709,6 +6658,76 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-06T16:10:34.041Z",
       "run": "111"
+    },
+    {
+      "id": "isometric-executive-kpi-dashboard-stack",
+      "concept": "Staggered elevator elevation: three stacked isometric chart blocks rise sequentially in a phase-lagged wave, settling into a balanced 3D bar structure with elastic overshoot.",
+      "topic": "data analytics & business intelligence",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric executive KPI dashboard stack",
+      "stockTitle": "Isometric executive KPI dashboard 3D animation on soft slate background. Architectural data blocks rise with spring movement for business analytics decks. 4K motion graphics loop visual.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T22:04:47.834Z",
+      "run": "112"
+    },
+    {
+      "id": "isometric-data-pipeline-block-animation",
+      "concept": "Phase-lagged pulse: cube modules pass an illuminated cyan light wave top-to-bottom, causing each tier to expand and drop into its receiving database slot.",
+      "topic": "data analytics & business intelligence",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric data pipeline transformation engine",
+      "stockTitle": "Isometric data pipeline block animation on light background. Automated ETL workflow and data orchestration concept, business intelligence software. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T22:04:47.834Z",
+      "run": "112"
+    },
+    {
+      "id": "isometric-predictive-analytics-cube",
+      "concept": "Orbital layer reveal: a glass-like isometric magnifying plane slices horizontally through a data block, projecting floating forecast nodes that ripple outward.",
+      "topic": "data analytics & business intelligence",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric predictive analytics query cube",
+      "stockTitle": "Isometric predictive data analytics block animation with floating analytical lens revealing trends on light pastel background. 4K video motion graphic, seamless loop for business intelligence.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T22:04:47.834Z",
+      "run": "112"
+    },
+    {
+      "id": "isometric-data-filter-shield-animation",
+      "concept": "Cascading trapdoor drop: block layers fall through a check mark aperture, filtering raw blocks away while verified cyan tiers stack neatly below with spring recoil.",
+      "topic": "data analytics & business intelligence",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric automated data validation filter",
+      "stockTitle": "Isometric automated data validation filter animation on soft pastel background. Data cleaning, governance, and compliance concept. 4K widescreen motion graphic loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T22:04:47.834Z",
+      "run": "112"
+    },
+    {
+      "id": "isometric-global-data-network-cluster",
+      "concept": "Breathing matrix expansion: a dense grid of isometric data blocks pulses outward in concentric wave rings from the central node before snapping back into a unified cloud cube.",
+      "topic": "data analytics & business intelligence",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 1,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric global telemetry data cluster",
+      "stockTitle": "Isometric global data network cluster animation on soft pastel slate background. Distributed cloud databases and edge analytics concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T22:04:47.834Z",
+      "run": "112"
     }
   ],
   "version": 1
