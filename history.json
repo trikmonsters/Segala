@@ -1,45 +1,6 @@
 {
   "rendered": [
     {
-      "id": "quantum-cloud-analytics-chart",
-      "concept": "Rising bar chart columns morph out of cloud vapor, topped by a glowing trendline that shoots a bright energy node through each peak point.",
-      "topic": "cloud computing & data storage",
-      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
-      "subject": "cloud analytics growth chart",
-      "stockTitle": "Glowing quantum point-cloud data analytics growth chart animation on pure black background. Bar chart pillars emerging from cloud mist, tech business intelligence motion graphic, seamless loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T03:41:03.744Z",
-      "run": "9"
-    },
-    {
-      "id": "neural-obsidian-pulse",
-      "type": "neural-network",
-      "concept": "ISOLATION vs CONNECTION — isolated points of dark consciousness merge through synchronized light streams.",
-      "renderedAt": "2026-10-02T04:06:25.009Z",
-      "run": "10"
-    },
-    {
-      "id": "amber-dust-vortex",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — scattered particulate dust instantly forms structured spiral arms before dispersing.",
-      "renderedAt": "2026-10-02T04:06:25.009Z",
-      "run": "10"
-    },
-    {
-      "id": "emerald-stream-dynamics",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — blistering streams of green light cut through immutable, frozen obsidian strata.",
-      "renderedAt": "2026-10-02T04:06:25.009Z",
-      "run": "10"
-    },
-    {
-      "id": "moss-root-awakening",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — decaying bark surfaces are aggressively reclaimed by luminous, fast-growing moss.",
-      "renderedAt": "2026-10-02T04:06:25.009Z",
-      "run": "10"
-    },
-    {
       "id": "plum-prism-unfolding",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — paper-thin translucent facets endure extreme geometric transformations without breaking.",
@@ -6678,6 +6639,76 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-06T04:55:14.436Z",
       "run": "110"
+    },
+    {
+      "id": "luminous-particle-smart-home-hub-bridge",
+      "concept": "Staggered magnetic collapse: thousands of floating cyan particles pull rapidly into a central microchip core, flash amber at impact, and discharge a 360-degree shockwave ring outward.",
+      "topic": "smart home & IoT",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "smart home hub bridge",
+      "stockTitle": "Glowing cyan particle smart home hub icon animation on black background. Central IoT gateway bridge symbol forming microchip core. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T16:10:34.041Z",
+      "run": "111"
+    },
+    {
+      "id": "luminous-iot-smart-lock-particle-animation",
+      "concept": "Magnetic lock-in with ring repulsion: ambient particles swarm to draw a padlock outline; as the shackle snaps shut with overshoot, an intense indigo pulse expels a wide ring of light particles.",
+      "topic": "smart home & IoT",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "smart home security lock",
+      "stockTitle": "Glowing smart lock security icon animation on black background. Cyber security padlock symbol, remote keyless entry concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T16:10:34.041Z",
+      "run": "111"
+    },
+    {
+      "id": "luminous-iot-smart-thermostat-particle-animation",
+      "concept": "Orbital particle spin and radial thermal pulse: cyan particles orbit a gear frame while shifting into warm amber, contracting tightly into the center before projecting an expanding heat wave.",
+      "topic": "smart home & IoT",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "iot climate control thermostat",
+      "stockTitle": "Glowing particle smart thermostat climate control icon animation on pure black background. HVAC automation, home energy conservation concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T16:10:34.041Z",
+      "run": "111"
+    },
+    {
+      "id": "luminous-iot-smart-cloud-gateway",
+      "concept": "Upward magnetic vacuum: streams of cyan micro-dots accelerate upward from a database cylinder into a glowing cloud silhouette, condensing tightly before ejections of halo rings flare outward.",
+      "topic": "smart home & IoT",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "smart cloud storage gateway",
+      "stockTitle": "Glowing cyan particle animation of an IoT smart cloud storage gateway on a pure black background. Cloud data backup and telemetry sync concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T16:10:34.041Z",
+      "run": "111"
+    },
+    {
+      "id": "luminous-iot-voice-assistant-speaker",
+      "concept": "Vibrational snap-contract with wave repulsion: concentric dot rings pulse in speech waveforms around a mobile bulb core, snap tight in silence, and explode into three expanding wave rings.",
+      "topic": "smart home & IoT",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
+      "subject": "voice assistant smart speaker",
+      "stockTitle": "Glowing cyan particle smart speaker voice assistant icon animation on black background. Audio frequency waveform symbol, AI speech recognition concept. 4K video motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T16:10:34.041Z",
+      "run": "111"
     }
   ],
   "version": 1
