@@ -1,61 +1,6 @@
 {
   "rendered": [
     {
-      "id": "isometric-threat-scanner-database-animation",
-      "concept": "A floating isometric magnifying lens sweeps across the dataset, causing warning-red blocks to pop, sanitize, and rebuild as pristine teal blocks.",
-      "topic": "cybersecurity & privacy",
-      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
-      "subject": "network security threat scanner",
-      "stockTitle": "Glowing neon line network security threat scanner icon animation on black background. cybersecurity & privacy concept symbol. 4K video motion graphic, seamless loop.",
-      "codeMode": "template",
-      "renderedAt": "2026-10-02T03:28:17.478Z",
-      "run": "8"
-    },
-    {
-      "id": "quantum-cloud-database-server-particles",
-      "concept": "Three stacked database disks illuminate sequentially from bottom to top like server blades, sending vertical particle streams upwards that ignite the cloud silhouette.",
-      "topic": "cloud computing & data storage",
-      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
-      "subject": "cloud database server",
-      "stockTitle": "Glowing quantum particle cloud database server animation on black background. Stacked server disks and data network concept. 4K video motion graphic, loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T03:41:03.744Z",
-      "run": "9"
-    },
-    {
-      "id": "quantum-cloud-security-lock-animation-black",
-      "concept": "A loose cloud particle cloud rapidly condenses inward, locking into a solid padlock shackle with a shockwave ripple of light that pulses outward.",
-      "topic": "cloud computing & data storage",
-      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
-      "subject": "cloud backup lock",
-      "stockTitle": "Glowing quantum point-cloud particles condense to form a secure padlock shackle and cloud icon on pure black background. Cybersecurity data encryption concept, 4K video motion graphic.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T03:41:03.744Z",
-      "run": "9"
-    },
-    {
-      "id": "quantum-cloud-global-network-animation",
-      "concept": "A spinning particle globe materializes inside the cloud contour, firing rapid interconnected light arcs across continents before dissolving back into swirling nebulas.",
-      "topic": "cloud computing & data storage",
-      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
-      "subject": "global cloud network",
-      "stockTitle": "Glowing quantum point-cloud global network animation on pure black background. International data routing, enterprise cloud computing, and telecommunications concept. 4K video motion graphic, seamless",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T03:41:03.744Z",
-      "run": "9"
-    },
-    {
-      "id": "quantum-cloud-particles-gear",
-      "concept": "Two counter-rotating particle gears lock together inside the cloud outline, accelerating smoothly until their teeth emit bright spark arcs.",
-      "topic": "cloud computing & data storage",
-      "style": "particle-assembled icons: thousands of luminous dots flow into the icon outline, breathe, and swirl back (kit: samplePoly(), glowDot())",
-      "subject": "cloud data processing gear",
-      "stockTitle": "Glowing quantum particle cloud computing gear system animation on pure black background. Automated workflow, backend infrastructure concept. 4K video motion graphic, seamless loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-02T03:41:03.744Z",
-      "run": "9"
-    },
-    {
       "id": "quantum-cloud-analytics-chart",
       "concept": "Rising bar chart columns morph out of cloud vapor, topped by a glowing trendline that shoots a bright energy node through each peak point.",
       "topic": "cloud computing & data storage",
@@ -6665,6 +6610,74 @@
       "codeMode": "template",
       "renderedAt": "2026-11-05T22:33:53.123Z",
       "run": "109"
+    },
+    {
+      "id": "decentralized-identity-glass-card-animation",
+      "concept": "Anticipation squeeze followed by an explosive outward damped snap that seals an amber verification halo around the avatar profile.",
+      "topic": "blockchain & digital identity",
+      "motion": "liquid wobble: outlines breathe with low-amplitude travelling sine waves; hero settles with damped follow-through",
+      "ratio": "16:9",
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "decentralized identity user card",
+      "stockTitle": "Glowing neon line decentralized identity user card icon animation on black background. blockchain & digital identity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-06T04:55:14.436Z",
+      "run": "110"
+    },
+    {
+      "id": "crypto-chip-security-card-glassmorphism",
+      "concept": "Magnetic docking orbit where external circuit nodes converge inward simultaneously, locking the chip core with a bright amber spark pulse.",
+      "topic": "blockchain & digital identity",
+      "motion": "liquid wobble: outlines breathe with low-amplitude travelling sine waves; hero settles with damped follow-through",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "cryptographic chip security card",
+      "stockTitle": "Hardware security key cryptographic chip icon animation on dark background. Digital identity and enterprise blockchain hardware token symbol, 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T04:55:14.436Z",
+      "run": "110"
+    },
+    {
+      "id": "verifiable-credential-glassmorphism-card",
+      "concept": "Staggered dimensional card unfold where three translucent glass leaves snap open and compress together, embossing an iridescent shield crest.",
+      "topic": "blockchain & digital identity",
+      "motion": "liquid wobble: outlines breathe with low-amplitude travelling sine waves; hero settles with damped follow-through",
+      "ratio": "16:9",
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "verifiable credential document card",
+      "stockTitle": "Glowing neon line verifiable credential document card icon animation on black background. blockchain & digital identity concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-06T04:55:14.436Z",
+      "run": "110"
+    },
+    {
+      "id": "distributed-consensus-ledger-card",
+      "concept": "Travelling wave phase-shift where horizontal data disks rotate in alternating counter-directions, synchronizing instantly with an amber vertical laser sweep.",
+      "topic": "blockchain & digital identity",
+      "motion": "liquid wobble: outlines breathe with low-amplitude travelling sine waves; hero settles with damped follow-through",
+      "ratio": "16:9",
+      "artScore": 3,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "distributed consensus ledger card",
+      "stockTitle": "Decentralized blockchain database ledger icon animation on dark background. Distributed consensus and enterprise cryptography concept. 4K widescreen video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T04:55:14.436Z",
+      "run": "110"
+    },
+    {
+      "id": "biometric-auth-shield-card-glassmorphism",
+      "concept": "Liquid perimeter morph where the shield edge ripples with high-frequency sine waves, then crystallizes with a damped dual-ring sonic bloom.",
+      "topic": "blockchain & digital identity",
+      "motion": "liquid wobble: outlines breathe with low-amplitude travelling sine waves; hero settles with damped follow-through",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "zero-trust biometric access shield card",
+      "stockTitle": "Biometric authentication security shield icon animation in glassmorphism style on dark background. Zero-trust cyber identity concept, 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-06T04:55:14.436Z",
+      "run": "110"
     }
   ],
   "version": 1
