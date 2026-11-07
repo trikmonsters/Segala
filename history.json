@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "geodesic-crystalline-fold",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — Translucent violet facets folding under extreme pressure without fracturing to form a robust shield.",
-      "renderedAt": "2026-10-02T14:35:37.894Z",
-      "run": "11"
-    },
-    {
-      "id": "biotitanium-synapse-conduit",
-      "type": "neural-network",
-      "concept": "ORGANIC vs MECHANICAL — Delicate bioluminescent dendritic tendrils thread through precision-machined titanium scaffolding.",
-      "renderedAt": "2026-10-02T20:28:38.148Z",
-      "run": "12"
-    },
-    {
-      "id": "ceramic-core-fusion-lattice",
-      "type": "particle-morph",
-      "concept": "FRAGILITY vs STRENGTH — Thousands of brittle drifting ceramic slivers compress under magnetic tension into an impervious floating sphere.",
-      "renderedAt": "2026-10-02T20:28:38.148Z",
-      "run": "12"
-    },
-    {
-      "id": "abyssal-prism-waveguide",
-      "type": "data-flow",
-      "concept": "ISOLATION vs CONNECTION — Monolithic subterranean prisms isolated in total dark water ignite into synchronized optical waveguides.",
-      "renderedAt": "2026-10-02T20:28:38.148Z",
-      "run": "12"
-    },
-    {
-      "id": "petrified-amber-chlorophyte",
-      "type": "organic-growth",
-      "concept": "SPEED vs STILLNESS — Stagnant millennia-old fossil resin fissures as rapid neon chlorophyte strands erupt along micro-fractures.",
-      "renderedAt": "2026-10-02T20:28:38.148Z",
-      "run": "12"
-    },
-    {
       "id": "origami-vortex-tessellation",
       "type": "geometric-transform",
       "concept": "ORDER vs CHAOS — Precision-folded geometric pleats unravel into chaotic swirling vortex ribbons before snapping back into rigid equilibrium.",
@@ -6757,6 +6722,75 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-07T04:01:59.886Z",
       "run": "113"
+    },
+    {
+      "id": "holomed-ehr-database-cylinder-hud-169",
+      "concept": "Orbital snap & convergence: three concentric data rings orbit rapidly on dual axes before snapping into alignment, firing a vertical laser bar that expands the cylinder into volumetric HUD strata.",
+      "topic": "medical records & health data",
+      "motion": "orbital choreography: satellites travel on arcs and elegant ellipses, handing energy to the hero at precise beats",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "electronic health record database",
+      "stockTitle": "Holographic HUD electronic health record database animation featuring expanding cylinder telemetry, medical cross data rings, and cyan scanning laser on dark background. 4K 16:9 video motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T20:21:26.363Z",
+      "run": "115"
+    },
+    {
+      "id": "holomed-encrypted-patient-data-vault",
+      "concept": "Anticipation pulse & orbital key lock: an orbiting node sweeps an elliptical trajectory, triggering a keyhole iris to pulse open and emit a scanning light bar that seals the document wireframe in a volumetric shield.",
+      "topic": "medical records & health data",
+      "motion": "orbital choreography: satellites travel on arcs and elegant ellipses, handing energy to the hero at precise beats",
+      "ratio": "16:9",
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "encrypted patient data vault",
+      "stockTitle": "Glowing neon line encrypted patient data vault icon animation on black background. medical records & health data concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-07T20:21:26.363Z",
+      "run": "115"
+    },
+    {
+      "id": "holomed-realtime-patient-vital-sync-telemetry",
+      "concept": "Staggered node ignition & wave transfer: orbiting satellite nodes emit rhythmic light pulses into the cloud wireframe, transferring energy along an ECG line that overshoots into a glowing amber cardiac pulse.",
+      "topic": "medical records & health data",
+      "motion": "orbital choreography: satellites travel on arcs and elegant ellipses, handing energy to the hero at precise beats",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "real-time patient vital sync",
+      "stockTitle": "Holographic telemetry patient vital monitor cloud animation on dark background. Digital ECG cardiac pulse line with glowing amber health data nodes. 4K video motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T20:21:26.363Z",
+      "run": "115"
+    },
+    {
+      "id": "holomed-diagnostic-data-search",
+      "concept": "Overshoot focus & scanning sweep: the wireframe magnifier orbits into 3D focus, projecting a high-speed linear scanning bar across the document that highlights data tick marks with an explosive amber radial burst.",
+      "topic": "medical records & health data",
+      "motion": "orbital choreography: satellites travel on arcs and elegant ellipses, handing energy to the hero at precise beats",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "diagnostic health data search",
+      "stockTitle": "Futuristic medical record search scan HUD animation with holographic magnifier analyzing digital patient health file. Sci-fi clinical diagnostic concept, 4K loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T20:21:26.363Z",
+      "run": "115"
+    },
+    {
+      "id": "secure-patient-profile-access-hud",
+      "concept": "Follow-through arc & shield shell activation: twin satellite nodes trace intersecting figure-eight orbits, converging on the central user icon to unfold a glowing HUD shield with interlocking wireframe tick marks.",
+      "topic": "medical records & health data",
+      "motion": "orbital choreography: satellites travel on arcs and elegant ellipses, handing energy to the hero at precise beats",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "holographic HUD blueprint: thin wireframe icons, scanning light bar, tick marks and orbiting data nodes",
+      "subject": "secure patient profile access",
+      "stockTitle": "Holographic patient profile identity shield HUD animation on dark background. Secure medical record user icon, healthcare portal verification concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T20:21:26.363Z",
+      "run": "115"
     }
   ],
   "version": 1
