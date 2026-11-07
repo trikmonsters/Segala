@@ -1,45 +1,6 @@
 {
   "rendered": [
     {
-      "id": "eco-friendly-cloud-data-storage-icon-animation",
-      "concept": "the cloud puffs upward with an elastic spring while a checkmark icon stamp-animates inside",
-      "topic": "green energy & sustainability",
-      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
-      "subject": "eco friendly cloud data storage",
-      "stockTitle": "Glowing neon line eco friendly cloud data storage icon animation on black background. green energy & sustainability concept symbol. 4K video motion graphic, seamless loop.",
-      "codeMode": "template",
-      "renderedAt": "2026-10-02T04:51:40.263Z",
-      "run": "10"
-    },
-    {
-      "id": "abyssal-monolith-link",
-      "type": "neural-network",
-      "concept": "ISOLATION vs CONNECTION — Deep-sea obsidian pillars bridging a massive void through hyper-detailed filaments of glowing indigo light.",
-      "renderedAt": "2026-10-02T14:35:37.894Z",
-      "run": "11"
-    },
-    {
-      "id": "copper-matrix-resonance",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — Wild copper micro-dust organizing rapidly into an immaculate, microscopic circuit layout.",
-      "renderedAt": "2026-10-02T14:35:37.894Z",
-      "run": "11"
-    },
-    {
-      "id": "glacial-basalt-conduit",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — Ultra-velocity data ribbons cutting through ancient, frozen basalt slabs.",
-      "renderedAt": "2026-10-02T14:35:37.894Z",
-      "run": "11"
-    },
-    {
-      "id": "charcoal-heartwood-reclaim",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — Living bioluminescent moss reanimating a decaying, charcoal-black petrified wood stump.",
-      "renderedAt": "2026-10-02T14:35:37.894Z",
-      "run": "11"
-    },
-    {
       "id": "geodesic-crystalline-fold",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — Translucent violet facets folding under extreme pressure without fracturing to form a robust shield.",
@@ -6728,6 +6689,74 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-06T22:04:47.834Z",
       "run": "112"
+    },
+    {
+      "id": "neon-solar-battery-storage-database-loop",
+      "concept": "Energy surge compression & release: the database battery tiers compress downwards in tight anticipation, then burst upward with easeOutBack overshoot as an interior amber bolt flashes and radiates dual neon pulse rings",
+      "topic": "green energy & sustainability",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "solar energy battery storage",
+      "stockTitle": "Glowing neon line solar energy battery storage icon animation on black background. green energy & sustainability concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-07T04:01:59.886Z",
+      "run": "113"
+    },
+    {
+      "id": "neon-ecogrid-smart-grid-network-animation",
+      "concept": "Orbital snap & bus-trace firing: concentric orbital grid lines pull inward with tension, then snap wide with elastic bounce, sequentially triggering cyan and emerald circuit traces that dart outward from the central chip",
+      "topic": "green energy & sustainability",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "renewable smart grid network",
+      "stockTitle": "Glowing neon line smart grid network icon animation on pure black background. Renewable energy distribution symbol, decentralized power concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T04:01:59.886Z",
+      "run": "113"
+    },
+    {
+      "id": "neon-ecogrid-wind-turbine-gear",
+      "concept": "Torque wind-up & rotary snap: the outer gear teeth counter-rotate 15 degrees in anticipation before whipping forward with an extreme easeOutBack spin, launching bright amber bolt arcs that settle into a steady gyroscopic loop",
+      "topic": "green energy & sustainability",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "wind turbine kinetic generator",
+      "stockTitle": "Glowing neon wind turbine kinetic generator gear icon animation on black background. Clean energy power generation, industrial wind farm technology. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T04:01:59.886Z",
+      "run": "113"
+    },
+    {
+      "id": "neon-carbon-audit-certificate-icon",
+      "concept": "Stroke unfold & energetic stamp: the neon document folds inward along diagonal creases, snaps open flat with overshoot, while a bold emerald checkmark slams down from depth, dispersing a crisp radial shockwave ring",
+      "topic": "green energy & sustainability",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "carbon audit verification certificate",
+      "stockTitle": "Glowing neon line carbon audit verification certificate icon animation on black background. green energy & sustainability concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-07T04:01:59.886Z",
+      "run": "113"
+    },
+    {
+      "id": "green-energy-cloud-chart-neon-icon",
+      "concept": "Atmospheric suction & bar eruption: the cloud contour draws inward like an intake valve, pops outward into an elastic hover, as vertical chart bars beneath it erupt upward in a quick-fire staggered overshoot",
+      "topic": "green energy & sustainability",
+      "motion": "anticipation → overshoot → settle: parts pull back slightly, snap forward with easeOutBack/easeOutElastic, then rest",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "clean energy telemetry cloud monitor",
+      "stockTitle": "Glowing neon line clean energy cloud chart icon animation on pure black background. Environmental telemetry data concept, sustainability analytics. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-07T04:01:59.886Z",
+      "run": "113"
     }
   ],
   "version": 1
