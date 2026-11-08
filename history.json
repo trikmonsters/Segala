@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "amethyst-pleat-shatter",
-      "type": "geometric-transform",
-      "concept": "ORDER vs CHAOS — Rigid plum origami folds unravel into fluid chaotic ripples before locking into an crystalline matrix.",
-      "renderedAt": "2026-10-03T13:09:43.975Z",
-      "run": "14"
-    },
-    {
-      "id": "mercury-synapse-drift",
-      "type": "neural-network",
-      "concept": "SPEED vs STILLNESS — Immutable mercury spheres anchor hyper-velocity cyan synapse threads across deep space.",
-      "renderedAt": "2026-10-03T19:06:58.061Z",
-      "run": "15"
-    },
-    {
-      "id": "swarming-brass-lattice",
-      "type": "particle-morph",
-      "concept": "ORGANIC vs MECHANICAL — Rigid clockwork brass dust dissolves into organic flocking movement before crystallizing into a biological lattice.",
-      "renderedAt": "2026-10-03T19:06:58.061Z",
-      "run": "15"
-    },
-    {
-      "id": "carbon-circuit-synthesis",
-      "type": "data-flow",
-      "concept": "GROWTH vs DECAY — Eroding carbon plates release glowing emerald data currents that fuse structural fractures with crystalline logic.",
-      "renderedAt": "2026-10-03T19:06:58.061Z",
-      "run": "15"
-    },
-    {
-      "id": "quartz-mycorrhizal-network",
-      "type": "organic-growth",
-      "concept": "ISOLATION vs CONNECTION — Isolated quartz mineral cores bridge abyssal dark soil using vibrant, glowing mycorrhizal tendrils.",
-      "renderedAt": "2026-10-03T19:06:58.061Z",
-      "run": "15"
-    },
-    {
       "id": "rose-filament-braid",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — Delicate rose-gold silk filaments spin under torsional stress to build an impenetrable geodesic violet armor.",
@@ -6861,6 +6826,75 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-08T15:38:26.391Z",
       "run": "117"
+    },
+    {
+      "id": "isocloud-automated-backup-database-green-screen",
+      "concept": "Anticipation & Pulse Absorption: Small floating data cubes accelerate inward with magnetic snapping ease, triggering a volumetric pulse on the hero cloud before expelling a glowing amber ring.",
+      "topic": "cloud computing & data storage",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 3,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "automated cloud backup storage",
+      "stockTitle": "3D isometric cloud backup animation on green screen. Automated database storage sync icon with floating data blocks, 4K motion graphic seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T20:18:20.943Z",
+      "run": "118"
+    },
+    {
+      "id": "isocloud-load-balancer-green-screen",
+      "concept": "Staggered Orbit & Centrifugal Expulsion: Orbiting data spheres accelerate in concentric tracks, snap magnetically into the rotating central gear, and burst outward in a perfectly timed radial wave.",
+      "topic": "cloud computing & data storage",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "cloud traffic load balancer",
+      "stockTitle": "3d cloud load balancer animation green screen background. Network traffic distribution and server load balancing concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T20:18:20.943Z",
+      "run": "118"
+    },
+    {
+      "id": "multi-cloud-data-migration-globe",
+      "concept": "Trajectory Arc & Expulsion Morph: Data nodes form arc trajectories around the globe, condense into the cloud core with an elastic bounce, and explode outward into an orbital ring pattern.",
+      "topic": "cloud computing & data storage",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "multi cloud data migration globe",
+      "stockTitle": "Glowing neon line multi cloud data migration globe icon animation on black background. cloud computing & data storage concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-08T20:18:20.943Z",
+      "run": "118"
+    },
+    {
+      "id": "isocloud-server-stack-processor-green-screen",
+      "concept": "Layered Stack Overshoot & Compression: Micro-chip particles pull inward into the base, causing the server stack layers to compress with heavy overshoot before firing a horizontal shockwave ring.",
+      "topic": "cloud computing & data storage",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 2,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "cloud server infrastructure cluster",
+      "stockTitle": "3d cloud server infrastructure animation on green screen background. Multi-tiered server blade stack over processor chip, data cluster concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T20:18:20.943Z",
+      "run": "118"
+    },
+    {
+      "id": "isocloud-secure-vault-lock-green-screen",
+      "concept": "Lock Mechanism Snap & Defense Surge: Particle nodes assemble magnetically around the keyhole, triggering a crisp mechanical lock rotation and a powerful outward energy ring guard.",
+      "topic": "cloud computing & data storage",
+      "motion": "magnetic attract/repel: small particles are pulled into the hero, absorbed with a pulse, then expelled in a ring",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "matte 3D-look isolated objects (isometric shaded facets, gentle bounce/turn) on a chroma-key green screen (kit: isoBox())",
+      "subject": "secure cloud data vault lock",
+      "stockTitle": "3d secure cloud data vault animation green screen. Matte isometric padlock cloud symbol for cyber security, encryption concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T20:18:20.943Z",
+      "run": "118"
     }
   ],
   "version": 1
