@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "origami-vortex-tessellation",
-      "type": "geometric-transform",
-      "concept": "ORDER vs CHAOS — Precision-folded geometric pleats unravel into chaotic swirling vortex ribbons before snapping back into rigid equilibrium.",
-      "renderedAt": "2026-10-02T20:28:38.148Z",
-      "run": "12"
-    },
-    {
-      "id": "stellar-synapse-drift",
-      "type": "neural-network",
-      "concept": "ISOLATION vs CONNECTION — Isolated nodes of indigo light bridge expansive voids through glowing filaments.",
-      "renderedAt": "2026-10-03T03:51:47.406Z",
-      "run": "13"
-    },
-    {
-      "id": "obsidian-dust-bloom",
-      "type": "particle-morph",
-      "concept": "ORDER vs CHAOS — Unruly dust storms snap instantly into precise, suspended crystalline alignment.",
-      "renderedAt": "2026-10-03T03:51:47.406Z",
-      "run": "13"
-    },
-    {
-      "id": "midnight-emerald-conduit",
-      "type": "data-flow",
-      "concept": "SPEED vs STILLNESS — Blazing light streams carve paths through immutable midnight structures.",
-      "renderedAt": "2026-10-03T03:51:47.406Z",
-      "run": "13"
-    },
-    {
-      "id": "velvet-chlorophyte-surge",
-      "type": "organic-growth",
-      "concept": "GROWTH vs DECAY — Decaying dark timber textures are consumed by vibrant, fast-spreading bioluminescent flora.",
-      "renderedAt": "2026-10-03T03:51:47.406Z",
-      "run": "13"
-    },
-    {
       "id": "plum-prism-resilience",
       "type": "geometric-transform",
       "concept": "FRAGILITY vs STRENGTH — Extremely delicate translucent facets endure violent folding dynamics without shattering.",
@@ -6791,6 +6756,76 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-07T20:21:26.363Z",
       "run": "115"
+    },
+    {
+      "id": "neobank-chrono-glass-contactless-pay-phone",
+      "concept": "Anticipation winding: internal concentric gear rings rotate at 2:1 counter-speeds, suddenly interlocking to trigger an expanding golden radio-wave pulse that ripples through the frosted card glass.",
+      "topic": "banking & mobile wallet",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "mobile wallet contactless pay phone",
+      "stockTitle": "3D glassmorphism mobile wallet contactless payment animation with phone UI, glowing NFC chronometer gears, golden radio wave pulse on dark background. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T03:38:51.640Z",
+      "run": "116"
+    },
+    {
+      "id": "neobank-chrono-glass-vault-lock-4k",
+      "concept": "Chronometer alignment: three concentric glass tumbler dials spin in staggered sequence, ratcheting with mechanical easing until their notches align, causing the shackle to glide upward and emit a warm amber core glow.",
+      "topic": "banking & mobile wallet",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "digital banking savings vault lock",
+      "stockTitle": "Glowing neon frosted glass savings vault lock icon animation on dark background. Digital banking security symbol, high-yield deposit concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T03:38:51.641Z",
+      "run": "116"
+    },
+    {
+      "id": "neobank-instant-loan-credit-approval",
+      "concept": "Precision lock-in: dual counter-rotating metric calipers sweep along a graduated circular gauge, decelerating smoothly as they mesh into an illuminated checkmark with an energetic radial shockwave.",
+      "topic": "banking & mobile wallet",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "instant loan credit approval check",
+      "stockTitle": "Instant loan credit approval check animation on dark gradient background. Automated underwriting risk assessment concept, banking platform visual. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T03:38:51.641Z",
+      "run": "116"
+    },
+    {
+      "id": "neobank-chrono-glass-core-banking-db-gear",
+      "concept": "Multi-tier orbit: three tiered cylindrical glass trays rotate in alternating directions while tiny embedded gear satellites orbit along their edges, perfectly completing 3, -2, and 1 revolutions to snap back in phase at loop end.",
+      "topic": "banking & mobile wallet",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "cloud core banking database gear",
+      "stockTitle": "Cloud core banking database transaction gear animation on dark background. Fintech high throughput ledger sync concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T03:38:51.641Z",
+      "run": "116"
+    },
+    {
+      "id": "neobank-chrono-glass-fraud-shield",
+      "concept": "Iris closure: an intricate three-layer aperture ring behind the shield face counter-rotates and contracts inward, locking down a bright cryptographic center chip with an amber perimeter shield flare.",
+      "topic": "banking & mobile wallet",
+      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "frosted glassmorphism cards floating with parallax, each carrying a clean line icon, soft glow",
+      "subject": "fraud prevention security shield",
+      "stockTitle": "Banking fraud security shield animation featuring glowing neon line frosted glassmorphism layers, microchip escapement vector, and iris aperture lock on dark background. 4K motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T03:38:51.641Z",
+      "run": "116"
     }
   ],
   "version": 1
