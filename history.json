@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "plum-prism-resilience",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — Extremely delicate translucent facets endure violent folding dynamics without shattering.",
-      "renderedAt": "2026-10-03T03:51:47.406Z",
-      "run": "13"
-    },
-    {
-      "id": "cobalt-mycelium-scaffold",
-      "type": "neural-network",
-      "concept": "ORGANIC vs MECHANICAL — Bioluminescent fungal hyphae weave through precision-etched brass clockwork gears.",
-      "renderedAt": "2026-10-03T13:09:43.975Z",
-      "run": "14"
-    },
-    {
-      "id": "terracotta-dust-lattice",
-      "type": "particle-morph",
-      "concept": "ISOLATION vs CONNECTION — Dispersed particles of warm mineral dust unite into an interconnected acoustic matrix.",
-      "renderedAt": "2026-10-03T13:09:43.975Z",
-      "run": "14"
-    },
-    {
-      "id": "aeon-strata-luminescence",
-      "type": "data-flow",
-      "concept": "GROWTH vs DECAY — Eroding slate canyon walls decay outward as glowing aquamarine data streams deposit new mineral layers.",
-      "renderedAt": "2026-10-03T13:09:43.975Z",
-      "run": "14"
-    },
-    {
-      "id": "lichen-chronometer-pulse",
-      "type": "organic-growth",
-      "concept": "SPEED vs STILLNESS — Stationary obsidian stone stands still as hyper-accelerated lichen patterns rush across its surface.",
-      "renderedAt": "2026-10-03T13:09:43.975Z",
-      "run": "14"
-    },
-    {
       "id": "amethyst-pleat-shatter",
       "type": "geometric-transform",
       "concept": "ORDER vs CHAOS — Rigid plum origami folds unravel into fluid chaotic ripples before locking into an crystalline matrix.",
@@ -6826,6 +6791,76 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-08T03:38:51.641Z",
       "run": "116"
+    },
+    {
+      "id": "insurtech-health-policy-shield-cascade",
+      "concept": "Domino cascade sequence where a pulsing heart beat triggers three springy staggered shield layers extending outward with elastic overshoot.",
+      "topic": "insurance & risk",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "health policy protection shield",
+      "stockTitle": "Flat geometric health insurance shield icon animation with pulsing heart ripple on light background. Medical coverage concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T15:38:26.391Z",
+      "run": "117"
+    },
+    {
+      "id": "digital-claim-approval-document-icon",
+      "concept": "Staggered line-by-line domino drop on the document body triggering a dramatic springy checkmark badge stamp pop.",
+      "topic": "insurance & risk",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "digital claim approval document",
+      "stockTitle": "Digital claim approval document icon animation on soft light background. Automated insurance policy payout verification motion graphic concept. 4K 16:9 video loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T15:38:26.391Z",
+      "run": "117"
+    },
+    {
+      "id": "cyber-risk-coverage-lock",
+      "concept": "Rotational domino snap mechanism where three concentric lock rings click into place sequentially, sealing the database base.",
+      "topic": "insurance & risk",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "cyber risk coverage lock",
+      "stockTitle": "Modern flat geometric cyber risk policy lock icon animation on soft background. Database security cylinder geometric lock rings motion graphic for business insurance video, data breach protection. 4K ",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T15:38:26.391Z",
+      "run": "117"
+    },
+    {
+      "id": "insurtech-risk-evaluation-analytics-chart",
+      "concept": "A staggered domino pop of chart bars followed by an orbital magnifier swipe that reveals a gold accent safety target.",
+      "topic": "insurance & risk",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "risk evaluation analytics chart",
+      "stockTitle": "Risk assessment chart icon animation featuring geometric bar graph and magnifying lens on soft pastel background. Modern insurtech analytics symbol motion graphic loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T15:38:26.391Z",
+      "run": "117"
+    },
+    {
+      "id": "instant-disaster-response-bolt-icon-anim",
+      "concept": "Anticipation drop of an energy bolt that triggers a rapid domino expand-and-settle sequence of protective shield panels.",
+      "topic": "insurance & risk",
+      "motion": "domino cascade: elements activate in a stagger() sequence, each triggering the next like a chain reaction",
+      "ratio": "16:9",
+      "artScore": 5,
+      "style": "modern flat-geometric duotone icons with springy rhythmic animation and motion accents (premium, not clip-art)",
+      "subject": "instant disaster response bolt",
+      "stockTitle": "Fast insurance payout icon animation on soft light background, emergency disaster response energy bolt striking protective umbrella shield symbol for rapid fintech and insurtech video ads, 4K motion g",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-08T15:38:26.391Z",
+      "run": "117"
     }
   ],
   "version": 1
