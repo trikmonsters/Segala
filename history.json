@@ -1,41 +1,6 @@
 {
   "rendered": [
     {
-      "id": "rose-filament-braid",
-      "type": "geometric-transform",
-      "concept": "FRAGILITY vs STRENGTH — Delicate rose-gold silk filaments spin under torsional stress to build an impenetrable geodesic violet armor.",
-      "renderedAt": "2026-10-03T19:06:58.061Z",
-      "run": "15"
-    },
-    {
-      "id": "gossamer-synapse-tensile",
-      "type": "neural-network",
-      "concept": "FRAGILITY vs STRENGTH: Gossamer micro-threads hold monolithic gravity wells under extreme tension without snapping.",
-      "renderedAt": "2026-10-04T04:21:05.856Z",
-      "run": "16"
-    },
-    {
-      "id": "kinetic-amber-stasis-core",
-      "type": "particle-morph",
-      "concept": "SPEED vs STILLNESS: Hyper-velocity particulate storm trapped in equilibrium around a dead-still levitating nucleus.",
-      "renderedAt": "2026-10-04T04:21:05.856Z",
-      "run": "16"
-    },
-    {
-      "id": "sapphire-laminar-conduit",
-      "type": "data-flow",
-      "concept": "ORDER vs CHAOS: Violent fluid turbulence forced into mathematical laminar flow via precision optical apertures.",
-      "renderedAt": "2026-10-04T04:21:05.856Z",
-      "run": "16"
-    },
-    {
-      "id": "vascular-xylem-chronometer",
-      "type": "organic-growth",
-      "concept": "ORGANIC vs MECHANICAL: Botanical xylem conduits biologically integrating with and driving rigid clockwork tracks.",
-      "renderedAt": "2026-10-04T04:21:05.856Z",
-      "run": "16"
-    },
-    {
       "id": "bismuth-calcified-crystallite",
       "type": "geometric-transform",
       "concept": "GROWTH vs DECAY: Decaying oxidized geometric steps rapidly regenerating pristine crystal facets along fault lines.",
@@ -6895,6 +6860,75 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-08T20:18:20.943Z",
       "run": "118"
+    },
+    {
+      "id": "neon-smart-contract-agreement-document",
+      "concept": "Staggered sequential stroke drawing of legal clauses followed by an elastic overshoot checkmark stamp that radiates twin gold pulse rings outward.",
+      "topic": "legal, contracts & compliance",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "smart contract agreement document",
+      "stockTitle": "Glowing neon line smart contract agreement document icon animation on black background. Digital legal tech, blockchain signature, compliance concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-09T03:54:51.237Z",
+      "run": "119"
+    },
+    {
+      "id": "neon-compliance-shield-check-icon",
+      "concept": "A sweeping circular reticle anticipates inward with a slight scale contraction before snapping outward into an impenetrable double-stroke perimeter.",
+      "topic": "legal, contracts & compliance",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 7,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "regulatory compliance shield",
+      "stockTitle": "Glowing neon line regulatory compliance shield check icon animation on black background. Data security, audit clearance, and legal safety concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-09T03:54:51.237Z",
+      "run": "119"
+    },
+    {
+      "id": "neon-confidential-document-lock-icon",
+      "concept": "The hovering padlock shackle snaps vertically into the document body with a damped follow-through bounce that sets off progressive neon ripple ripples.",
+      "topic": "legal, contracts & compliance",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "confidential legal document lock",
+      "stockTitle": "Glowing neon line confidential legal document lock icon animation on black background. legal, contracts & compliance concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-09T03:54:51.237Z",
+      "run": "119"
+    },
+    {
+      "id": "neon-legal-contract-magnifier-audit-4k-loop",
+      "concept": "A smooth linear pass of the lens reveals hidden gold clause markers that dynamically morph from thin lines into geometric check indicators under the focal glass.",
+      "topic": "legal, contracts & compliance",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 6,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "legal contract audit magnifier",
+      "stockTitle": "Glowing neon legal contract audit magnifier animation on black background. Clause discovery, risk identification and compliance review concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-09T03:54:51.237Z",
+      "run": "119"
+    },
+    {
+      "id": "neon-global-compliance-network-globe",
+      "concept": "Continuous kinematic multi-axis orbit of latitude rings aligning rhythmically to trigger an equatorial pulse wave that illuminates regional compliance nodes in unison.",
+      "topic": "legal, contracts & compliance",
+      "motion": "breathing rhythm with overlap: each layer lags the previous by a phase offset, creating a soft wave through the object",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "neon line icons with a dim always-visible base, layered glow and pulse rings (kit: neon())",
+      "subject": "global legal compliance globe",
+      "stockTitle": "Glowing neon line global compliance network globe animation on pure black background. International regulatory perimeter, cross border trade legal concept. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-09T03:54:51.237Z",
+      "run": "119"
     }
   ],
   "version": 1
