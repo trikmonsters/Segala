@@ -1,65 +1,6 @@
 {
   "rendered": [
     {
-      "id": "bismuth-calcified-crystallite",
-      "type": "geometric-transform",
-      "concept": "GROWTH vs DECAY: Decaying oxidized geometric steps rapidly regenerating pristine crystal facets along fault lines.",
-      "renderedAt": "2026-10-04T04:21:05.856Z",
-      "run": "16"
-    },
-    {
-      "id": "insurance-policy-protection-shield",
-      "concept": "Concentric interlocking radial gear lock: inner paper-cut rings rotate in opposing directions at 3:1 ratio before mechanical teeth smoothly lock into a solid, reinforced vault shield.",
-      "topic": "insurance & risk",
-      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
-      "ratio": "16:9",
-      "style": "paper-cut layered illustration: stacked filled shapes with soft drop shadows creating real depth, gentle parallax between layers",
-      "subject": "insurance policy protection shield",
-      "stockTitle": "Flat paper cut illustration of insurance shield with interlocking clockwork gear animation. Policy protection and risk security concept. 4K video motion graphic, seamless loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-04T11:01:27.378Z",
-      "run": "17"
-    },
-    {
-      "id": "property-insurance-house-umbrella",
-      "concept": "Dual-axis rack and pinion expansion: paper canopy segments fan out in timed mechanical cascades driven by a foundation gear train.",
-      "topic": "insurance & risk",
-      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
-      "ratio": "16:9",
-      "style": "paper-cut layered illustration: stacked filled shapes with soft drop shadows creating real depth, gentle parallax between layers",
-      "subject": "property insurance house umbrella",
-      "stockTitle": "Paper cut animation of protective umbrella canopy over house with clockwork gears. Home property insurance and casualty coverage concept. 4K motion graphic loop.",
-      "codeMode": "custom",
-      "renderedAt": "2026-10-04T11:01:27.378Z",
-      "run": "17"
-    },
-    {
-      "id": "vehicle-auto-insurance-claim-check",
-      "concept": "Escapement wheel lock-and-stamp: spinning wheel cogs drive a circular diagnostic dial that clicks precisely into position to reveal a verified gold checkmark.",
-      "topic": "insurance & risk",
-      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
-      "ratio": "16:9",
-      "style": "paper-cut layered illustration: stacked filled shapes with soft drop shadows creating real depth, gentle parallax between layers",
-      "subject": "vehicle auto insurance claim check",
-      "stockTitle": "vehicle auto insurance claim check flat vector illustration animation. insurance & risk concept icon. 4K video motion graphic, seamless loop.",
-      "codeMode": "template",
-      "renderedAt": "2026-10-04T11:01:27.378Z",
-      "run": "17"
-    },
-    {
-      "id": "health-insurance-medical-cross-shield",
-      "concept": "Planetary epicyclic gear orbit: small satellite gears rotate around their own axes while orbiting a central paper-cut medical cross, creating a gyroscopic shield.",
-      "topic": "insurance & risk",
-      "motion": "clockwork meshing: interlocking parts rotate with different speeds that re-align exactly at the loop point",
-      "ratio": "16:9",
-      "style": "paper-cut layered illustration: stacked filled shapes with soft drop shadows creating real depth, gentle parallax between layers",
-      "subject": "health insurance medical cross shield",
-      "stockTitle": "health insurance medical cross shield flat vector illustration animation. insurance & risk concept icon. 4K video motion graphic, seamless loop.",
-      "codeMode": "template",
-      "renderedAt": "2026-10-04T11:01:27.378Z",
-      "run": "17"
-    },
-    {
       "id": "risk-assessment-financial-balance-scale",
       "concept": "Differential gear balancing sweep: counter-weighted paper plates tilt in responsive opposition before settling into laser-level equilibrium driven by a central bevel cog.",
       "topic": "insurance & risk",
@@ -6929,6 +6870,74 @@
       "codeMode": "custom",
       "renderedAt": "2026-11-09T03:54:51.237Z",
       "run": "119"
+    },
+    {
+      "id": "isoproptech-valuation-search-magnifier-4k",
+      "concept": "Elastic Morph & Reveal — The roof blocks of an isometric house fluidly melt and stretch via morphPolys into a floating 3D lens that magnifies an ascending bar chart below.",
+      "topic": "real estate & property tech",
+      "motion": "meaningful shape morph: one icon fluidly transforms into the icon of the next idea (morphPolys) and returns",
+      "ratio": "16:9",
+      "artScore": 8,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric property valuation search magnifier",
+      "stockTitle": "Isometric property valuation search magnifier animation on soft pastel background. Real estate market analysis and AI home price estimation concept. 4K video motion graphic.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-10T05:37:39.659Z",
+      "run": "121"
+    },
+    {
+      "id": "isoproptech-smart-lock-keyless-entry",
+      "concept": "Orbital Assembly Stagger — Wall blocks rotate on an axis while morphing into a sleek lock cylinder that snaps shut with a bright accent pulse.",
+      "topic": "real estate & property tech",
+      "motion": "meaningful shape morph: one icon fluidly transforms into the icon of the next idea (morphPolys) and returns",
+      "ratio": "16:9",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric smart keyless lock door",
+      "stockTitle": "Glowing neon line isometric smart keyless lock door icon animation on black background. real estate & property tech concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-10T05:37:39.659Z",
+      "run": "121"
+    },
+    {
+      "id": "isoproptech-digital-mortgage-approval",
+      "concept": "Anticipation Stacking Bounce — Document slabs stack downwards with anticipation easing before morphing into a metallic checkmark coin that stamps the base.",
+      "topic": "real estate & property tech",
+      "motion": "meaningful shape morph: one icon fluidly transforms into the icon of the next idea (morphPolys) and returns",
+      "ratio": "16:9",
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric digital mortgage approval document",
+      "stockTitle": "Glowing neon line isometric digital mortgage approval document icon animation on black background. real estate & property tech concept symbol. 4K video motion graphic, seamless loop.",
+      "codeMode": "template",
+      "renderedAt": "2026-11-10T05:37:39.659Z",
+      "run": "121"
+    },
+    {
+      "id": "isoproptech-cloud-virtual-tour-globe",
+      "concept": "Fluid Vortex Morph — Cloud block layers liquefy into orbiting vector rings that expand into a wireframe property globe before locking back into solid geometry.",
+      "topic": "real estate & property tech",
+      "motion": "meaningful shape morph: one icon fluidly transforms into the icon of the next idea (morphPolys) and returns",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric cloud virtual property tour globe",
+      "stockTitle": "Isometric cloud virtual tour globe animation on soft pastel background. 360-degree property walkthrough concept, digital real estate tech. 4K video motion graphic, seamless loop.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-10T05:37:39.659Z",
+      "run": "121"
+    },
+    {
+      "id": "isometric-property-data-storage-database",
+      "concept": "Synchronized Slide Stagger — Modular building floors slide outward rhythmically, morphing their front panels into protective shield plates with smooth secondary bounce.",
+      "topic": "real estate & property tech",
+      "motion": "meaningful shape morph: one icon fluidly transforms into the icon of the next idea (morphPolys) and returns",
+      "ratio": "16:9",
+      "artScore": 4,
+      "style": "isometric pseudo-3D objects built from shaded blocks with soft contact shadows and satisfying stacking motion (kit: isoBox())",
+      "subject": "isometric property data storage database",
+      "stockTitle": "Isometric property data storage database motion graphic on soft pastel background. Multi-tenant real estate server architecture and cloud housing concept. 4K video animation.",
+      "codeMode": "custom",
+      "renderedAt": "2026-11-10T05:37:39.659Z",
+      "run": "121"
     }
   ],
   "version": 1
