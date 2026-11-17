@@ -1,0 +1,347 @@
+name: Billiard Daily Image Post with Gemini + Duck.ai + Facebook
+
+on:
+  workflow_dispatch:
+    inputs:
+      manual_override_prompt:
+        description: 'Override prompt (kosongkan untuk pakai AI)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 1 * * *'   # 08:00 WIB - pagi
+    - cron: '0 6 * * *'   # 13:00 WIB - siang
+    - cron: '0 12 * * *'  # 19:00 WIB - malam
+
+jobs:
+  generate-and-post:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright requests google-genai pydantic
+          playwright install --with-deps chromium
+
+      - name: Start Fortress via Docker
+        run: |
+          docker run -d --rm -p 9222:9222 --name fortress tilion/fortress:latest
+          echo "Menunggu Fortress siap..."
+          sleep 10
+          curl -s http://localhost:9222/json/version && echo "Fortress siap!"
+
+      - name: Generate Content with Gemini
+        id: gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MANUAL_PROMPT: ${{ github.event.inputs.manual_override_prompt }}
+        run: |
+          cat > gemini_content.py << 'PYEOF'
+          import os, json, re
+          from datetime import datetime, timedelta
+          from google import genai
+          from google.genai import types
+
+          def load_recent_topics(days=7):
+              try:
+                  with open('used_topics.json', 'r') as f:
+                      data = json.load(f)
+                  cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+                  recent = [item['topic'] for item in data if item.get('date', '') > cutoff]
+                  return recent[-10:]
+              except:
+                  return []
+
+          def save_topic(topic):
+              try:
+                  with open('used_topics.json', 'r') as f:
+                      data = json.load(f)
+              except:
+                  data = []
+              data.append({'topic': topic, 'date': datetime.now().isoformat()})
+              cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+              data = [d for d in data if d.get('date', '') > cutoff]
+              with open('used_topics.json', 'w') as f:
+                  json.dump(data, f)
+
+          def main():
+              manual = os.environ.get('MANUAL_PROMPT', '').strip()
+              if manual:
+                  print("Menggunakan prompt manual override.")
+                  result = {
+                      "image_prompt": manual,
+                      "title": "Billiard Moment",
+                      "caption": "Enjoy the game.",
+                      "hashtags": ["#billiards", "#pool"]
+                  }
+                  with open('gemini_result.json', 'w') as f:
+                      json.dump(result, f)
+                  return
+
+              client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
+              today = datetime.now().strftime('%Y-%m-%d')
+              recent_topics = load_recent_topics()
+              recent_str = ', '.join(recent_topics) if recent_topics else 'Belum ada topik sebelumnya.'
+
+              prompt = f"""Kamu adalah content strategist untuk akun Facebook Page billiard/pool.
+                  Hari ini: {today}.
+                  Tugas: Hasilkan konten harian untuk posting gambar billiard yang memiliki nilai SEO tinggi dan solusi bagi audiens.
+
+                  Gunakan Google Search untuk menemukan topik billiard yang sedang hangat, relevan, dan memiliki nilai pencarian tinggi. Fokus pada:
+                  - Tips/trik billiard untuk pemula hingga mahir
+                  - Perawatan meja/stik/aksesoris billiard
+                  - Tren komunitas billiard terkini
+                  - Angle, teknik pukulan, atau strategi permainan
+
+                  Hindari topik berikut yang sudah dipakai 7 hari terakhir: {recent_str}
+                  Jika topik mirip, berikan sudut pandang/momen yang benar-benar berbeda dan lebih baru.
+
+                  Kembalikan JSON dengan field:
+                  1. image_prompt: Deskripsi bahasa Inggris yang sangat detail untuk AI image generator (gaya visual, subjek, latar, pencahayaan, suasana). Harus bisa langsung dipakai generate gambar billiard yang menarik.
+                  2. title: Judul caption Facebook. WAJIB diawali keyword utama (contoh: "Teknik Spin Bola Billiard..."), jelas, menarik, dan mengandung solusi/manfaat.
+                  3. caption: Caption lengkap 2-4 kalimat. Sertakan solusi/tips praktis. Nada hangat dan mengundang interaksi.
+                  4. hashtags: Array 5-10 hashtag relevan, campuran keyword utama dan turunannya (contoh: ["#billiard", "#tipsbilliard", "#teknikspin"]).
+
+                  Pastikan keyword utama SEO muncul di awal title dan di caption.
+                  """
+              schema = {
+                  "type": "OBJECT",
+                  "properties": {
+                      "image_prompt": {"type": "STRING"},
+                      "title": {"type": "STRING"},
+                      "caption": {"type": "STRING"},
+                      "hashtags": {"type": "ARRAY", "items": {"type": "STRING"}}
+                  },
+                  "required": ["image_prompt", "title", "caption", "hashtags"]
+              }
+
+              response = client.models.generate_content(
+                  model='gemini-2.5-flash',
+                  contents=prompt,
+                  config=types.GenerateContentConfig(
+                      response_mime_type='application/json',
+                      response_schema=schema,
+                      tools=[{"google_search": {}}]
+                  )
+              )
+
+              result = json.loads(response.text)
+              with open('gemini_result.json', 'w') as f:
+                  json.dump(result, f)
+              save_topic(result['title'][:50])
+              print("Gemini result:", json.dumps(result, indent=2)[:500])
+
+          if __name__ == '__main__':
+              main()
+          PYEOF
+          python gemini_content.py
+
+      - name: Run Duck.ai Image Generator
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          cat > duckai_image.py << 'PYEOF'
+          import asyncio, os, json, base64, re, requests
+          from datetime import datetime
+          from playwright.async_api import async_playwright
+
+          def slugify(text, max_len=80):
+              text = text.lower().strip()
+              text = re.sub(r'[^\w\s-]', '', text)
+              text = re.sub(r'[\s_-]+', '-', text)
+              text = re.sub(r'^-+|-+$', '', text)
+              return text[:max_len].rstrip('-')
+
+          def unique_filename(base, ext=".png"):
+              filename = f"{base}{ext}"
+              counter = 2
+              while os.path.exists(filename):
+                  filename = f"{base}-{counter}{ext}"
+                  counter += 1
+              return filename
+
+          async def main():
+              with open('gemini_result.json', 'r') as f:
+                  meta = json.load(f)
+              prompt = meta['image_prompt']
+              slug = slugify(meta['title'])
+              image_filename = unique_filename(slug)
+              print(f"Nama file gambar: {image_filename}")
+
+              async with async_playwright() as p:
+                  browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+                  page = await browser.new_page()
+                  print("Membuka Duck.ai...")
+                  await page.goto("https://duck.ai", wait_until="networkidle")
+                  await page.wait_for_timeout(3000)
+
+                  try:
+                      new_image_btn = page.locator('text=New Image')
+                      if await new_image_btn.count() > 0:
+                          await new_image_btn.first.click()
+                          await page.wait_for_timeout(2000)
+                  except Exception as e:
+                      print(f"New Image menu: {e}")
+
+                  selectors = ['textarea[placeholder*="Ask"]', 'textarea[placeholder*="message"]',
+                               'textarea[placeholder*="image"]', 'textarea', 'input[type="text"]']
+                  input_found = False
+                  for sel in selectors:
+                      try:
+                          await page.wait_for_selector(sel, timeout=5000)
+                          await page.fill(sel, prompt)
+                          await page.keyboard.press("Enter")
+                          input_found = True
+                          break
+                      except:
+                          continue
+                  if not input_found:
+                      await page.screenshot(path="debug_no_input.png")
+                      await browser.close()
+                      return
+
+                  await page.wait_for_timeout(2000)
+                  try:
+                      cont = page.locator('button:has-text("Continue")')
+                      if await cont.count() > 0:
+                          await cont.first.click()
+                          await page.wait_for_timeout(3000)
+                  except:
+                      pass
+
+                  print("Menunggu gambar...")
+                  await page.wait_for_timeout(25000)
+
+                  image_saved = False
+                  try:
+                      images = await page.locator('img').all()
+                      for img in images:
+                          src = await img.get_attribute('src')
+                          if src and ('data:image' in src or 'blob:' in src):
+                              w = await img.evaluate('el => el.naturalWidth')
+                              h = await img.evaluate('el => el.naturalHeight')
+                              if w > 200 and h > 200:
+                                  if 'data:image' in src:
+                                      b64 = src.split(',')[1]
+                                      with open(image_filename, 'wb') as f:
+                                          f.write(base64.b64decode(b64))
+                                  else:
+                                      await img.screenshot(path=image_filename)
+                                  image_saved = True
+                                  print(f"Gambar disimpan: {image_filename}")
+                                  break
+                  except Exception as e:
+                      print(f"Error cari gambar: {e}")
+
+                  if not image_saved:
+                      await page.screenshot(path=image_filename, full_page=True)
+                      print("Fallback screenshot full page.")
+
+                  await page.screenshot(path="debug_full_page.png", full_page=True)
+                  await browser.close()
+
+              if image_saved and os.path.exists(image_filename):
+                  github_token = os.environ.get("GITHUB_TOKEN")
+                  repo = os.environ.get("GITHUB_REPOSITORY")
+                  tag_name = f"{slug}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                  headers = {"Authorization": f"token {github_token}", "Accept": "application/vnd.github.v3+json"}
+                  check = requests.get(f"https://api.github.com/repos/{repo}/releases/tags/{tag_name}", headers=headers)
+                  if check.status_code == 200:
+                      rid = check.json()["id"]
+                      requests.delete(f"https://api.github.com/repos/{repo}/releases/{rid}", headers=headers)
+                  release_data = {
+                      "tag_name": tag_name,
+                      "name": f"Billiard - {meta['title'][:80]}",
+                      "body": f"Prompt: {prompt[:200]}",
+                      "draft": False
+                  }
+                  resp = requests.post(f"https://api.github.com/repos/{repo}/releases", headers=headers, json=release_data)
+                  if resp.status_code == 201:
+                      upload_url = resp.json()["upload_url"].replace("{?name,label}", "")
+                      with open(image_filename, 'rb') as f:
+                          requests.post(f"{upload_url}?name={image_filename}",
+                                        headers={"Authorization": f"token {github_token}", "Content-Type": "image/png"},
+                                        data=f)
+                  print("GitHub Release selesai.")
+
+                  with open('image_path.txt', 'w') as f:
+                      f.write(image_filename)
+
+          if __name__ == "__main__":
+              asyncio.run(main())
+          PYEOF
+          python duckai_image.py
+
+      - name: Post to Facebook Page
+        env:
+          FB_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+        run: |
+          cat > post_facebook.py << 'PYEOF'
+          import json, os, requests
+
+          FB_PAGE_ID = "1347514741786031"
+
+          with open('gemini_result.json', 'r') as f:
+              meta = json.load(f)
+          with open('image_path.txt', 'r') as f:
+              image_path = f.read().strip()
+
+          message = meta['title'] + "\n\n" + meta['caption'] + "\n\n" + " ".join(meta['hashtags'])
+
+          token = os.environ['FB_TOKEN']
+          url = f"https://graph.facebook.com/v21.0/{FB_PAGE_ID}/photos"
+          with open(image_path, 'rb') as img:
+              resp = requests.post(
+                  url,
+                  data={
+                      "access_token": token,
+                      "message": message,
+                      "published": "true"
+                  },
+                  files={"source": img}
+              )
+
+          print("Status:", resp.status_code)
+          print("Response:", resp.text[:500])
+          if resp.status_code == 200:
+              data = resp.json()
+              print(f"✅ Berhasil posting! Post ID: {data.get('post_id', data.get('id'))}")
+          else:
+              print("❌ Gagal posting.")
+          PYEOF
+          python post_facebook.py
+
+      - name: Upload debug artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-screenshots
+          path: |
+            debug_no_input.png
+            debug_full_page.png
+            *.png
+            gemini_result.json
+          retention-days: 3
+
+      - name: Commit used_topics.json
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add used_topics.json || true
+          git commit -m "chore: update used topics [skip ci]" || true
+          git push || true
+
+      - name: Stop Fortress
+        if: always()
+        run: docker stop fortress || true
