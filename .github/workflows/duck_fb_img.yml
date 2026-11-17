@@ -43,13 +43,15 @@ jobs:
         id: gemini
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           MANUAL_PROMPT: ${{ github.event.inputs.manual_override_prompt }}
         run: |
           cat > gemini_content.py << 'PYEOF'
-          import os, json, re
+          import os, json, re, time
           from datetime import datetime, timedelta
           from google import genai
           from google.genai import types
+          from google.genai.errors import ServerError, ClientError
 
           def load_recent_topics(days=7):
               try:
@@ -73,6 +75,41 @@ jobs:
               with open('used_topics.json', 'w') as f:
                   json.dump(data, f)
 
+          def generate_with_retry(api_keys, prompt, schema):
+              last_err = None
+              for attempt, key in enumerate(api_keys, start=1):
+                  if not key:
+                      print(f"Key #{attempt} kosong, lewati.")
+                      continue
+                  for retry in range(3):
+                      try:
+                          print(f"Mencoba Key #{attempt}, percobaan {retry+1}...")
+                          client = genai.Client(api_key=key)
+                          response = client.models.generate_content(
+                              model='gemini-3.8-flash',
+                              contents=prompt,
+                              config=types.GenerateContentConfig(
+                                  response_mime_type='application/json',
+                                  response_schema=schema
+                              )
+                          )
+                          return response
+                      except ServerError as e:
+                          # 503 UNAVAILABLE: coba lagi dengan jeda, lalu pindah key
+                          print(f"ServerError: {e}")
+                          last_err = e
+                          time.sleep(5 * (retry + 1))
+                      except ClientError as e:
+                          # 404 / 400: model tidak tersedia atau key tidak valid
+                          print(f"ClientError: {e}")
+                          last_err = e
+                          break  # langsung pindah key
+                      except Exception as e:
+                          print(f"Error lain: {e}")
+                          last_err = e
+                          break
+              raise last_err if last_err else RuntimeError("Semua key gagal.")
+
           def main():
               manual = os.environ.get('MANUAL_PROMPT', '').strip()
               if manual:
@@ -87,7 +124,11 @@ jobs:
                       json.dump(result, f)
                   return
 
-              client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
+              api_keys = [
+                  os.environ.get('GEMINI_API_KEY'),
+                  os.environ.get('GEMINI_API_KEY_2')
+              ]
+
               today = datetime.now().strftime('%Y-%m-%d')
               recent_topics = load_recent_topics()
               recent_str = ', '.join(recent_topics) if recent_topics else 'Belum ada topik sebelumnya.'
@@ -124,14 +165,7 @@ jobs:
                   "required": ["image_prompt", "title", "caption", "hashtags"]
               }
 
-              response = client.models.generate_content(
-                  model='gemini-3.8-flash',
-                  contents=prompt,
-                  config=types.GenerateContentConfig(
-                      response_mime_type='application/json',
-                      response_schema=schema
-                  )
-              )
+              response = generate_with_retry(api_keys, prompt, schema)
 
               result = json.loads(response.text)
               with open('gemini_result.json', 'w') as f:
