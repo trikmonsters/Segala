@@ -96,7 +96,7 @@ jobs:
                   Hari ini: {today}.
                   Tugas: Hasilkan konten harian untuk posting gambar billiard yang memiliki nilai SEO tinggi dan solusi bagi audiens.
 
-                  Gunakan Google Search untuk menemukan topik billiard yang sedang hangat, relevan, dan memiliki nilai pencarian tinggi. Fokus pada:
+                  Fokus pada topik billiard yang relevan dan memiliki nilai pencarian tinggi:
                   - Tips/trik billiard untuk pemula hingga mahir
                   - Perawatan meja/stik/aksesoris billiard
                   - Tren komunitas billiard terkini
@@ -129,8 +129,7 @@ jobs:
                   contents=prompt,
                   config=types.GenerateContentConfig(
                       response_mime_type='application/json',
-                      response_schema=schema,
-                      tools=[{"google_search": {}}]
+                      response_schema=schema
                   )
               )
 
