@@ -34,7 +34,8 @@ jobs:
 
       - name: Start Fortress via Docker
         run: |
-          docker run -d --rm -p 9222:9222 --name fortress tilion/fortress:latest
+          docker run -d --rm -p 9222:9222 --shm-size=2gb --name fortress \
+            tilion/fortress:latest --disable-dev-shm-usage
           echo "Menunggu Fortress siap..."
           sleep 10
           curl -s http://localhost:9222/json/version && echo "Fortress siap!"
@@ -77,38 +78,36 @@ jobs:
 
           def generate_with_retry(api_keys, prompt, schema):
               last_err = None
-              for attempt, key in enumerate(api_keys, start=1):
+              for key in api_keys:
                   if not key:
-                      print(f"Key #{attempt} kosong, lewati.")
                       continue
-                  for retry in range(3):
+                  for attempt in range(5):
                       try:
-                          print(f"Mencoba Key #{attempt}, percobaan {retry+1}...")
+                          print(f"Percobaan {attempt+1}/5...")
                           client = genai.Client(api_key=key)
-                          response = client.models.generate_content(
-                              model='gemini-4-hydrogen',
+                          return client.models.generate_content(
+                              model='gemini-3.8-flash',
                               contents=prompt,
                               config=types.GenerateContentConfig(
                                   response_mime_type='application/json',
                                   response_schema=schema
                               )
                           )
-                          return response
                       except ServerError as e:
-                          # 503 UNAVAILABLE: coba lagi dengan jeda, lalu pindah key
-                          print(f"ServerError: {e}")
+                          # 503: model sibuk, retry dengan exponential backoff
                           last_err = e
-                          time.sleep(5 * (retry + 1))
+                          wait = 2 ** (attempt + 1)  # 2,4,8,16,32
+                          print(f"503 sibuk, retry dalam {wait}s...")
+                          time.sleep(wait)
                       except ClientError as e:
-                          # 404 / 400: model tidak tersedia atau key tidak valid
-                          print(f"ClientError: {e}")
-                          last_err = e
-                          break  # langsung pindah key
-                      except Exception as e:
-                          print(f"Error lain: {e}")
+                          # 403/404: error permanen, langsung ganti key
+                          print(f"ClientError (tidak retry): {e}")
                           last_err = e
                           break
-              raise last_err if last_err else RuntimeError("Semua key gagal.")
+                      except Exception as e:
+                          last_err = e
+                          break
+              raise last_err if last_err else RuntimeError("Semua key dan retry gagal")
 
           def main():
               manual = os.environ.get('MANUAL_PROMPT', '').strip()
@@ -125,10 +124,9 @@ jobs:
                   return
 
               api_keys = [
-              
+                  os.environ.get('GEMINI_API_KEY'),
                   os.environ.get('GEMINI_API_KEY_2')
               ]
-
               today = datetime.now().strftime('%Y-%m-%d')
               recent_topics = load_recent_topics()
               recent_str = ', '.join(recent_topics) if recent_topics else 'Belum ada topik sebelumnya.'
@@ -166,7 +164,6 @@ jobs:
               }
 
               response = generate_with_retry(api_keys, prompt, schema)
-
               result = json.loads(response.text)
               with open('gemini_result.json', 'w') as f:
                   json.dump(result, f)
@@ -203,18 +200,9 @@ jobs:
                   counter += 1
               return filename
 
-          async def main():
-              with open('gemini_result.json', 'r') as f:
-                  meta = json.load(f)
-              prompt = meta['image_prompt']
-              slug = slugify(meta['title'])
-              image_filename = unique_filename(slug)
-              print(f"Nama file gambar: {image_filename}")
-
-              async with async_playwright() as p:
-                  browser = await p.chromium.connect_over_cdp("http://localhost:9222")
-                  page = await browser.new_page()
-                  print("Membuka Duck.ai...")
+          async def try_generate(page, prompt, image_filename):
+              """Coba generate gambar di halaman yang sudah ada. Return True jika sukses."""
+              try:
                   await page.goto("https://duck.ai", wait_until="networkidle")
                   await page.wait_for_timeout(3000)
 
@@ -240,8 +228,7 @@ jobs:
                           continue
                   if not input_found:
                       await page.screenshot(path="debug_no_input.png")
-                      await browser.close()
-                      return
+                      return False
 
                   await page.wait_for_timeout(2000)
                   try:
@@ -255,7 +242,6 @@ jobs:
                   print("Menunggu gambar...")
                   await page.wait_for_timeout(25000)
 
-                  image_saved = False
                   try:
                       images = await page.locator('img').all()
                       for img in images:
@@ -270,17 +256,53 @@ jobs:
                                           f.write(base64.b64decode(b64))
                                   else:
                                       await img.screenshot(path=image_filename)
-                                  image_saved = True
                                   print(f"Gambar disimpan: {image_filename}")
-                                  break
+                                  return True
                   except Exception as e:
                       print(f"Error cari gambar: {e}")
 
-                  if not image_saved:
-                      await page.screenshot(path=image_filename, full_page=True)
-                      print("Fallback screenshot full page.")
+                  # Fallback screenshot
+                  await page.screenshot(path=image_filename, full_page=True)
+                  print("Fallback screenshot full page.")
+                  return True
+              except Exception as e:
+                  print(f"try_generate error: {e}")
+                  return False
 
-                  await page.screenshot(path="debug_full_page.png", full_page=True)
+          async def main():
+              with open('gemini_result.json', 'r') as f:
+                  meta = json.load(f)
+              prompt = meta['image_prompt']
+              slug = slugify(meta['title'])
+              image_filename = unique_filename(slug)
+              print(f"Nama file gambar: {image_filename}")
+
+              image_saved = False
+              async with async_playwright() as p:
+                  browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+
+                  # Percobaan 1
+                  page = await browser.new_page()
+                  try:
+                      image_saved = await try_generate(page, prompt, image_filename)
+                  except Exception as e:
+                      print(f"Percobaan 1 gagal: {e}")
+                  finally:
+                      try:
+                          await page.close()
+                      except:
+                          pass
+
+                  # Percobaan 2: jika crash/gagal, buat halaman baru dan coba lagi
+                  if not image_saved:
+                      print("Percobaan 1 gagal, mencoba halaman baru...")
+                      try:
+                          page2 = await browser.new_page()
+                          image_saved = await try_generate(page2, prompt, image_filename)
+                          await page2.close()
+                      except Exception as e:
+                          print(f"Percobaan 2 gagal: {e}")
+
                   await browser.close()
 
               if image_saved and os.path.exists(image_filename):
