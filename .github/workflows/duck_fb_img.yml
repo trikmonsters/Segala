@@ -10,7 +10,7 @@ on:
       upload_facebook:
         description: 'Upload video ke Facebook Reels? (true/false)'
         required: false
-        default: 'false'
+        default: 'true'
   schedule:
     - cron: '0 1 * * *'   # 08:00 WIB - pagi
     - cron: '0 6 * * *'   # 13:00 WIB - siang
@@ -393,7 +393,7 @@ jobs:
 
   # ============================================================
   # JOB TAMBAHAN: Upload Video ke Facebook Reels (opsional)
-  # Metadata diambil otomatis dari artifact gemini-metadata
+  # ID Page hardcoded, token dari secret, metadata dari Gemini
   # ============================================================
   upload-facebook-reels:
     needs: generate-and-post
@@ -515,7 +515,6 @@ jobs:
 
       - name: Upload to Facebook Reels
         env:
-          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
           set -e
@@ -526,7 +525,10 @@ jobs:
           fi
           echo "Video ditemukan: $VIDEO_FILE"
 
-          # Baca metadata dari Gemini secara otomatis
+          # ID Page di-hardcode, hanya token dari secret
+          FB_PAGE_ID="1347514741786031"
+
+          # Metadata otomatis dari Gemini
           TITLE=$(python3 -c "import json; print(json.load(open('metadata/gemini_result.json'))['title'])")
           CAPTION=$(python3 -c "import json; print(json.load(open('metadata/gemini_result.json'))['caption'])")
           HASHTAGS=$(python3 -c "import json; print(' '.join(json.load(open('metadata/gemini_result.json'))['hashtags']))")
