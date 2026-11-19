@@ -1,10 +1,10 @@
-name: Burn Subtitle into Video
+name: Burn/Gabungkan Subtitle into Video
 
 on:
   workflow_dispatch:
 
 jobs:
-  burn-subtitle:
+  burn-masuk-subtitle:
     runs-on: ubuntu-latest
 
     steps:
