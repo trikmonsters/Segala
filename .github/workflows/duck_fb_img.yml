@@ -11,14 +11,6 @@ on:
         description: 'Upload video ke Facebook Reels? (true/false)'
         required: false
         default: 'false'
-      post_title:
-        description: 'Judul Reel (jika upload_facebook=true)'
-        required: false
-        default: 'Billiard Tips'
-      post_description:
-        description: 'Deskripsi Reel'
-        required: false
-        default: ''
   schedule:
     - cron: '0 1 * * *'   # 08:00 WIB - pagi
     - cron: '0 6 * * *'   # 13:00 WIB - siang
@@ -366,6 +358,15 @@ jobs:
           PYEOF
           python post_facebook.py
 
+      # Simpan metadata agar bisa dipakai job Reels
+      - name: Upload metadata artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gemini-metadata
+          path: gemini_result.json
+          retention-days: 3
+
       - name: Upload debug artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -375,7 +376,6 @@ jobs:
             debug_no_input.png
             debug_full_page.png
             *.png
-            gemini_result.json
           retention-days: 3
 
       - name: Commit used_topics.json
@@ -393,6 +393,7 @@ jobs:
 
   # ============================================================
   # JOB TAMBAHAN: Upload Video ke Facebook Reels (opsional)
+  # Metadata diambil otomatis dari artifact gemini-metadata
   # ============================================================
   upload-facebook-reels:
     needs: generate-and-post
@@ -415,6 +416,12 @@ jobs:
         with:
           name: rendered-video
           path: media
+
+      - name: Download Metadata Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gemini-metadata
+          path: metadata
 
       - name: Write upload_facebook.py
         run: |
@@ -508,8 +515,6 @@ jobs:
 
       - name: Upload to Facebook Reels
         env:
-          INPUT_TITLE: ${{ github.event.inputs.post_title }}
-          INPUT_DESC: ${{ github.event.inputs.post_description }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
@@ -520,9 +525,19 @@ jobs:
             exit 1
           fi
           echo "Video ditemukan: $VIDEO_FILE"
+
+          # Baca metadata dari Gemini secara otomatis
+          TITLE=$(python3 -c "import json; print(json.load(open('metadata/gemini_result.json'))['title'])")
+          CAPTION=$(python3 -c "import json; print(json.load(open('metadata/gemini_result.json'))['caption'])")
+          HASHTAGS=$(python3 -c "import json; print(' '.join(json.load(open('metadata/gemini_result.json'))['hashtags']))")
+          DESCRIPTION="$CAPTION\n\n$HASHTAGS"
+
+          echo "Title: $TITLE"
+          echo "Description: $DESCRIPTION"
+
           python3 upload_facebook.py \
             --file "$VIDEO_FILE" \
             --page-id "$FB_PAGE_ID" \
             --access-token "$FB_TOKEN" \
-            --title "$INPUT_TITLE" \
-            --description "$INPUT_DESC"
+            --title "$TITLE" \
+            --description "$DESCRIPTION"
