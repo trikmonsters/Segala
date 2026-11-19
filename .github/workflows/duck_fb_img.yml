@@ -1,4 +1,4 @@
-name: Billiard Daily Image Post + Optional Reels Upload
+name: Billiard Daily Image Post
 
 on:
   workflow_dispatch:
@@ -7,10 +7,6 @@ on:
         description: 'Override prompt (kosongkan untuk pakai AI)'
         required: false
         default: ''
-      upload_facebook:
-        description: 'Upload video ke Facebook Reels? (true/false)'
-        required: false
-        default: 'true'
   schedule:
     - cron: '0 1 * * *'   # 08:00 WIB - pagi
     - cron: '0 6 * * *'   # 13:00 WIB - siang
@@ -19,6 +15,7 @@ on:
 jobs:
   generate-and-post:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
 
@@ -85,9 +82,8 @@ jobs:
               for key in api_keys:
                   if not key:
                       continue
-                  for attempt in range(5):
+                  for attempt in range(3):
                       try:
-                          print(f"Percobaan {attempt+1}/5...")
                           client = genai.Client(api_key=key)
                           return client.models.generate_content(
                               model='gemini-3.8-flash',
@@ -103,18 +99,16 @@ jobs:
                           print(f"503 sibuk, retry dalam {wait}s...")
                           time.sleep(wait)
                       except ClientError as e:
-                          print(f"ClientError (tidak retry): {e}")
-                          last_err = e
-                          break
+                          print(f"ClientError fatal: {e}")
+                          raise e
                       except Exception as e:
-                          last_err = e
-                          break
+                          print(f"Error fatal: {e}")
+                          raise e
               raise last_err if last_err else RuntimeError("Semua key dan retry gagal")
 
           def main():
               manual = os.environ.get('MANUAL_PROMPT', '').strip()
               if manual:
-                  print("Menggunakan prompt manual override.")
                   result = {
                       "image_prompt": manual,
                       "title": "Billiard Moment",
@@ -358,15 +352,6 @@ jobs:
           PYEOF
           python post_facebook.py
 
-      # Simpan metadata agar bisa dipakai job Reels
-      - name: Upload metadata artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gemini-metadata
-          path: gemini_result.json
-          retention-days: 3
-
       - name: Upload debug artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -390,156 +375,3 @@ jobs:
       - name: Stop Fortress
         if: always()
         run: docker stop fortress || true
-
-  # ============================================================
-  # JOB TAMBAHAN: Upload Video ke Facebook Reels (opsional)
-  # ID Page hardcoded, token dari secret, metadata dari Gemini
-  # ============================================================
-  upload-facebook-reels:
-    needs: generate-and-post
-    if: ${{ github.event.inputs.upload_facebook == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Requests
-        run: pip install requests
-
-      - name: Download Rendered Video Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: rendered-video
-          path: media
-
-      - name: Download Metadata Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: gemini-metadata
-          path: metadata
-
-      - name: Write upload_facebook.py
-        run: |
-          cat > upload_facebook.py << 'PYEOF'
-          #!/usr/bin/env python3
-          import os, sys, json, argparse, requests
-
-          GRAPH_API_VERSION = "v19.0"
-          GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
-
-          def init_upload_session(page_id, access_token, file_size, title):
-              print("📋 Inisialisasi Facebook upload session...")
-              url = f"{GRAPH_BASE}/{page_id}/video_reels"
-              payload = {"upload_phase": "start", "access_token": access_token}
-              resp = requests.post(url, data=payload)
-              data = resp.json()
-              if "error" in data:
-                  print(f"❌ Gagal init session: {data['error'].get('message', data)}")
-                  sys.exit(1)
-              print(f"✅ Session OK — Video ID: {data.get('video_id')}")
-              return {"video_id": data.get("video_id"), "upload_url": data.get("upload_url")}
-
-          def upload_video_binary(upload_url, file_path, access_token):
-              file_size = os.path.getsize(file_path)
-              print(f"📤 Uploading ({file_size / (1024*1024):.1f} MB)...")
-              with open(file_path, "rb") as f:
-                  headers = {"Authorization": f"OAuth {access_token}", "offset": "0", "file_size": str(file_size)}
-                  resp = requests.post(upload_url, headers=headers, data=f)
-              if resp.status_code not in [200, 201]:
-                  print(f"❌ Upload binary gagal: {resp.status_code} — {resp.text[:300]}")
-                  sys.exit(1)
-              print("✅ Binary upload berhasil!")
-              return True
-
-          def publish_reel(page_id, access_token, video_id, title, description):
-              print("📢 Publishing sebagai Facebook Reel...")
-              url = f"{GRAPH_BASE}/{page_id}/video_reels"
-              payload = {
-                  "video_id": video_id, "upload_phase": "finish", "access_token": access_token,
-                  "video_state": "PUBLISHED", "description": description, "title": title[:255],
-              }
-              resp = requests.post(url, data=payload)
-              data = resp.json()
-              if "error" in data:
-                  print(f"❌ Publish gagal: {data['error'].get('message', data)}")
-                  sys.exit(1)
-              reel_url = f"https://www.facebook.com/reel/{video_id}"
-              print(f"✅ Facebook Reel published! URL: {reel_url}")
-              return {"platform": "facebook", "video_id": video_id, "url": reel_url}
-
-          def main():
-              parser = argparse.ArgumentParser()
-              parser.add_argument("--file", required=True)
-              parser.add_argument("--page-id", required=True)
-              parser.add_argument("--access-token", required=True)
-              parser.add_argument("--title", required=True)
-              parser.add_argument("--description", default="")
-              args = parser.parse_args()
-
-              if not os.path.exists(args.file):
-                  print(f"❌ File tidak ditemukan: {args.file}")
-                  sys.exit(1)
-              if not args.access_token or not args.access_token.strip():
-                  print("❌ Facebook access token kosong!")
-                  sys.exit(1)
-              if not args.page_id or not args.page_id.strip():
-                  print("❌ Facebook page ID kosong!")
-                  sys.exit(1)
-
-              session = init_upload_session(args.page_id, args.access_token, os.path.getsize(args.file), args.title)
-              upload_video_binary(session["upload_url"], args.file, args.access_token)
-              result = publish_reel(args.page_id, args.access_token, session["video_id"], args.title, args.description)
-
-              results = []
-              if os.path.exists("upload_results.json"):
-                  with open("upload_results.json") as f:
-                      results = json.load(f)
-              results.append(result)
-              with open("upload_results.json", "w") as f:
-                  json.dump(results, f, indent=2)
-
-              github_output = os.environ.get("GITHUB_OUTPUT", "")
-              if github_output:
-                  with open(github_output, "a") as f:
-                      f.write(f"facebook_url={result['url']}\n")
-                      f.write(f"facebook_video_id={result['video_id']}\n")
-
-          if __name__ == "__main__":
-              main()
-          PYEOF
-
-      - name: Upload to Facebook Reels
-        env:
-          FB_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-        run: |
-          set -e
-          VIDEO_FILE=$(find media -type f \( -name "*.mp4" -o -name "*.mov" \) | head -n 1)
-          if [ -z "$VIDEO_FILE" ]; then
-            echo "❌ Tidak ada file video di artifact media/"
-            exit 1
-          fi
-          echo "Video ditemukan: $VIDEO_FILE"
-
-          # ID Page di-hardcode, hanya token dari secret
-          FB_PAGE_ID="1347514741786031"
-
-          # Metadata otomatis dari Gemini
-          TITLE=$(python3 -c "import json; print(json.load(open('metadata/gemini_result.json'))['title'])")
-          CAPTION=$(python3 -c "import json; print(json.load(open('metadata/gemini_result.json'))['caption'])")
-          HASHTAGS=$(python3 -c "import json; print(' '.join(json.load(open('metadata/gemini_result.json'))['hashtags']))")
-          DESCRIPTION="$CAPTION\n\n$HASHTAGS"
-
-          echo "Title: $TITLE"
-          echo "Description: $DESCRIPTION"
-
-          python3 upload_facebook.py \
-            --file "$VIDEO_FILE" \
-            --page-id "$FB_PAGE_ID" \
-            --access-token "$FB_TOKEN" \
-            --title "$TITLE" \
-            --description "$DESCRIPTION"
