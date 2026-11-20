@@ -146,7 +146,7 @@ jobs:
                   3. caption: Caption lengkap 2-4 kalimat. Sertakan solusi/tips praktis. Nada hangat dan mengundang interaksi.
                   4. hashtags: Array 5-10 hashtag relevan, campuran keyword utama dan turunannya (contoh: ["#billiard", "#tipsbilliard", "#teknikspin"]).
 
-                  Pastikan keyword utama SEO muncul di awal title dan di caption.
+                  Pastikan keyword utama SEO muncul di awal title dan di caption. Gunakan Bahasa Inggris Target USA
                   """
               schema = {
                   "type": "OBJECT",
