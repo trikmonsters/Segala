@@ -1,4 +1,4 @@
-name: reel-ai-sosmed
+aname: reel-ai-sosmed
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +19,7 @@ jobs:
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg chromium-browser || sudo apt-get install -y ffmpeg chromium
 
       - name: Write project (self-contained)
         run: |
@@ -33,7 +33,6 @@ jobs:
            "version": "1.0.0",
            "private": true,
            "dependencies": {
-            "@react-three/drei": "^9.114.3",
             "@react-three/fiber": "^8.17.10",
             "@remotion/bundler": "^4.0.250",
             "@remotion/cli": "^4.0.250",
@@ -410,7 +409,7 @@ jobs:
             return (
               <>
                 <ambientLight intensity={.35} color="#9a8ab0" />
-                <directionalLight position={[3,5,4]} intensity={1.2} color={P.l1} castShadow shadow-mapSize={[1024,1024]} />
+                <directionalLight position={[3,5,4]} intensity={1.2} color={P.l1} castShadow shadow-mapSize={[512,512]} />
                 <pointLight position={[-2,2.5,3]} intensity={.8} color={P.l2} distance={8} />
                 <pointLight position={[2,2,1.5]} intensity={.5} color={P.accent} distance={6} />
               </>
@@ -690,18 +689,29 @@ jobs:
           #!/bin/sh
           set -e
           OUT="${1:-final.mp4}"
-          FRAMES=$(node -e "const fs=require('fs');const t=fs.readFileSync('src/timeline.ts','utf8');const ds=[...t.matchAll(/d:\s*([\d.]+)/g)].map(m=>parseFloat(m[1]));console.log(Math.ceil((ds.reduce((a,b)=>a+b,0)||24)*30))")
+          FRAMES=$(node -e "const fs=require('fs');const t=fs.readFileSync('src/shots.tsx','utf8');const ds=[...t.matchAll(/d:\s*([\d.]+)/g)].map(m=>parseFloat(m[1]));console.log(Math.ceil((ds.reduce((a,b)=>a+b,0)||24)*30))")
+          echo "FRAMES=$FRAMES"
           CHR="${CHROME:-$(ls /opt/pw-browsers/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
-          mkdir -p chunks out; s=0; i=0
+          echo "CHROME=$CHR"
+          mkdir -p chunks out; s=0; i=0; FAIL=0
           while [ $s -lt $FRAMES ]; do
             e=$((s+50)); [ $e -ge $FRAMES ] && e=$((FRAMES-1)); f=chunks/c_$(printf %03d $i).mp4
             if [ ! -f $f ]; then
-              npx remotion render src/index.ts Reel chunks/tmp_$i.mp4 --frames=$s-$e --muted \
-                ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=${CONC:-1} \
-                --codec=h264 --crf=17 --log=error > chunks/log_$i.txt 2>&1 && mv chunks/tmp_$i.mp4 $f
+              echo "=== render chunk $i frames $s-$e ==="
+              if npx remotion render src/index.ts Reel chunks/tmp_$i.mp4 --frames=$s-$e --muted \
+                  ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=${CONC:-1} \
+                  --codec=h264 --crf=17 --log=info > chunks/log_$i.txt 2>&1; then
+                mv chunks/tmp_$i.mp4 $f
+              else
+                echo "RENDER GAGAL chunk $i. Log:"; cat chunks/log_$i.txt; FAIL=1; break
+              fi
             fi
             i=$((i+1)); s=$((e+1))
           done
+          if [ $FAIL -ne 0 ]; then echo "Berhenti karena render gagal"; exit 1; fi
+          COUNT=$(ls chunks/c_*.mp4 2>/dev/null | wc -l)
+          echo "chunks berhasil: $COUNT"
+          if [ "$COUNT" -eq 0 ]; then echo "Tidak ada chunk yang dirender"; exit 1; fi
           ls chunks/c_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
           ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy "out/$OUT"
           echo "SELESAI (tanpa audio): out/$OUT"
@@ -715,20 +725,20 @@ jobs:
         run: |
           set -e
           npm install --no-audit --no-fund
+          npm ls @react-three/fiber three remotion @remotion/three || true
 
-      - name: Verify tree
+      - name: Smoke test 1 frame
+        env:
+          GL: 'swangle'
         run: |
           set -e
-          pwd
-          ls -la
-          test -f scripts/render.sh
-          test -f src/shots.tsx
-          test -f src/lib/Character.tsx
-          node -e "require('fs').accessSync('scripts/render.sh')"
+          npx remotion still src/index.ts Reel out/test.png --frame=10 \
+            --gl=swangle --concurrency=1 --log=info || { echo "SMOKE TEST GAGAL"; exit 1; }
+          ls -l out/test.png
 
-      - name: Render (tanpa audio)
+      - name: Render (tanpa audio, single-thread)
         env:
-          CONC: '2'
+          CONC: '1'
           GL: 'swangle'
         run: |
           set -e
@@ -738,5 +748,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: reel-ai-sosmed
-          path: out/ai_sosmed.mp4
+          path: |
+            out/ai_sosmed.mp4
+            out/test.png
           retention-days: 7
