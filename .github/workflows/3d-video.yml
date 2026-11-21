@@ -7,7 +7,7 @@ on:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -15,12 +15,17 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Write project files
+      - name: Install system deps
         run: |
-          mkdir -p src/lib src/lang scripts references public out chunks
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Write project (self-contained)
+        run: |
+          set -e
+          rm -rf src scripts public out chunks
+          mkdir -p src/lib scripts public out chunks
 
           cat > package.json <<'EOF'
           {
@@ -96,9 +101,7 @@ jobs:
           export const Root: React.FC = () => <Composition id="Reel" component={Reel}
             durationInFrames={Math.max(30, Math.ceil(TOTAL_S * 30))} fps={30} width={1080} height={1920} />;
           EOF
-      
-      - name: Write Reel (tanpa Caption)
-        run: |
+
           cat > src/Reel.tsx <<'EOF'
           import React, {useLayoutEffect} from 'react';
           import * as THREE from 'three';
@@ -177,9 +180,7 @@ jobs:
           });
           export const TOTAL_S = cursor;
           EOF
-      
-      - name: Write lib core (disederhanakan)
-        run: |
+
           cat > src/lib/core.tsx <<'EOF'
           import * as THREE from 'three';
           export type V3 = [number, number, number];
@@ -207,11 +208,9 @@ jobs:
           export const INK = '#1a1424';
           export {THREE};
           EOF
-      
-      - name: Write karakter + set
-        run: |
+
           cat > src/lib/Character.tsx <<'EOF'
-          import React, {useMemo} from 'react';
+          import React from 'react';
           import * as THREE from 'three';
           import {MAT, V3} from './core';
 
@@ -371,8 +370,8 @@ jobs:
                       <sphereGeometry args={[D.headR*1.06, 24, 16, 0, Math.PI*2, 0, Math.PI*.62]} /></mesh>}
                     {hair === 'bun' && <mesh position={[0, D.headR*.55, -D.headR*.85]} material={MAT(hc,{roughness:.85})}><sphereGeometry args={[D.headR*.4,16,12]} /></mesh>}
                   </group>
-                  <Bone a={sL} b={aL.E} r={D.rA1 ?? .047} c={top} /><Ball p={aL.E} r={(D.rA1 ?? .047)*.95} c={top} /><Bone a={aL.E} b={aL.W} r={D.rA2 ?? .038} c={top} /><Ball p={aL.W} r={D.hand} c={skin} />
-                  <Bone a={sR} b={aR.E} r={D.rA1 ?? .047} c={top} /><Ball p={aR.E} r={(D.rA1 ?? .047)*.95} c={top} /><Bone a={aR.E} b={aR.W} r={D.rA2 ?? .038} c={top} /><Ball p={aR.W} r={D.hand} c={skin} />
+                  <Bone a={sL} b={aL.E} r={.047} c={top} /><Ball p={aL.E} r={.045} c={top} /><Bone a={aL.E} b={aL.W} r={.038} c={top} /><Ball p={aL.W} r={D.hand} c={skin} />
+                  <Bone a={sR} b={aR.E} r={.047} c={top} /><Ball p={aR.E} r={.045} c={top} /><Bone a={aR.E} b={aR.W} r={.038} c={top} /><Ball p={aR.W} r={D.hand} c={skin} />
                   {p.prop === 'phone' && aR.W && <mesh position={[aR.W.x, aR.W.y+.02, aR.W.z+.02]} rotation={[.2,0,0]} material={MAT('#1a1a22', {roughness:.2, metalness:.5})}>
                     <boxGeometry args={[.07,.14,.012]} /></mesh>}
                 </group>
@@ -511,9 +510,23 @@ jobs:
             );
           };
           EOF
-      
-      - name: Write storyboard AI sosmed
-        run: |
+
+          cat > src/lib/tex.ts <<'EOF'
+          export {};
+          EOF
+          cat > src/lib/art.ts <<'EOF'
+          export const ART_ASPECT = (_k: string) => 0.625;
+          export {};
+          EOF
+          cat > src/lib/Art.tsx <<'EOF'
+          export {};
+          EOF
+          cat > src/lib/i18n.ts <<'EOF'
+          export const allText = () => '';
+          export const LANG = 'en';
+          export {};
+          EOF
+
           cat > src/shots.tsx <<'EOF'
           import React from 'react';
           import {Character, POSE, mixPose} from './lib/Character';
@@ -672,32 +685,54 @@ jobs:
             {d:2.4, cam:camWide, Scene:S12, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
           ];
           EOF
-      - name: Stub lib tambahan
-        run: |
-          cat > src/lib/tex.ts <<'EOF'
-          export {};
+
+          cat > scripts/render.sh <<'EOF'
+          #!/bin/sh
+          set -e
+          OUT="${1:-final.mp4}"
+          FRAMES=$(node -e "const fs=require('fs');const t=fs.readFileSync('src/timeline.ts','utf8');const ds=[...t.matchAll(/d:\s*([\d.]+)/g)].map(m=>parseFloat(m[1]));console.log(Math.ceil((ds.reduce((a,b)=>a+b,0)||24)*30))")
+          CHR="${CHROME:-$(ls /opt/pw-browsers/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
+          mkdir -p chunks out; s=0; i=0
+          while [ $s -lt $FRAMES ]; do
+            e=$((s+50)); [ $e -ge $FRAMES ] && e=$((FRAMES-1)); f=chunks/c_$(printf %03d $i).mp4
+            if [ ! -f $f ]; then
+              npx remotion render src/index.ts Reel chunks/tmp_$i.mp4 --frames=$s-$e --muted \
+                ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=${CONC:-1} \
+                --codec=h264 --crf=17 --log=error > chunks/log_$i.txt 2>&1 && mv chunks/tmp_$i.mp4 $f
+            fi
+            i=$((i+1)); s=$((e+1))
+          done
+          ls chunks/c_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
+          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy "out/$OUT"
+          echo "SELESAI (tanpa audio): out/$OUT"
+          ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,width,height -of default=nw=1 "out/$OUT"
           EOF
-          cat > src/lib/art.ts <<'EOF'
-          export const ART_ASPECT = (_k: string) => 0.625;
-          export {};
-          EOF
-          cat > src/lib/Art.tsx <<'EOF'
-          export {};
-          EOF
-          cat > src/lib/i18n.ts <<'EOF'
-          export const allText = () => '';
-          export const LANG = 'en';
-          export {};
-          EOF
+          chmod +x scripts/render.sh
+          ls -l scripts/render.sh
+          ls -l src src/lib
 
       - name: Install deps
-        run: npm install --no-audit --no-fund
+        run: |
+          set -e
+          npm install --no-audit --no-fund
+
+      - name: Verify tree
+        run: |
+          set -e
+          pwd
+          ls -la
+          test -f scripts/render.sh
+          test -f src/shots.tsx
+          test -f src/lib/Character.tsx
+          node -e "require('fs').accessSync('scripts/render.sh')"
 
       - name: Render (tanpa audio)
         env:
           CONC: '2'
           GL: 'swangle'
-        run: sh scripts/render.sh ai_sosmed.mp4
+        run: |
+          set -e
+          sh scripts/render.sh ai_sosmed.mp4
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
