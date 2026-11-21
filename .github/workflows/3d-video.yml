@@ -47,7 +47,7 @@ jobs:
             "typescript": "5.5.4",
             "@fontsource/montserrat": "^5.1.0",
             "@fontsource/oswald": "^5.1.0",
-            "@fontsource/inter": "^5.1.0",
+            "@fontsource/【entity-inter¦canonical_name=Inter】": "^5.1.0",
             "@fontsource/caveat": "^5.1.0"
            },
            "overrides": { "webpack": "5.83.1" }
@@ -62,13 +62,13 @@ jobs:
           import '@fontsource/montserrat/800.css';
           import '@fontsource/montserrat/700.css';
           import '@fontsource/oswald/700.css';
-          import '@fontsource/inter/400.css';
-          import '@fontsource/inter/600.css';
-          import '@fontsource/inter/700.css';
+          import '@fontsource/【entity-inter¦canonical_name=Inter】/400.css';
+          import '@fontsource/【entity-inter¦canonical_name=Inter】/600.css';
+          import '@fontsource/【entity-inter¦canonical_name=Inter】/700.css';
           import '@fontsource/caveat/600.css';
           import '@fontsource/caveat/700.css';
-          export const FAMILIES: string[] = ["Montserrat","Oswald","Inter","Caveat"];
-          export const CAPTION_STACK = 'Montserrat, Inter, sans-serif';
+          export const FAMILIES: string[] = ["Montserrat","Oswald","【entity-Inter¦canonical_name=Inter】","Caveat"];
+          export const CAPTION_STACK = 'Montserrat, 【entity-Inter¦canonical_name=Inter】, sans-serif';
           EOF
 
           cat > src/fonts.ts <<'EOF'
@@ -102,7 +102,7 @@ jobs:
           EOF
 
           cat > src/Reel.tsx <<'EOF'
-          import React, {useLayoutEffect} from 'react';
+          import React, {useMemo} from 'react';
           import * as THREE from 'three';
           import {AbsoluteFill, useCurrentFrame, useVideoConfig, delayRender, continueRender} from 'remotion';
           import {ThreeCanvas} from '@remotion/three';
@@ -113,14 +113,14 @@ jobs:
 
           const CameraRig: React.FC<{cam: CamSpec}> = ({cam}) => {
             const {camera} = useThree();
-            useLayoutEffect(() => {
+            React.useLayoutEffect(() => {
               const c = camera as THREE.PerspectiveCamera;
               c.position.set(...cam.p); c.up.set(0, 1, 0); c.lookAt(...cam.l);
               c.rotateZ(cam.roll || 0); c.fov = cam.fov; c.near = .05; c.far = 80; c.updateProjectionMatrix();
             });
             return null;
           };
-          const speed = (t: number, n = 30) => {
+          const buildSpeed = (t: number, n = 24) => {
             let d = '';
             for (let i = 0; i < n; i++) {
               const a = i / n * 6.2832 + Math.sin(i * 7.7) * .2,
@@ -139,6 +139,7 @@ jobs:
             }, []);
             const f = useCurrentFrame(); const {width, height, fps} = useVideoConfig();
             const t = Math.min(f / fps, TOTAL_S - .001);
+            const speedPath = useMemo(() => buildSpeed(Math.floor(t * 30) / 30), [Math.floor(t * 30)]);
             if (!ready || !TL.length) return null;
             let sh = TL[TL.length - 1];
             for (const s of TL) if (t >= s.a && t < s.a + s.D) { sh = s; break; }
@@ -159,7 +160,7 @@ jobs:
                 <AbsoluteFill style={{background: 'linear-gradient(to bottom, rgba(255,255,255,.10), rgba(255,255,255,0) 45%, rgba(0,0,0,.25))'}} />
                 <AbsoluteFill style={{background: `radial-gradient(ellipse at 50% 48%, rgba(0,0,0,0) 52%, rgba(0,0,0,${g.vig ?? .5}) 100%)`}} />
                 {lines > 0 && <svg width={width} height={height} style={{position: 'absolute', inset: 0, opacity: lines}}>
-                  <path d={speed(u)} stroke="#fff" strokeWidth="5" strokeLinecap="round" fill="none" opacity=".55" /></svg>}
+                  <path d={speedPath} stroke="#fff" strokeWidth="5" strokeLinecap="round" fill="none" opacity=".55" /></svg>}
                 {flash > 0 && <AbsoluteFill style={{background: '#fff', opacity: flash}} />}
               </AbsoluteFill>
             );
@@ -198,10 +199,19 @@ jobs:
             p: [c.p[0]+Math.sin(t*1.7)*amp, c.p[1]+Math.sin(t*2.3+1)*amp, c.p[2]+Math.sin(t*1.1+2)*amp],
             l: [c.l[0]+Math.sin(t*1.3)*amp*.4, c.l[1]+Math.sin(t*1.9+1)*amp*.4, c.l[2]]
           });
-          export const MAT = (color: string, opts: any = {}) => new THREE.MeshStandardMaterial({
-            color: new THREE.Color(color), roughness: opts.roughness ?? .55, metalness: opts.metalness ?? 0,
-            emissive: new THREE.Color(opts.emissive ?? '#000000'), emissiveIntensity: opts.emissiveIntensity ?? 0,
-          });
+          const matCache = new Map<string, THREE.MeshStandardMaterial>();
+          export const MAT = (color: string, opts: any = {}) => {
+            const key = `${color}|${opts.roughness ?? .55}|${opts.metalness ?? 0}|${opts.emissive ?? '#000000'}|${opts.emissiveIntensity ?? 0}`;
+            let m = matCache.get(key);
+            if (!m) {
+              m = new THREE.MeshStandardMaterial({
+                color: new THREE.Color(color), roughness: opts.roughness ?? .55, metalness: opts.metalness ?? 0,
+                emissive: new THREE.Color(opts.emissive ?? '#000000'), emissiveIntensity: opts.emissiveIntensity ?? 0,
+              });
+              matCache.set(key, m);
+            }
+            return m;
+          };
           export const setStyle = (_s: string) => {};
           export const getStyle = () => 'toon';
           export const INK = '#1a1424';
@@ -227,8 +237,9 @@ jobs:
             wave: base({aR: [d(10), d(150), d(70)]}),
           };
           export const mixPose = (a: Pose, b: Pose, t: number): Pose => {
+            const tt = Math.min(1, Math.max(0, t));
             const o: any = {};
-            for (const k in a) o[k] = Array.isArray((a as any)[k]) ? (a as any)[k].map((v: number, i: number) => v + ((b as any)[k][i]-v)*t) : (a as any)[k] + ((b as any)[k]-a[k])*t;
+            for (const k in a) o[k] = Array.isArray((a as any)[k]) ? (a as any)[k].map((v: number, i: number) => v + ((b as any)[k][i]-v)*tt) : (a as any)[k] + ((b as any)[k]-a[k])*tt;
             return o;
           };
           export const walkPose = (ph: number): Pose => {
@@ -263,7 +274,6 @@ jobs:
             return {E: K, W: A};
           };
 
-          // Bone dengan overlap: panjang ditambah 2r agar ujung bola menyatu
           const Bone: React.FC<{a: THREE.Vector3; b: THREE.Vector3; r: number; c: string}> = ({a, b, r, c}) => {
             const len = Math.max(0.001, a.distanceTo(b));
             const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), b.clone().sub(a).normalize());
@@ -271,15 +281,14 @@ jobs:
             return (
               <group position={mid.toArray() as V3} quaternion={q}>
                 <mesh material={MAT(c, {roughness:.6})} castShadow>
-                  <capsuleGeometry args={[r, len, 8, 16]} />
+                  <capsuleGeometry args={[r, len, 4, 10]} />
                 </mesh>
               </group>
             );
           };
-          // Bola sambungan lebih besar dari radius bone agar tidak ada celah
           const Joint: React.FC<{p: THREE.Vector3; r: number; c: string}> = ({p, r, c}) => (
             <mesh position={p.toArray() as V3} material={MAT(c, {roughness:.65})} castShadow>
-              <sphereGeometry args={[r * 1.08, 18, 14]} />
+              <sphereGeometry args={[r * 1.08, 12, 10]} />
             </mesh>
           );
 
@@ -337,33 +346,39 @@ jobs:
             const bob = Math.sin(t*1.8)*.006;
             const stand = D.thigh+D.shin+D.ankle;
             const hip = pose.sitH > .5 ? (D.seat + bob) : (stand + bob);
-            const P = new THREE.Vector3(0, hip, 0), qT = new THREE.Quaternion().setFromEuler(new THREE.Euler(-pose.lean,0,0));
+            const P = new THREE.Vector3(0, hip, 0);
+            const qT = new THREE.Quaternion().setFromEuler(new THREE.Euler(-pose.lean,0,0));
             const toChar = (v: THREE.Vector3) => v.clone().applyQuaternion(qT).add(P);
             const shY = .07+D.torsoH-.05, neckBase = .07+D.torsoH, headC = neckBase+D.neckL+D.headR*D.SY*.88;
-            const sL = toChar(new THREE.Vector3(-D.shX,shY,0)), sR = toChar(new THREE.Vector3(D.shX,shY,0));
-            let tL: THREE.Vector3|null = p.wL ? new THREE.Vector3(...p.wL) : null, tR: THREE.Vector3|null = p.wR ? new THREE.Vector3(...p.wR) : null;
+            const sL = toChar(new THREE.Vector3(-D.shX, shY, 0));
+            const sR = toChar(new THREE.Vector3(D.shX, shY, 0));
+            let tL: THREE.Vector3|null = p.wL ? new THREE.Vector3(...p.wL) : null;
+            let tR: THREE.Vector3|null = p.wR ? new THREE.Vector3(...p.wR) : null;
             if (p.prop === 'phone') tR = toChar(new THREE.Vector3(.1, neckBase+.03, D.torsoD/2+.16));
             if (p.prop === 'cup') tR = toChar(new THREE.Vector3(.1, .07+D.torsoH*.75, D.torsoD/2+.16));
-            // default tangan menggantung di samping badan (IK), bukan fkArm lurus
-            const armSide = new THREE.Vector3(D.shX + .08, hip - .15, .05);
-            const aL = tL ? ik2(sL, tL, D.arm1, D.arm2, new THREE.Vector3(-.8,.2,-.3))
-                          : (pose === POSE.stand || pose === POSE.sit ? ik2(sL, toChar(new THREE.Vector3(-armSide.x, armSide.y, armSide.z)), D.arm1, D.arm2, new THREE.Vector3(-.8,.2,-.3)) : fkArm(sL,-1,pose.aL,D.arm1,D.arm2));
-            const aR = tR ? ik2(sR, tR, D.arm1, D.arm2, new THREE.Vector3(.8,.2,-.3))
-                          : (pose === POSE.stand || pose === POSE.sit ? ik2(sR, toChar(new THREE.Vector3(armSide.x, armSide.y, armSide.z)), D.arm1, D.arm2, new THREE.Vector3(.8,.2,-.3)) : fkArm(sR,1,pose.aR,D.arm1,D.arm2));
+            const isRaised = pose.aL[1] > 0.5 || pose.aR[1] > 0.5;
+            const solveArm = (S: THREE.Vector3, Slocal: THREE.Vector3, side: number, ang: Arm, target: THREE.Vector3|null, pole: THREE.Vector3, sideTarget: THREE.Vector3) => {
+              if (target) return ik2(S, target, D.arm1, D.arm2, pole);
+              if (!isRaised) return ik2(S, sideTarget, D.arm1, D.arm2, pole);
+              const fk = fkArm(Slocal, side, ang, D.arm1, D.arm2);
+              return { E: toChar(fk.E), W: toChar(fk.W) };
+            };
+            const armSideL = toChar(new THREE.Vector3(-(D.shX + .08), hip - .15, .05));
+            const armSideR = toChar(new THREE.Vector3(D.shX + .08, hip - .15, .05));
+            const aL = solveArm(sL, new THREE.Vector3(-D.shX, shY, 0), -1, pose.aL, tL, new THREE.Vector3(-.8,.2,-.3), armSideL);
+            const aR = solveArm(sR, new THREE.Vector3(D.shX, shY, 0), 1, pose.aR, tR, new THREE.Vector3(.8,.2,-.3), armSideR);
             const hL = new THREE.Vector3(-D.hipX, hip-.01, 0), hR = new THREE.Vector3(D.hipX, hip-.01, 0);
-            // clamp kaki minimal ankle agar tidak menembus lantai
             const clampF = (v?: V3) => v ? new THREE.Vector3(v[0], Math.max(v[1], D.ankle + .02), v[2]) : null;
             const fL = clampF(p.fL), fR = clampF(p.fR);
             const lL = fL ? ik2(hL, fL, D.thigh, D.shin, new THREE.Vector3(0,1,.4)) : fkLeg(hL,-1,pose.lL,D.thigh,D.shin);
             const lR = fR ? ik2(hR, fR, D.thigh, D.shin, new THREE.Vector3(0,1,.4)) : fkLeg(hR,1,pose.lR,D.thigh,D.shin);
-
             return (
               <group position={p.pos} rotation={[0,p.rotY||0,0]} scale={p.s||1}>
                 <Joint p={hL} r={D.rL1} c={pants} /><Joint p={hR} r={D.rL1} c={pants} />
                 <Bone a={hL} b={lL.E} r={D.rL1} c={pants} /><Joint p={lL.E} r={D.rL1} c={pants} /><Bone a={lL.E} b={lL.W} r={D.rL2} c={pants} />
                 <Bone a={hR} b={lR.E} r={D.rL1} c={pants} /><Joint p={lR.E} r={D.rL1} c={pants} /><Bone a={lR.E} b={lR.W} r={D.rL2} c={pants} />
                 {[lL.W, lR.W].map((A,i) => (
-                  <mesh key={i} position={[A.x, Math.max(A.y-.03, .02), A.z+.04]} material={MAT(shoe, {roughness:.4})} castShadow>
+                  <mesh key={i} position={[A.x, Math.max(A.y-.04, .04), A.z+.04]} material={MAT(shoe, {roughness:.4})} castShadow>
                     <boxGeometry args={D.foot} /></mesh>
                 ))}
                 <mesh position={[0, hip+D.pelH*.35, 0]} material={MAT(pants, {roughness:.7})} castShadow>
@@ -379,22 +394,22 @@ jobs:
                     <cylinderGeometry args={[D.rN,D.rN,D.neckL,16]} /></mesh>
                   <group position={[0, headC, 0]}>
                     <mesh scale={[1,D.SY,1]} castShadow>
-                      <sphereGeometry args={[D.headR, 32, 24]} />
+                      <sphereGeometry args={[D.headR, 24, 18]} />
                       <meshStandardMaterial map={face} roughness={.75} />
                     </mesh>
-                    <mesh position={[0, -.005, D.headR+.005]} material={MAT(skin, {roughness:.7})} castShadow>
-                      <coneGeometry args={[.018,.04,12]} /></mesh>
+                    <mesh position={[0, -.005, D.headR+.01]} rotation={[Math.PI/2,0,0]} material={MAT(skin, {roughness:.7})} castShadow>
+                      <coneGeometry args={[.018,.045,12]} /></mesh>
                     {[-1,1].map(sx => <mesh key={sx} position={[sx*D.headR*.98, -.01, 0]} scale={[.5,1,.7]} material={MAT(skin,{roughness:.75})}><sphereGeometry args={[D.headR*.18,12,10]} /></mesh>)}
-                    {hair !== 'bald' && <mesh material={MAT(hc, {roughness:.85})} castShadow>
-                      <sphereGeometry args={[D.headR*1.06, 24, 16, 0, Math.PI*2, 0, Math.PI*.62]} /></mesh>}
-                    {hair === 'bun' && <mesh position={[0, D.headR*.55, -D.headR*.85]} material={MAT(hc,{roughness:.85})}><sphereGeometry args={[D.headR*.4,16,12]} /></mesh>}
+                    {hair !== 'bald' && <mesh position={[0,.02,-.015]} material={MAT(hc, {roughness:.85})} castShadow>
+                      <sphereGeometry args={[D.headR*1.05, 20, 12, 0, Math.PI*2, 0, Math.PI*.5]} /></mesh>}
+                    {hair === 'bun' && <mesh position={[0, D.headR*.55, -D.headR*.85]} material={MAT(hc,{roughness:.85})}><sphereGeometry args={[D.headR*.4,12,10]} /></mesh>}
                   </group>
-                  <Joint p={sL} r={.05} c={top} /><Joint p={sR} r={.05} c={top} />
-                  <Bone a={sL} b={aL.E} r={.047} c={top} /><Joint p={aL.E} r={.047} c={top} /><Bone a={aL.E} b={aL.W} r={.038} c={top} /><Joint p={aL.W} r={D.hand} c={skin} />
-                  <Bone a={sR} b={aR.E} r={.047} c={top} /><Joint p={aR.E} r={.047} c={top} /><Bone a={aR.E} b={aR.W} r={.038} c={top} /><Joint p={aR.W} r={D.hand} c={skin} />
-                  {p.prop === 'phone' && aR.W && <mesh position={[aR.W.x, aR.W.y+.02, aR.W.z+.02]} rotation={[.2,0,0]} material={MAT('#1a1a22', {roughness:.2, metalness:.5})}>
-                    <boxGeometry args={[.07,.14,.012]} /></mesh>}
                 </group>
+                <Joint p={sL} r={.05} c={top} /><Joint p={sR} r={.05} c={top} />
+                <Bone a={sL} b={aL.E} r={.047} c={top} /><Joint p={aL.E} r={.047} c={top} /><Bone a={aL.E} b={aL.W} r={.038} c={top} /><Joint p={aL.W} r={D.hand} c={skin} />
+                <Bone a={sR} b={aR.E} r={.047} c={top} /><Joint p={aR.E} r={.047} c={top} /><Bone a={aR.E} b={aR.W} r={.038} c={top} /><Joint p={aR.W} r={D.hand} c={skin} />
+                {p.prop === 'phone' && aR.W && <mesh position={[aR.W.x, aR.W.y+.02, aR.W.z+.02]} rotation={[.2,0,0]} material={MAT('#1a1a22', {roughness:.2, metalness:.5})}>
+                  <boxGeometry args={[.07,.14,.012]} /></mesh>}
               </group>
             );
           };
@@ -467,7 +482,10 @@ jobs:
             </group>
           );
 
+          const screenCache = new Map<string, THREE.CanvasTexture>();
           const makeScreenTex = (type: string) => {
+            const hit = screenCache.get(type);
+            if (hit) return hit;
             const cv = document.createElement('canvas'); cv.width = 512; cv.height = 320;
             const c = cv.getContext('2d')!;
             c.fillStyle = '#0a1020'; c.fillRect(0,0,512,320);
@@ -500,7 +518,9 @@ jobs:
               c.fillStyle = '#2a4060'; c.font = '20px Inter';
               c.fillText('1. Listen  2. Analyze  3. Act', 80, 230);
             }
-            const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8; return tx;
+            const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 4;
+            screenCache.set(type, tx);
+            return tx;
           };
 
           export const Monitor: React.FC<{pos:V3; rot?:V3; kind:string; s?:number}> = ({pos, rot=[0,0,0], kind, s=1}) => {
@@ -569,7 +589,7 @@ jobs:
             {p:[0.6,1.35,3.0], l:[0,1.2,1.5], fov: 50, roll: .02},
             {p:[0.4,1.25,2.4], l:[0,1.25,1.5], fov: 56, roll: -.015}, eo3(p));
           const camDolly = (p: number): CamSpec => {
-            const fov = 48 + 52*p;
+            const fov = 48 + 12*p;
             const dist = 1.4 / Math.tan((fov*Math.PI/180)/2);
             return {p:[0, 1.35, 1.4+dist], l:[0, 1.2, 1.2], fov};
           };
@@ -577,17 +597,16 @@ jobs:
             {p:[-1.4,.6,3.2], l:[0,1.0,1.4], fov: 50, roll: -.05},
             {p:[-1.0,.9,2.8], l:[0,1.0,1.4], fov: 54, roll: .04}, eo3(p));
 
-          // Meja di z=2.2, kursi di z=1.8, karakter duduk di z=1.8 menghadap +z (meja di depan)
           const DESK = (col='#3a2a4a', w=1.8, d=.9) => <Desk pos={[0,0,2.2]} w={w} d={d} col={col} />;
-          const CHAIR = (z=1.8) => <Chair pos={[0,0,z]} rot={Math.PI} col="#2a2038" />;
-          const MON = (kind='chat', s=1) => <Monitor pos={[0,.77,2.2]} rot={[0,0,0]} kind={kind} s={s} />;
+          const CHAIR = (z=1.8) => <Chair pos={[0,0,z]} rot={0} col="#2a2038" />;
+          const MON = (kind='chat', s=1) => <Monitor pos={[0,1.05,2.2]} rot={[0,Math.PI,0]} kind={kind} s={s} />;
+          const SIT_HANDS = { wL: [-.22,.82,.38] as [number,number,number], wR: [.22,.82,.38] as [number,number,number], fL: [-.12,.06,.45] as [number,number,number], fR: [.12,.06,.45] as [number,number,number] };
 
           const S1: React.FC<{p:number;u:number}> = ({u}) => (
             <Scene>
               {DESK()}{CHAIR(1.8)}{MON('chat',1.1)}
               <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                wL={[-.22,.83,-.25]} wR={[.22,.83,-.25]}
-                fL={[-.12,.06,.05]} fR={[.12,.06,.05]}
+                {...SIT_HANDS}
                 top="#e08a5a" pants="#2c3550" hair="short"
                 face={{eyes:'wide', mouth:'o', brow:.8}} />
               <Pt color="#ff8866" intensity={1} distance={3} position={[0,1.8,2.0]} />
@@ -608,8 +627,7 @@ jobs:
             <Scene>
               {DESK('#3a2a4a',1.6,.8)}{CHAIR(1.8)}{MON('slide',.95)}
               <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                wL={[-.2,.83,-.25]} wR={[.2,.83,-.25]}
-                fL={[-.12,.06,.05]} fR={[.12,.06,.05]}
+                {...SIT_HANDS}
                 top="#e08a5a" face={{eyes:'dot', mouth:'flat'}} />
             </Scene>
           );
@@ -617,8 +635,8 @@ jobs:
           const S4: React.FC<{p:number;u:number}> = ({u}) => (
             <Scene>
               <Art kind="whiteboard" pos={[-1.4,1.6,0.06]} w={1.2} />
-              <Character id="u1" pos={[-.5,0,2.2]} rotY={Math.PI/2} pose={POSE.push} t={u}
-                wR={[-.15,1.3,-.2]} top="#e08a5a" face={{eyes:'dot', mouth:'talk', brow:-.4}} />
+              <Character id="u1" pos={[-.5,0,2.2]} rotY={Math.PI} pose={POSE.push} t={u}
+                wR={[.15,1.35,.45]} top="#e08a5a" face={{eyes:'dot', mouth:'talk', brow:-.4}} />
               <Pendant pos={[-1.0,2.6,1.5]} />
             </Scene>
           );
@@ -627,8 +645,7 @@ jobs:
             <Scene>
               {DESK('#3a2a4a',1.6,.8)}{CHAIR(1.8)}{MON('slide',.95)}
               <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                wL={[-.22,.83,-.25]} wR={[.22,.83,-.25]}
-                fL={[-.12,.06,.05]} fR={[.12,.06,.05]}
+                {...SIT_HANDS}
                 top="#e08a5a" face={{eyes:'happy', mouth:'talk'}} />
             </Scene>
           );
@@ -641,8 +658,8 @@ jobs:
             </Scene>
           );
 
-          const S7: React.FC<{p:number;u:number}> = ({u}) => {
-            const a = u<.8, b = u>=.8&&u<1.6, c = u>=1.6;
+          const S7: React.FC<{p:number;u:number}> = ({p,u}) => {
+            const a = p<.33, b = p>=.33&&p<.66, c = p>=.66;
             return (
               <Scene>
                 {a && <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.wave} t={u} top="#e08a5a" face={{eyes:'dot', mouth:'smile'}} />}
@@ -652,10 +669,10 @@ jobs:
             );
           };
 
-          const S8: React.FC<{p:number;u:number}> = ({u}) => (
+          const S8: React.FC<{p:number;u:number}> = ({p,u}) => (
             <Scene>
               <Art kind="chart" pos={[0,1.3,0.06]} w={1.0} />
-              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={mixPose(POSE.hold, POSE.cheer, u/2)} t={u}
+              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={mixPose(POSE.hold, POSE.cheer, p)} t={u}
                 top="#e08a5a" face={{eyes:'wide', mouth:'o', brow:-.5}} />
               <Pt color="#4ac0b0" intensity={1.5} distance={5} position={[0,2,1.5]} />
             </Scene>
@@ -674,8 +691,8 @@ jobs:
           const S10: React.FC<{p:number;u:number}> = ({u}) => (
             <Scene>
               <Art kind="whiteboard" pos={[-1.2,1.5,0.06]} w={1.1} />
-              <Character id="u1" pos={[.2,0,2.2]} rotY={Math.PI/2.2} pose={POSE.push} t={u} top="#e08a5a"
-                wR={[.1,1.2,-.15]} face={{eyes:'dot', mouth:'talk'}} />
+              <Character id="u1" pos={[.2,0,2.2]} rotY={Math.PI} pose={POSE.push} t={u} top="#e08a5a"
+                wR={[.1,1.2,.45]} face={{eyes:'dot', mouth:'talk'}} />
             </Scene>
           );
 
@@ -691,8 +708,7 @@ jobs:
             <Scene>
               {DESK()}{CHAIR(1.8)}{MON('chart',1.05)}
               <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                wL={[-.22,.83,-.25]} wR={[.22,.83,-.25]}
-                fL={[-.12,.06,.05]} fR={[.12,.06,.05]}
+                {...SIT_HANDS}
                 top="#e08a5a" face={{eyes:'happy', mouth:'smile', blush:true}} />
               <Pt color="#ffd6a0" intensity={1.4} distance={5} position={[0,2,1.5]} />
             </Scene>
@@ -722,13 +738,15 @@ jobs:
           echo "FRAMES=$FRAMES"
           CHR="${CHROME:-$(ls /opt/pw-browsers/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
           echo "CHROME=$CHR"
+          CONC="${CONC:-$(nproc 2>/dev/null || echo 2)}"
+          echo "CONC=$CONC"
           mkdir -p chunks out; s=0; i=0; FAIL=0
           while [ $s -lt $FRAMES ]; do
-            e=$((s+50)); [ $e -ge $FRAMES ] && e=$((FRAMES-1)); f=chunks/c_$(printf %03d $i).mp4
+            e=$((s+90)); [ $e -ge $FRAMES ] && e=$((FRAMES-1)); f=chunks/c_$(printf %03d $i).mp4
             if [ ! -f $f ]; then
               echo "=== render chunk $i frames $s-$e ==="
               if npx remotion render src/index.ts Reel chunks/tmp_$i.mp4 --frames=$s-$e --muted \
-                  ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=${CONC:-1} \
+                  ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=$CONC \
                   --codec=h264 --crf=17 --log=info > chunks/log_$i.txt 2>&1; then
                 mv chunks/tmp_$i.mp4 $f
               else
@@ -742,7 +760,7 @@ jobs:
           echo "chunks berhasil: $COUNT"
           if [ "$COUNT" -eq 0 ]; then echo "Tidak ada chunk yang dirender"; exit 1; fi
           ls chunks/c_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
-          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy "out/$OUT"
+          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy -movflags +faststart "out/$OUT"
           echo "SELESAI (tanpa audio): out/$OUT"
           ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,width,height -of default=nw=1 "out/$OUT"
           EOF
