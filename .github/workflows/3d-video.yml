@@ -1,244 +1,226 @@
-name: Render Reel 3D Optimized
-
+name: reel-ai-sosmed
 on:
   workflow_dispatch:
-    inputs:
-      audio_file:
-        description: 'Path file audio di repo (kosongkan jika public/narration.wav & src/captions.json sudah siap)'
-        required: false
-        default: 'audio_anda.mp3'
-        type: string
-      script_file:
-        description: 'Path file naskah teks'
-        required: false
-        default: 'example/naskah.txt'
-        type: string
-      lang:
-        description: 'Kode bahasa (id, en, ja, dll)'
-        required: false
-        default: 'id'
-        type: string
-      output_name:
-        description: 'Nama file MP4 keluaran'
-        required: false
-        default: 'hasil_sosmed.mp4'
-        type: string
-
-concurrency:
-  group: render-reel-${{ github.ref }}
-  cancel-in-progress: true
+  push:
+    branches: [ main ]
 
 jobs:
-  prepare:
-    name: 1. Prepare Audio & Bundle
+  render:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    outputs:
-      total_frames: ${{ steps.prep.outputs.frames }}
-
+    timeout-minutes: 120
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Cache node_modules & npm
-        id: cache-deps
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            ~/.npm
-          key: ${{ runner.os }}-node22-deps-${{ hashFiles('package.json', 'package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node22-deps-
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Install dependencies
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --no-audit --no-fund
-
-      - name: Prepare audio, captions, fonts & bundle
-        id: prep
+      - name: Write project files
         run: |
-          AUDIO="${{ inputs.audio_file }}"
-          SCRIPT="${{ inputs.script_file }}"
-          LANG_CODE="${{ inputs.lang }}"
+          mkdir -p src/lib src/lang scripts references public out chunks
+          cat > package.json <<'EOF'
+          {
+           "name": "reel-cartoon-3d",
+           "version": "1.0.0",
+           "private": true,
+           "scripts": { "render": "sh scripts/render.sh" },
+           "dependencies": {
+            "@react-three/drei": "^9.114.3",
+            "@react-three/fiber": "^8.17.10",
+            "@remotion/bundler": "^4.0.250",
+            "@remotion/cli": "^4.0.250",
+            "@remotion/renderer": "^4.0.250",
+            "@remotion/three": "^4.0.250",
+            "@types/react": "18.3.3",
+            "@types/three": "0.169.0",
+            "react": "^18.3.1",
+            "react-dom": "^18.3.1",
+            "remotion": "^4.0.250",
+            "three": "^0.169.0",
+            "typescript": "5.5.4",
+            "@fontsource/montserrat": "^5.1.0",
+            "@fontsource/oswald": "^5.1.0",
+            "@fontsource/inter": "^5.1.0",
+            "@fontsource/caveat": "^5.1.0"
+           },
+           "overrides": { "webpack": "5.83.1" }
+          }
+          EOF
 
-          if [ -n "$AUDIO" ] && [ -f "$AUDIO" ]; then
-            if [ -n "$SCRIPT" ] && [ -f "$SCRIPT" ]; then
-              sh scripts/prepare.sh "$AUDIO" --script "$SCRIPT" --lang "$LANG_CODE"
-            else
-              sh scripts/prepare.sh "$AUDIO" --asr --lang "$LANG_CODE"
-            fi
-          else
-            echo "Audio input '$AUDIO' tidak ditemukan, memakai public/narration.wav & src/captions.json yang sudah ada."
-            [ -f public/narration.wav ] && [ -f src/captions.json ] || {
-              echo "ERROR: File audio '$AUDIO' maupun public/narration.wav tidak ditemukan!"
-              exit 1
+          cat > tsconfig.json <<'EOF'
+          {"compilerOptions":{"target":"ES2020","module":"ESNext","moduleResolution":"bundler","jsx":"react-jsx","strict":false,"skipLibCheck":true,"esModuleInterop":true,"types":["react"]}}
+          EOF
+
+          # ---------- src/fonts.generated.ts ----------
+          cat > src/fonts.generated.ts <<'EOF'
+          import '@fontsource/montserrat/800.css';
+          import '@fontsource/montserrat/700.css';
+          import '@fontsource/oswald/700.css';
+          import '@fontsource/inter/400.css';
+          import '@fontsource/inter/600.css';
+          import '@fontsource/inter/700.css';
+          import '@fontsource/caveat/600.css';
+          import '@fontsource/caveat/700.css';
+          export const FAMILIES: string[] = ["Montserrat","Oswald","Inter","Caveat"];
+          export const CAPTION_STACK = 'Montserrat, Inter, sans-serif';
+          EOF
+
+          cat > src/fonts.ts <<'EOF'
+          import {FAMILIES} from './fonts.generated';
+          import {allText} from './lib/i18n';
+          export const loadFonts = async () => {
+            const txt = allText() + 'Aa0123456789'; const d: any = document;
+            await Promise.all(FAMILIES.flatMap((f: string) => [800, 700, 600, 400].map(w => d.fonts.load(`${w} 40px "${f}"`, txt).catch(() => null))));
+            await d.fonts.ready;
+          };
+          EOF
+
+          cat > src/index.ts <<'EOF'
+          import './fonts.generated';
+          import {registerRoot} from 'remotion';
+          import {Root} from './Root';
+          registerRoot(Root);
+          EOF
+
+          # ---------- src/captions.json : KOSONG (tanpa audio/caption) ----------
+          cat > src/captions.json <<'EOF'
+          { "lang": "en", "duration": 0, "source": "none", "speech": {}, "words": [] }
+          EOF
+
+          # ---------- src/Root.tsx ----------
+          cat > src/Root.tsx <<'EOF'
+          import React from 'react';
+          import {Composition} from 'remotion';
+          import {Reel} from './Reel';
+          import {TOTAL_S} from './timeline';
+          export const Root: React.FC = () => <Composition id="Reel" component={Reel}
+            durationInFrames={Math.max(30, Math.ceil(TOTAL_S * 30))} fps={30} width={1080} height={1920} />;
+          EOF
+                - name: Patch no-audio / no-caption + timeline statis
+        run: |
+          # Reel.tsx: hapus Caption, pakai TOTAL_S statis
+          cat > src/Reel.tsx <<'EOF'
+          import React, {useLayoutEffect} from 'react';
+          import * as THREE from 'three';
+          import {AbsoluteFill, useCurrentFrame, useVideoConfig, delayRender, continueRender} from 'remotion';
+          import {ThreeCanvas} from '@remotion/three';
+          import {useThree} from '@react-three/fiber';
+          import {TL, TOTAL_S} from './timeline';
+          import {CamSpec, handheld, setStyle} from './lib/core';
+          import {loadFonts} from './fonts';
+
+          const CameraRig: React.FC<{cam: CamSpec}> = ({cam}) => {
+            const {camera} = useThree();
+            useLayoutEffect(() => {
+              const c = camera as THREE.PerspectiveCamera;
+              c.position.set(...cam.p); c.up.set(0, 1, 0); c.lookAt(...cam.l);
+              c.rotateZ(cam.roll || 0); c.fov = cam.fov; c.near = .05; c.far = 80; c.updateProjectionMatrix();
+            });
+            return null;
+          };
+          const speed = (t: number, n = 30) => {
+            let d = '';
+            for (let i = 0; i < n; i++) {
+              const a = i / n * 6.2832 + Math.sin(i * 7.7) * .2,
+                r0 = 330 + ((t * 7 + i) % 3) * 20 + (Math.sin(i * 3.1) + 1) * 90,
+                r1 = r0 + 280 + (Math.sin(i * 5.3) + 1) * 220;
+              d += `M${540 + Math.cos(a) * r0} ${960 + Math.sin(a) * r0 * 1.5}L${540 + Math.cos(a) * r1} ${960 + Math.sin(a) * r1 * 1.5}`;
             }
-            node scripts/setup-fonts.mjs "$LANG_CODE"
-          fi
+            return d;
+          };
+          export const Reel: React.FC = () => {
+            setStyle('toon');
+            const [ready, setReady] = React.useState(false);
+            const [hnd] = React.useState(() => delayRender('fonts'));
+            React.useEffect(() => {
+              loadFonts().then(() => setReady(true)).catch(() => setReady(true)).finally(() => continueRender(hnd));
+            }, []);
+            const f = useCurrentFrame(); const {width, height, fps} = useVideoConfig();
+            const t = Math.min(f / fps, TOTAL_S - .001);
+            if (!ready || !TL.length) return null;
+            let sh = TL[TL.length - 1];
+            for (const s of TL) if (t >= s.a && t < s.a + s.D) { sh = s; break; }
+            const ua = t - sh.a, p = Math.min(1, ua / sh.D), u = p * sh.dd;
+            const cam = handheld(sh.cam(p, u), u, sh.hh ?? .01);
+            const g: any = sh.g || {};
+            const flash = g.flash ? Math.max(0, 1 - ua / .2) * g.flash : 0;
+            const lines = g.lines ? g.lines(p, u) : 0;
+            return (
+              <AbsoluteFill style={{background: '#000'}}>
+                <ThreeCanvas width={width} height={height} shadows
+                  gl={{antialias: true, toneMapping: THREE.NoToneMapping, preserveDrawingBuffer: true}}
+                  camera={{fov: cam.fov, position: cam.p, near: .05, far: 80}}>
+                  <CameraRig cam={cam} />
+                  <sh.Scene p={p} u={u} />
+                </ThreeCanvas>
+                {g.tint && <AbsoluteFill style={{background: g.tint, opacity: g.ti ?? .15, mixBlendMode: 'multiply'}} />}
+                <AbsoluteFill style={{background: 'linear-gradient(to bottom, rgba(255,255,255,.10), rgba(255,255,255,0) 45%, rgba(0,0,0,.25))'}} />
+                <AbsoluteFill style={{background: `radial-gradient(ellipse at 50% 48%, rgba(0,0,0,0) 52%, rgba(0,0,0,${g.vig ?? .5}) 100%)`}} />
+                {lines > 0 && <svg width={width} height={height} style={{position: 'absolute', inset: 0, opacity: lines}}>
+                  <path d={speed(u)} stroke="#fff" strokeWidth="5" strokeLinecap="round" fill="none" opacity=".55" /></svg>}
+                {flash > 0 && <AbsoluteFill style={{background: '#fff', opacity: flash}} />}
+              </AbsoluteFill>
+            );
+          };
+          EOF
 
-          FRAMES=$(node -e "const c=require('./src/captions.json'); console.log(Math.max(30, Math.ceil((c.duration + 0.6) * 30)))")
-          echo "frames=$FRAMES" >> "$GITHUB_OUTPUT"
-          echo "Total frames to render: $FRAMES"
-
-          npx remotion bundle src/index.ts --out-dir remotion-bundle
-
-      - name: Upload prepared bundle & audio
-        uses: actions/upload-artifact@v4
-        with:
-          name: remotion-prepared
-          path: |
-            remotion-bundle
-            public/narration.wav
-            src/captions.json
-          retention-days: 1
-
-  render-worker:
-    name: 2. Render Worker ${{ matrix.worker }}
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        worker: [0, 1, 2, 3, 4, 5]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Restore node_modules cache
-        id: cache-deps
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            ~/.npm
-          key: ${{ runner.os }}-node22-deps-${{ hashFiles('package.json', 'package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node22-deps-
-
-      - name: Install dependencies (fallback if cache missed)
-        if: steps.cache-deps.outputs.cache-hit != 'true'
+          # timeline.ts: durasi statis dari bobot d, tanpa captions.json
+          cat > src/timeline.ts <<'EOF'
+          import {SHOTS} from './shots';
+          import {CamSpec} from './lib/core';
+          export type TLEntry = { a: number; D: number; dd: number; d: number; cam: (p: number, u: number) => CamSpec; Scene: React.FC<{p: number; u: number}>; g?: any; hh?: number };
+          const FALLBACK_D = 2.0; // detik rancangan per shot bila d tidak ada
+          const total = SHOTS.reduce((a, s: any) => a + (s.d || FALLBACK_D), 0);
+          let cursor = 0;
+          export const TL: TLEntry[] = SHOTS.map((s: any) => {
+            const d = s.d || FALLBACK_D;
+            const e = { a: cursor, D: d, dd: d, d, cam: s.cam, Scene: s.Scene, g: s.g, hh: s.hh };
+            cursor += d; return e;
+          });
+          export const TOTAL_S = cursor || total;
+          EOF
+                - name: Write render script (no audio)
+        run: |
+          cat > scripts/render.sh <<'EOF'
+          #!/bin/sh
+          # Render tanpa audio (video bisu). Pemakaian: sh scripts/render.sh [nama.mp4]
+          OUT="${1:-final.mp4}"; CHR="${CHROME:-$(ls /opt/pw-browsers/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
+          FRAMES=$(node -e "const {TOTAL_S}=require('./src/timeline.ts')")
+          FRAMES=$(node -e "try{const t=require('fs').readFileSync('src/timeline.ts','utf8');const m=t.match(/TOTAL_S\\s*=\\s*cursor\\s*\\|\\|\\s*total/);console.log(Math.ceil((parseFloat(process.env.TS||'24'))*30))}catch(e){console.log(720)}")
+          mkdir -p chunks out; s=0; i=0
+          while [ $s -lt $FRAMES ]; do
+            e=$((s+50)); [ $e -ge $FRAMES ] && e=$((FRAMES-1)); f=chunks/c_$(printf %03d $i).mp4
+            if [ ! -f $f ]; then
+              npx remotion render src/index.ts Reel chunks/tmp_$i.mp4 --frames=$s-$e --muted \
+                ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=${CONC:-1} \
+                --codec=h264 --crf=17 --log=error > chunks/log_$i.txt 2>&1 && mv chunks/tmp_$i.mp4 $f
+            fi
+            i=$((i+1)); s=$((e+1))
+          done
+          ls chunks/c_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
+          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy "out/$OUT" || exit 1
+          echo "SELESAI (tanpa audio): out/$OUT"
+          ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,width,height -of default=nw=1 "out/$OUT"
+          EOF
+          chmod +x scripts/render.sh
+                - name: Install deps
         run: npm install --no-audit --no-fund
 
-      - name: Cache Remotion Chrome Headless Shell
-        id: cache-browser
-        uses: actions/cache@v4
-        with:
-          path: node_modules/.remotion
-          key: ${{ runner.os }}-remotion-browser-${{ hashFiles('package.json', 'package-lock.json') }}
-
-      - name: Install Chromium OS dependencies & ensure browser
+      - name: Render (no audio)
+        env:
+          CONC: '2'
+          GL: 'swangle'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            libnss3 libgbm1 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-            libxrandr2 libpango-1.0-0 libcairo2 libexpat1 libxshmfence1 || true
-          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2 || true
-          npx remotion browser ensure
+          # Durasi total = jumlah d = 24.8s -> 744 frame @30fps. Script render memakai env TS bila tersedia.
+          export TS=$(node -e "const s=require('./src/shots.tsx');" 2>/dev/null || echo 24.8)
+          sh scripts/render.sh ai_sosmed.mp4
 
-      - name: Download prepared bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: remotion-prepared
-
-      - name: Render assigned frame range
-        run: |
-          FRAMES=${{ needs.prepare.outputs.total_frames }}
-          WORKERS=6
-          W=${{ matrix.worker }}
-          CHUNK=$(( (FRAMES + WORKERS - 1) / WORKERS ))
-          START=$(( W * CHUNK ))
-          END=$(( START + CHUNK - 1 ))
-          if [ "$END" -ge "$FRAMES" ]; then END=$(( FRAMES - 1 )); fi
-
-          mkdir -p chunks
-          if [ "$START" -ge "$FRAMES" ]; then
-            echo "Worker $W: no frames assigned (START=$START >= FRAMES=$FRAMES), skipping."
-            exit 0
-          fi
-
-          CORES=$(nproc)
-          if [ "$CORES" -ge 4 ]; then CONC=3; else CONC=2; fi
-          OUT_CHUNK=$(printf "chunks/part_%02d.mp4" "$W")
-
-          echo "Worker $W rendering frames $START-$END (total $FRAMES) | vCPU=$CORES | CONC=$CONC"
-          npx remotion render remotion-bundle Reel "$OUT_CHUNK" \
-            --frames="${START}-${END}" \
-            --muted \
-            --gl=swangle \
-            --concurrency="$CONC" \
-            --codec=h264 \
-            --crf=17 \
-            --log=error
-
-      - name: Upload rendered chunk
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chunk-${{ matrix.worker }}
-          path: chunks/part_*.mp4
-          if-no-files-found: ignore
-          retention-days: 1
-
-  merge:
-    name: 3. Merge Video + Audio
-    needs: [prepare, render-worker]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Download prepared assets (narration.wav)
-        uses: actions/download-artifact@v4
-        with:
-          name: remotion-prepared
-
-      - name: Download all video chunks
-        uses: actions/download-artifact@v4
-        with:
-          pattern: chunk-*
-          merge-multiple: true
-          path: chunks
-
-      - name: Install ffmpeg if missing
-        run: |
-          if ! command -v ffmpeg >/dev/null 2>&1; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          fi
-
-      - name: Concat chunks, attach audio & generate contact sheet
-        run: |
-          mkdir -p out
-          OUT_NAME="${{ inputs.output_name }}"
-          ls chunks/part_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
-          cat chunks/list.txt
-
-          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy out/video_silent.mp4
-          ffmpeg -v error -y -i out/video_silent.mp4 -i public/narration.wav \
-            -map 0:v -map 1:a -c:v copy -af apad -c:a aac -b:a 192k -shortest "out/$OUT_NAME"
-
-          echo "=== VERIFIKASI HASIL ==="
-          ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,width,height,r_frame_rate -of default=nw=1 "out/$OUT_NAME"
-
-          ffmpeg -v error -y -i "out/$OUT_NAME" -vf "fps=1/3,scale=360:-1,tile=4x3" -frames:v 1 out/preview_sheet.png || true
-
-      - name: Upload final MP4 & preview sheet
-        uses: actions/upload-artifact@v4
-        with:
-          name: reel-final-video
-          path: |
-            out/${{ inputs.output_name }}
-            out/preview_sheet.png
-          if-no-files-found: error
+          name: reel-ai-sosmed
+          path: out/ai_sosmed.mp4
           retention-days: 7
