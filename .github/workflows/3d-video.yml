@@ -21,12 +21,12 @@ jobs:
       - name: Write project files
         run: |
           mkdir -p src/lib src/lang scripts references public out chunks
+
           cat > package.json <<'EOF'
           {
            "name": "reel-cartoon-3d",
            "version": "1.0.0",
            "private": true,
-           "scripts": { "render": "sh scripts/render.sh" },
            "dependencies": {
             "@react-three/drei": "^9.114.3",
             "@react-three/fiber": "^8.17.10",
@@ -54,7 +54,6 @@ jobs:
           {"compilerOptions":{"target":"ES2020","module":"ESNext","moduleResolution":"bundler","jsx":"react-jsx","strict":false,"skipLibCheck":true,"esModuleInterop":true,"types":["react"]}}
           EOF
 
-          # ---------- src/fonts.generated.ts ----------
           cat > src/fonts.generated.ts <<'EOF'
           import '@fontsource/montserrat/800.css';
           import '@fontsource/montserrat/700.css';
@@ -70,10 +69,10 @@ jobs:
 
           cat > src/fonts.ts <<'EOF'
           import {FAMILIES} from './fonts.generated';
-          import {allText} from './lib/i18n';
           export const loadFonts = async () => {
-            const txt = allText() + 'Aa0123456789'; const d: any = document;
-            await Promise.all(FAMILIES.flatMap((f: string) => [800, 700, 600, 400].map(w => d.fonts.load(`${w} 40px "${f}"`, txt).catch(() => null))));
+            const d: any = document;
+            await Promise.all(FAMILIES.flatMap((f: string) =>
+              [800, 700, 600, 400].map(w => d.fonts.load(`${w} 40px "${f}"`, 'Aa0123456789').catch(() => null))));
             await d.fonts.ready;
           };
           EOF
@@ -85,12 +84,10 @@ jobs:
           registerRoot(Root);
           EOF
 
-          # ---------- src/captions.json : KOSONG (tanpa audio/caption) ----------
           cat > src/captions.json <<'EOF'
           { "lang": "en", "duration": 0, "source": "none", "speech": {}, "words": [] }
           EOF
 
-          # ---------- src/Root.tsx ----------
           cat > src/Root.tsx <<'EOF'
           import React from 'react';
           import {Composition} from 'remotion';
@@ -99,9 +96,8 @@ jobs:
           export const Root: React.FC = () => <Composition id="Reel" component={Reel}
             durationInFrames={Math.max(30, Math.ceil(TOTAL_S * 30))} fps={30} width={1080} height={1920} />;
           EOF
-                - name: Patch no-audio / no-caption + timeline statis
+                - name: Write Reel (tanpa Caption)
         run: |
-          # Reel.tsx: hapus Caption, pakai TOTAL_S statis
           cat > src/Reel.tsx <<'EOF'
           import React, {useLayoutEffect} from 'react';
           import * as THREE from 'three';
@@ -167,56 +163,537 @@ jobs:
           };
           EOF
 
-          # timeline.ts: durasi statis dari bobot d, tanpa captions.json
           cat > src/timeline.ts <<'EOF'
           import {SHOTS} from './shots';
           import {CamSpec} from './lib/core';
           export type TLEntry = { a: number; D: number; dd: number; d: number; cam: (p: number, u: number) => CamSpec; Scene: React.FC<{p: number; u: number}>; g?: any; hh?: number };
-          const FALLBACK_D = 2.0; // detik rancangan per shot bila d tidak ada
-          const total = SHOTS.reduce((a, s: any) => a + (s.d || FALLBACK_D), 0);
+          const FALLBACK_D = 2.0;
           let cursor = 0;
           export const TL: TLEntry[] = SHOTS.map((s: any) => {
             const d = s.d || FALLBACK_D;
             const e = { a: cursor, D: d, dd: d, d, cam: s.cam, Scene: s.Scene, g: s.g, hh: s.hh };
             cursor += d; return e;
           });
-          export const TOTAL_S = cursor || total;
+          export const TOTAL_S = cursor;
           EOF
-                - name: Write render script (no audio)
+                - name: Write lib core (disederhanakan)
         run: |
-          cat > scripts/render.sh <<'EOF'
-          #!/bin/sh
-          # Render tanpa audio (video bisu). Pemakaian: sh scripts/render.sh [nama.mp4]
-          OUT="${1:-final.mp4}"; CHR="${CHROME:-$(ls /opt/pw-browsers/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
-          FRAMES=$(node -e "const {TOTAL_S}=require('./src/timeline.ts')")
-          FRAMES=$(node -e "try{const t=require('fs').readFileSync('src/timeline.ts','utf8');const m=t.match(/TOTAL_S\\s*=\\s*cursor\\s*\\|\\|\\s*total/);console.log(Math.ceil((parseFloat(process.env.TS||'24'))*30))}catch(e){console.log(720)}")
-          mkdir -p chunks out; s=0; i=0
-          while [ $s -lt $FRAMES ]; do
-            e=$((s+50)); [ $e -ge $FRAMES ] && e=$((FRAMES-1)); f=chunks/c_$(printf %03d $i).mp4
-            if [ ! -f $f ]; then
-              npx remotion render src/index.ts Reel chunks/tmp_$i.mp4 --frames=$s-$e --muted \
-                ${CHR:+--browser-executable=$CHR} --gl=${GL:-swangle} --concurrency=${CONC:-1} \
-                --codec=h264 --crf=17 --log=error > chunks/log_$i.txt 2>&1 && mv chunks/tmp_$i.mp4 $f
-            fi
-            i=$((i+1)); s=$((e+1))
-          done
-          ls chunks/c_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
-          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy "out/$OUT" || exit 1
-          echo "SELESAI (tanpa audio): out/$OUT"
-          ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,width,height -of default=nw=1 "out/$OUT"
+          cat > src/lib/core.tsx <<'EOF'
+          import * as THREE from 'three';
+          export type V3 = [number, number, number];
+          export type CamSpec = {p: V3; l: V3; fov: number; roll?: number};
+          export const eo3 = (p: number) => { const c = Math.min(1, Math.max(0, p)); return c < .5 ? 2*c*c : 1 - Math.pow(-2*c+2, 2)/2; };
+          export const lerp = (a: number, b: number, t: number) => a + (b-a)*t;
+          export const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
+          export const prog = (u: number, a: number, b: number) => clamp((u-a)/(b-a), 0, 1);
+          export const camLerp = (a: CamSpec, b: CamSpec, t: number): CamSpec => ({
+            p: [lerp(a.p[0], b.p[0], t), lerp(a.p[1], b.p[1], t), lerp(a.p[2], b.p[2], t)],
+            l: [lerp(a.l[0], b.l[0], t), lerp(a.l[1], b.l[1], t), lerp(a.l[2], b.l[2], t)],
+            fov: lerp(a.fov, b.fov, t), roll: lerp(a.roll||0, b.roll||0, t)
+          });
+          export const handheld = (c: CamSpec, t: number, amp = .008): CamSpec => ({
+            ...c,
+            p: [c.p[0]+Math.sin(t*1.7)*amp, c.p[1]+Math.sin(t*2.3+1)*amp, c.p[2]+Math.sin(t*1.1+2)*amp],
+            l: [c.l[0]+Math.sin(t*1.3)*amp*.4, c.l[1]+Math.sin(t*1.9+1)*amp*.4, c.l[2]]
+          });
+          export const MAT = (color: string, opts: any = {}) => new THREE.MeshStandardMaterial({
+            color: new THREE.Color(color), roughness: opts.roughness ?? .55, metalness: opts.metalness ?? 0,
+            emissive: new THREE.Color(opts.emissive ?? '#000000'), emissiveIntensity: opts.emissiveIntensity ?? 0,
+          });
+          export const setStyle = (_s: string) => {};
+          export const getStyle = () => 'toon';
+          export const INK = '#1a1424';
+          export {THREE};
           EOF
-          chmod +x scripts/render.sh
-                - name: Install deps
+                - name: Write karakter + set
+        run: |
+          cat > src/lib/Character.tsx <<'EOF'
+          import React, {useMemo} from 'react';
+          import * as THREE from 'three';
+          import {MAT, V3} from './core';
+
+          export type Arm = [number, number, number];
+          export type Pose = {sitH: number; lean: number; hx: number; hy: number; hz: number; aL: Arm; aR: Arm; lL: Arm; lR: Arm};
+          const d = (x: number) => (x * Math.PI) / 180;
+          const base = (o: Partial<Pose>): Pose => ({sitH: 0, lean: 0, hx: 0, hy: 0, hz: 0, aL: [d(4), d(10), d(12)], aR: [d(4), d(10), d(12)], lL: [0, d(2), 0], lR: [0, d(2), 0], ...o});
+          export const POSE: Record<string, Pose> = {
+            stand: base({}),
+            hold: base({lean: d(3), hx: d(4)}),
+            sit: base({sitH: 1, aL: [d(25), d(8), d(70)], aR: [d(25), d(8), d(70)], lL: [d(90), d(3), d(90)], lR: [d(90), d(3), d(90)]}),
+            cheer: base({hx: d(-8), aL: [d(10), d(150), d(10)], aR: [d(10), d(150), d(10)]}),
+            desk: base({lean: d(6), hx: d(4)}),
+            push: base({lean: d(20), hx: d(10)}),
+            wave: base({aR: [d(10), d(150), d(70)]}),
+          };
+          export const mixPose = (a: Pose, b: Pose, t: number): Pose => {
+            const o: any = {};
+            for (const k in a) o[k] = Array.isArray((a as any)[k]) ? (a as any)[k].map((v: number, i: number) => v + ((b as any)[k][i]-v)*t) : (a as any)[k] + ((b as any)[k]-a[k])*t;
+            return o;
+          };
+          export const walkPose = (ph: number): Pose => {
+            const s = Math.sin(ph);
+            return base({lean: d(4), lL: [d(32)*s, d(2), Math.max(0,-s)*d(55)], lR: [-d(32)*s, d(2), Math.max(0,s)*d(55)], aL: [-d(26)*s, d(8), d(16)], aR: [d(26)*s, d(8), d(16)]});
+          };
+
+          const DM = {headR: .135, SY: 1.12, torsoW: .38, torsoH: .48, torsoD: .24, shX: .215, arm1: .30, arm2: .27, hand: .05,
+                      thigh: .45, shin: .43, ankle: .06, hipX: .1, rL1: .075, rL2: .058, foot: [.1,.08,.27], neckL: .08, rN: .052, pelW: .35, pelH: .2, seat: .485};
+
+          const ik2 = (S: THREE.Vector3, W0: THREE.Vector3, L1: number, L2: number, pole: THREE.Vector3) => {
+            const dv = W0.clone().sub(S); let dist = dv.length(); const dMax = L1+L2-1e-3, W = W0.clone();
+            if (dist > dMax) { W.copy(S).add(dv.multiplyScalar(dMax/dist)); dist = dMax; }
+            dist = Math.max(dist, Math.abs(L1-L2)+1e-3);
+            const dir = W.clone().sub(S).normalize(), a = (L1*L1-L2*L2+dist*dist)/(2*dist), h = Math.sqrt(Math.max(0, L1*L1-a*a));
+            const mid = S.clone().add(dir.clone().multiplyScalar(a)); const pp = pole.clone().sub(dir.clone().multiplyScalar(pole.dot(dir)));
+            if (pp.lengthSq() < 1e-6) pp.set(0,0,1); pp.normalize();
+            return {E: mid.add(pp.multiplyScalar(h)), W};
+          };
+          const fkArm = (S: THREE.Vector3, side: number, a: Arm, L1: number, L2: number) => {
+            const q1 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-a[0], 0, side*a[1], 'XYZ'));
+            const q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-a[2], 0, 0, 'XYZ'));
+            const E = S.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q1).multiplyScalar(L1));
+            const W = E.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q2).applyQuaternion(q1).multiplyScalar(L2));
+            return {E, W};
+          };
+          const fkLeg = (H: THREE.Vector3, side: number, l: Arm, L1: number, L2: number) => {
+            const q1 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-l[0], 0, side*l[1], 'XYZ'));
+            const q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(l[2], 0, 0, 'XYZ'));
+            const K = H.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q1).multiplyScalar(L1));
+            const A = K.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q2).applyQuaternion(q1).multiplyScalar(L2));
+            return {K, A};
+          };
+
+          const Bone: React.FC<{a: THREE.Vector3; b: THREE.Vector3; r: number; c: string}> = ({a, b, r, c}) => {
+            const dv = b.clone().sub(a), len = dv.length(), q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), dv.clone().normalize());
+            return <mesh position={a.clone().add(b).multiplyScalar(.5).toArray() as V3} quaternion={q} material={MAT(c, {roughness:.6})} castShadow>
+              <capsuleGeometry args={[r, Math.max(.001, len-2*r), 6, 12]} /></mesh>;
+          };
+          const Ball: React.FC<{p: THREE.Vector3; r: number; c: string}> = ({p, r, c}) =>
+            <mesh position={p.toArray() as V3} material={MAT(c, {roughness:.65})} castShadow><sphereGeometry args={[r, 16, 12]} /></mesh>;
+
+          const faceTexes = new Map<string, THREE.CanvasTexture>();
+          const FW = 512, FH = 256;
+          const fx = (x: number) => 128 + Math.asin(Math.max(-1, Math.min(1, x/.135)))*(FW/360)*0.9;
+          const fy = (y: number) => 128 - Math.asin(Math.max(-1, Math.min(1, y/.135)))*(FH/180)*0.9;
+          export type Face = {eyes?: 'dot'|'wide'|'happy'|'sleepy'|'closed'; mouth?: 'grin'|'smile'|'flat'|'frown'|'wobble'|'o'|'scream'|'talk'; brow?: number; blush?: boolean; look?: [number, number]};
+          const drawFace = (c: CanvasRenderingContext2D, skin: string, f: Face, t: number) => {
+            c.fillStyle = skin; c.fillRect(0,0,FW,FH);
+            const g = c.createRadialGradient(128,120,20,128,120,140); g.addColorStop(0,'rgba(255,235,210,.18)'); g.addColorStop(1,'rgba(120,60,40,.25)'); c.fillStyle = g; c.fillRect(0,0,FW,FH);
+            const eyes = f.eyes || 'dot', blink = Math.sin(t*2.3) > .985 || eyes === 'closed', lk = f.look || [0,0];
+            if (f.blush) for (const sx of [-1,1]) { c.fillStyle = 'rgba(230,120,110,.4)'; c.beginPath(); c.ellipse(fx(sx*.05), fy(-.03), 22, 13, 0, 0, 6.3); c.fill(); }
+            for (const sx of [-1,1]) {
+              const cx = fx(sx*.05), cy = fy(.02), rx = 22;
+              if (blink || eyes === 'sleepy') { c.strokeStyle = '#2a1a16'; c.lineWidth = 6; c.beginPath(); c.moveTo(cx-rx,cy); c.quadraticCurveTo(cx,cy+6,cx+rx,cy); c.stroke(); }
+              else if (eyes === 'happy') { c.strokeStyle = '#2a1a16'; c.lineWidth = 6; c.beginPath(); c.arc(cx,cy+6,rx*.9,Math.PI*1.1,Math.PI*1.9); c.stroke(); }
+              else {
+                c.fillStyle = '#f4efe8'; c.beginPath(); c.ellipse(cx,cy,rx,rx*.6,0,0,6.3); c.fill();
+                c.fillStyle = '#2a1a10'; c.beginPath(); c.arc(cx+lk[0]*6, cy+lk[1]*5, rx*.42, 0, 6.3); c.fill();
+                c.fillStyle = '#000'; c.beginPath(); c.arc(cx+lk[0]*6, cy+lk[1]*5, rx*.2, 0, 6.3); c.fill();
+                c.fillStyle = '#fff'; c.beginPath(); c.arc(cx+lk[0]*6-rx*.14, cy+lk[1]*5-rx*.16, rx*.1, 0, 6.3); c.fill();
+                c.strokeStyle = '#22140f'; c.lineWidth = 5; c.beginPath(); c.ellipse(cx,cy,rx,rx*.62,0,Math.PI*1.05,Math.PI*1.95); c.stroke();
+              }
+              if (f.brow) { c.strokeStyle = '#2a1a16'; c.lineWidth = 5; const by = fy(.06), s2 = f.brow*sx*8; c.beginPath(); c.moveTo(cx-16, by+s2); c.lineTo(cx+16, by-s2); c.stroke(); }
+            }
+            const m = f.mouth || 'smile', mx = fx(0), my = fy(-.05);
+            c.strokeStyle = '#7a3a38'; c.fillStyle = '#d27a74'; c.lineWidth = 6;
+            if (m === 'smile') { c.beginPath(); c.moveTo(mx-26,my); c.quadraticCurveTo(mx,my+18,mx+26,my); c.stroke(); }
+            else if (m === 'grin') { c.fillStyle = '#4a1a1c'; c.beginPath(); c.ellipse(mx,my+8,32,16,0,0,6.3); c.fill(); c.fillStyle = '#f6f2ea'; c.fillRect(mx-30,my-2,60,9); }
+            else if (m === 'flat') { c.beginPath(); c.moveTo(mx-22,my); c.lineTo(mx+22,my); c.stroke(); }
+            else if (m === 'frown') { c.beginPath(); c.moveTo(mx-22,my+6); c.quadraticCurveTo(mx,my-6,mx+22,my+6); c.stroke(); }
+            else if (m === 'talk') { const o = .4+.6*Math.abs(Math.sin(t*13)); c.fillStyle = '#3a1218'; c.beginPath(); c.ellipse(mx,my+6,14,10*o,0,0,6.3); c.fill(); }
+            else if (m === 'o' || m === 'wobble') { c.fillStyle = '#3a1218'; c.beginPath(); c.ellipse(mx,my+6,12,14,0,0,6.3); c.fill(); }
+            else if (m === 'scream') { c.fillStyle = '#4a1426'; c.beginPath(); c.ellipse(mx,my+8,26,30,0,0,6.3); c.fill(); }
+          };
+          const useFaceTex = (id: string, skin: string, f: Face, t: number) => {
+            let tx = faceTexes.get(id);
+            if (!tx) { const cv = document.createElement('canvas'); cv.width = FW; cv.height = FH; tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; faceTexes.set(id, tx); }
+            const ctx = (tx.image as HTMLCanvasElement).getContext('2d')!; drawFace(ctx, skin, f, t); tx.needsUpdate = true; return tx;
+          };
+
+          export type CharP = {
+            id: string; pos: V3; rotY?: number; s?: number; pose?: Pose;
+            skin?: string; top?: string; pants?: string; shoe?: string; hairCol?: string; hair?: 'short'|'spiky'|'bun'|'bald';
+            face?: Face; t?: number; prop?: 'phone'|'cup'|'case'|'env'; sweat?: boolean;
+            wL?: V3; wR?: V3; fL?: V3; fR?: V3;
+          };
+
+          export const Character: React.FC<CharP> = (p) => {
+            const t = p.t || 0, D = DM, pose = p.pose || POSE.stand;
+            const skin = p.skin || '#e8b98f', top = p.top || '#3a7ca5', pants = p.pants || '#2c3550', shoe = p.shoe || '#1a1825';
+            const hc = p.hairCol || '#2a1d18', hair = p.hair || 'short';
+            const face = useFaceTex(p.id, skin, p.face || {}, t);
+            const bob = Math.sin(t*1.8)*.006;
+            const stand = D.thigh+D.shin+D.ankle, hip = stand + (D.seat-stand)*pose.sitH + bob;
+            const P = new THREE.Vector3(0, hip, 0), qT = new THREE.Quaternion().setFromEuler(new THREE.Euler(-pose.lean,0,0));
+            const toChar = (v: THREE.Vector3) => v.clone().applyQuaternion(qT).add(P);
+            const shY = .07+D.torsoH-.05, neckBase = .07+D.torsoH, headC = neckBase+D.neckL+D.headR*D.SY*.88;
+            const sL = toChar(new THREE.Vector3(-D.shX,shY,0)), sR = toChar(new THREE.Vector3(D.shX,shY,0));
+            let tL: THREE.Vector3|null = p.wL ? new THREE.Vector3(...p.wL) : null, tR: THREE.Vector3|null = p.wR ? new THREE.Vector3(...p.wR) : null;
+            if (p.prop === 'phone') tR = toChar(new THREE.Vector3(.1, neckBase+.03, D.torsoD/2+.16));
+            if (p.prop === 'cup') tR = toChar(new THREE.Vector3(.1, .07+D.torsoH*.75, D.torsoD/2+.16));
+            const aL = tL ? ik2(sL, tL, D.arm1, D.arm2, new THREE.Vector3(-.8,.2,-.3)) : fkArm(sL,-1,pose.aL,D.arm1,D.arm2);
+            const aR = tR ? ik2(sR, tR, D.arm1, D.arm2, new THREE.Vector3(.8,.2,-.3)) : fkArm(sR,1,pose.aR,D.arm1,D.arm2);
+            const hL = new THREE.Vector3(-D.hipX, hip-.01, 0), hR = new THREE.Vector3(D.hipX, hip-.01, 0);
+            const lL = p.fL ? ik2(hL, new THREE.Vector3(...p.fL), D.thigh, D.shin, new THREE.Vector3(0,1,.4)) : fkLeg(hL,-1,pose.lL,D.thigh,D.shin);
+            const lR = p.fR ? ik2(hR, new THREE.Vector3(...p.fR), D.thigh, D.shin, new THREE.Vector3(0,1,.4)) : fkLeg(hR,1,pose.lR,D.thigh,D.shin);
+
+            return (
+              <group position={p.pos} rotation={[0,p.rotY||0,0]} scale={p.s||1}>
+                <Ball p={hL} r={D.rL1} c={pants} /><Ball p={hR} r={D.rL1} c={pants} />
+                <Bone a={hL} b={lL.E} r={D.rL1} c={pants} /><Ball p={lL.E} r={D.rL1*.95} c={pants} /><Bone a={lL.E} b={lL.W} r={D.rL2} c={pants} />
+                <Bone a={hR} b={lR.E} r={D.rL1} c={pants} /><Ball p={lR.E} r={D.rL1*.95} c={pants} /><Bone a={lR.E} b={lR.W} r={D.rL2} c={pants} />
+                {[lL.W, lR.W].map((A,i) => (
+                  <mesh key={i} position={[A.x, A.y-.03, A.z+.04]} material={MAT(shoe, {roughness:.4})} castShadow>
+                    <boxGeometry args={D.foot} /></mesh>
+                ))}
+                <mesh position={[0, hip+D.pelH*.35, 0]} material={MAT(pants, {roughness:.7})} castShadow>
+                  <boxGeometry args={[D.pelW, D.pelH, D.torsoD*.95]} /></mesh>
+                <group position={P.toArray() as V3} quaternion={qT}>
+                  <mesh position={[0, .07+D.torsoH/2, 0]} material={MAT(top, {roughness:.55})} castShadow receiveShadow>
+                    <boxGeometry args={[D.torsoW, D.torsoH, D.torsoD]} /></mesh>
+                  <mesh position={[0, .07+D.torsoH-.02, D.torsoD/2+.005]} material={MAT('#f5f2ec', {roughness:.5})}>
+                    <planeGeometry args={[.14,.07]} /></mesh>
+                  <mesh position={[0, .07+D.torsoH*.55, D.torsoD/2+.006]} material={MAT('#a02828', {roughness:.45})}>
+                    <planeGeometry args={[.05,.18]} /></mesh>
+                  <mesh position={[0, neckBase+D.neckL*.5, 0]} material={MAT(skin, {roughness:.7})} castShadow>
+                    <cylinderGeometry args={[D.rN,D.rN,D.neckL,16]} /></mesh>
+                  <group position={[0, headC, 0]}>
+                    <mesh scale={[1,D.SY,1]} castShadow>
+                      <sphereGeometry args={[D.headR, 32, 24]} />
+                      <meshStandardMaterial map={face} roughness={.75} />
+                    </mesh>
+                    <mesh position={[0, -.005, D.headR+.005]} material={MAT(skin, {roughness:.7})} castShadow>
+                      <coneGeometry args={[.018,.04,12]} /></mesh>
+                    {[-1,1].map(sx => <mesh key={sx} position={[sx*D.headR*.98, -.01, 0]} scale={[.5,1,.7]} material={MAT(skin,{roughness:.75})}><sphereGeometry args={[D.headR*.18,12,10]} /></mesh>)}
+                    {hair !== 'bald' && <mesh material={MAT(hc, {roughness:.85})} castShadow>
+                      <sphereGeometry args={[D.headR*1.06, 24, 16, 0, Math.PI*2, 0, Math.PI*.62]} /></mesh>}
+                    {hair === 'bun' && <mesh position={[0, D.headR*.55, -D.headR*.85]} material={MAT(hc,{roughness:.85})}><sphereGeometry args={[D.headR*.4,16,12]} /></mesh>}
+                  </group>
+                  <Bone a={sL} b={aL.E} r={D.rA1 ?? .047} c={top} /><Ball p={aL.E} r={(D.rA1 ?? .047)*.95} c={top} /><Bone a={aL.E} b={aL.W} r={D.rA2 ?? .038} c={top} /><Ball p={aL.W} r={D.hand} c={skin} />
+                  <Bone a={sR} b={aR.E} r={D.rA1 ?? .047} c={top} /><Ball p={aR.E} r={(D.rA1 ?? .047)*.95} c={top} /><Bone a={aR.E} b={aR.W} r={D.rA2 ?? .038} c={top} /><Ball p={aR.W} r={D.hand} c={skin} />
+                  {p.prop === 'phone' && aR.W && <mesh position={[aR.W.x, aR.W.y+.02, aR.W.z+.02]} rotation={[.2,0,0]} material={MAT('#1a1a22', {roughness:.2, metalness:.5})}>
+                    <boxGeometry args={[.07,.14,.012]} /></mesh>}
+                </group>
+              </group>
+            );
+          };
+          EOF
+
+          cat > src/lib/Set.tsx <<'EOF'
+          import React, {useMemo} from 'react';
+          import * as THREE from 'three';
+          import {MAT, V3} from './core';
+
+          export const PALS: Record<string, any> = {
+            dusk: {wall:'#2a2038', floor:'#1a1424', accent:'#ff9a5a', l1:'#ffd6a0', l2:'#7a6aff'},
+          };
+
+          export const Room: React.FC<{w:number;d:number;h:number;pal:string}> = ({w,d,h,pal}) => {
+            const P = PALS[pal] || PALS.dusk;
+            return (
+              <group>
+                <mesh rotation={[-Math.PI/2,0,0]} position={[0,0,d/2]} receiveShadow>
+                  <planeGeometry args={[w,d]} /><meshStandardMaterial color={P.floor} roughness={.8} metalness={.1} /></mesh>
+                <mesh position={[0,h/2,0]} receiveShadow>
+                  <planeGeometry args={[w,h]} /><meshStandardMaterial color={P.wall} roughness={.9} /></mesh>
+                <mesh rotation={[0,Math.PI/2,0]} position={[-w/2,h/2,d/2]} receiveShadow>
+                  <planeGeometry args={[d,h]} /><meshStandardMaterial color={P.wall} roughness={.9} /></mesh>
+                <mesh rotation={[0,-Math.PI/2,0]} position={[w/2,h/2,d/2]} receiveShadow>
+                  <planeGeometry args={[d,h]} /><meshStandardMaterial color={P.wall} roughness={.9} /></mesh>
+              </group>
+            );
+          };
+
+          export const Lights: React.FC<{pal?:string}> = ({pal='dusk'}) => {
+            const P = PALS[pal] || PALS.dusk;
+            return (
+              <>
+                <ambientLight intensity={.35} color="#9a8ab0" />
+                <directionalLight position={[3,5,4]} intensity={1.2} color={P.l1} castShadow shadow-mapSize={[1024,1024]} />
+                <pointLight position={[-2,2.5,3]} intensity={.8} color={P.l2} distance={8} />
+                <pointLight position={[2,2,1.5]} intensity={.5} color={P.accent} distance={6} />
+              </>
+            );
+          };
+
+          export const Pt: React.FC<{color:string; intensity:number; distance:number; position:V3}> = (p) =>
+            <pointLight {...p} castShadow />;
+
+          export const Pendant: React.FC<{pos: V3}> = ({pos}) => (
+            <group position={pos}>
+              <mesh position={[0,.6,0]}><cylinderGeometry args={[.005,.005,1.2,8]} /><meshStandardMaterial color="#222" /></mesh>
+              <mesh material={MAT('#333', {metalness:.7, roughness:.3})}><coneGeometry args={[.12,.14,24,1,true]} /></mesh>
+              <pointLight position={[0,-.05,0]} intensity={1.2} color="#ffd9a0" distance={4} castShadow />
+            </group>
+          );
+
+          export const Desk: React.FC<{pos:V3; w:number; d:number; col:string}> = ({pos,w,d,col}) => (
+            <group position={pos}>
+              <mesh position={[0,.77,0]} material={MAT(col, {roughness:.4})} castShadow receiveShadow>
+                <boxGeometry args={[w,.05,d]} /></mesh>
+              {[[-1,-1],[1,-1],[-1,1],[1,1]].map(([x,z],i) => (
+                <mesh key={i} position={[x*(w/2-.06), .38, z*(d/2-.06)]} material={MAT('#1a1525', {metalness:.6, roughness:.4})} castShadow>
+                  <boxGeometry args={[.04,.76,.04]} /></mesh>
+              ))}
+            </group>
+          );
+
+          export const Chair: React.FC<{pos:V3; rot?:number; col?:string}> = ({pos, rot=0, col='#2a2038'}) => (
+            <group position={pos} rotation={[0,rot,0]}>
+              <mesh position={[0,.44,0]} material={MAT(col,{roughness:.7})} castShadow><boxGeometry args={[.42,.06,.42]} /></mesh>
+              <mesh position={[0,.7,-.18]} material={MAT(col,{roughness:.7})} castShadow><boxGeometry args={[.42,.5,.06]} /></mesh>
+              <mesh position={[0,.22,0]} material={MAT('#1a1525',{metalness:.7,roughness:.3})}><cylinderGeometry args={[.03,.03,.44,12]} /></mesh>
+            </group>
+          );
+
+          const makeScreenTex = (type: string) => {
+            const cv = document.createElement('canvas'); cv.width = 512; cv.height = 320;
+            const c = cv.getContext('2d')!;
+            c.fillStyle = '#0a1020'; c.fillRect(0,0,512,320);
+            if (type === 'chat') {
+              c.fillStyle = '#1e2a45'; c.fillRect(0,0,512,50);
+              c.fillStyle = '#e0e8ff'; c.font = 'bold 22px Inter'; c.fillText('Messages', 20, 34);
+              const msgs = [['AI HATE?', '#ff5577'], ['#trending', '#ffaa44'], ['Explain yourself', '#88bbff']];
+              msgs.forEach(([txt,col], i) => {
+                c.fillStyle = '#2a3a5a'; c.beginPath(); c.roundRect(20, 80+i*70, 380, 50, 20); c.fill();
+                c.fillStyle = col as string; c.font = '18px Inter'; c.fillText(txt as string, 40, 110+i*70);
+              });
+            } else if (type === 'chart') {
+              c.fillStyle = '#e0e8ff'; c.font = 'bold 28px Inter'; c.fillText('ENGAGEMENT', 30, 50);
+              const pts = [40,120,80,180,220,280,320,400];
+              c.strokeStyle = '#4ac0b0'; c.lineWidth = 6; c.beginPath();
+              pts.forEach((y,i) => { const x = 40+i*60; if(i===0)c.moveTo(x,320-y); else c.lineTo(x,320-y); }); c.stroke();
+              c.fillStyle = '#4ac0b0'; pts.forEach((y,i) => { c.beginPath(); c.arc(40+i*60,320-y,8,0,6.3); c.fill(); });
+            } else if (type === 'slide') {
+              c.fillStyle = '#1a2040'; c.fillRect(0,0,512,320);
+              c.fillStyle = '#ffd9a0'; c.font = 'bold 36px Inter'; c.fillText('PROBLEM SOLVING', 40, 90);
+              c.fillStyle = '#88bbff'; c.font = '22px Inter';
+              ['1. Understand', '2. Break down', '3. Prompt clearly', '4. Verify'].forEach((s,i) => c.fillText(s, 50, 150+i*38));
+            } else if (type === 'whiteboard') {
+              c.fillStyle = '#f4f4ee'; c.fillRect(0,0,512,320);
+              c.strokeStyle = '#3a6a9a'; c.lineWidth = 4;
+              c.strokeRect(30,40,450,240);
+              c.fillStyle = '#2a4060'; c.font = 'bold 28px Montserrat';
+              c.fillText('AI PROBLEM', 60, 100); c.fillText('SOLVING', 60, 140);
+              c.strokeStyle = '#aa3355'; c.beginPath(); c.moveTo(80,180); c.lineTo(420,180); c.stroke();
+              c.fillStyle = '#2a4060'; c.font = '20px Inter';
+              c.fillText('1. Listen  2. Analyze  3. Act', 80, 230);
+            }
+            const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8; return tx;
+          };
+
+          export const Monitor: React.FC<{pos:V3; rot?:V3; kind:string; s?:number}> = ({pos, rot=[0,0,0], kind, s=1}) => {
+            const tex = useMemo(() => makeScreenTex(kind), [kind]);
+            return (
+              <group position={pos} rotation={rot} scale={s}>
+                <mesh material={MAT('#0a0a12',{roughness:.2,metalness:.4})} castShadow><boxGeometry args={[.62,.42,.03]} /></mesh>
+                <mesh position={[0,0,.017]} material={new THREE.MeshBasicMaterial({map: tex, toneMapped: false})}>
+                  <planeGeometry args={[.58,.38]} /></mesh>
+                <mesh position={[0,-.22,0]} material={MAT('#1a1a22',{metalness:.8,roughness:.3})}>
+                  <cylinderGeometry args={[.02,.03,.06,12]} /></mesh>
+                <mesh position={[0,-.26,.02]} material={MAT('#1a1a22',{metalness:.8,roughness:.3})}>
+                  <boxGeometry args={[.18,.015,.12]} /></mesh>
+              </group>
+            );
+          };
+
+          export const Art: React.FC<{kind:string; data?:any; pos:V3; rot?:V3; w:number}> = ({kind,pos,rot=[0,0,0],w}) => {
+            const tex = useMemo(() => makeScreenTex(kind), [kind]);
+            const h = w*0.625;
+            return (
+              <group position={pos} rotation={rot}>
+                <mesh material={MAT('#2a2038',{roughness:.5})}><boxGeometry args={[w+.04,h+.04,.02]} /></mesh>
+                <mesh position={[0,0,.012]} material={new THREE.MeshBasicMaterial({map: tex, toneMapped: false})}>
+                  <planeGeometry args={[w,h]} /></mesh>
+              </group>
+            );
+          };
+          EOF
+                - name: Write storyboard AI sosmed
+        run: |
+          cat > src/shots.tsx <<'EOF'
+          import React from 'react';
+          import {Character, POSE, mixPose} from './lib/Character';
+          import {Room, Lights, Desk, Chair, Monitor, Art, Pt, Pendant} from './lib/Set';
+          import {CamSpec, eo3, camLerp} from './lib/core';
+
+          const Scene: React.FC<{children: React.ReactNode}> = ({children}) => (
+            <>
+              <color attach="background" args={['#1a1626']} />
+              <Lights pal="dusk" />
+              <Room w={7} d={7} h={3.2} pal="dusk" />
+              {children}
+            </>
+          );
+
+          const camWide = (p: number): CamSpec => camLerp(
+            {p:[1.2,1.55,4.5], l:[0,1.0,1.4], fov: 42},
+            {p:[0.8,1.45,3.6], l:[0,1.1,1.4], fov: 46}, eo3(p));
+          const camClose = (p: number): CamSpec => camLerp(
+            {p:[0.6,1.35,3.0], l:[0,1.2,1.5], fov: 50, roll: .02},
+            {p:[0.4,1.25,2.4], l:[0,1.25,1.5], fov: 56, roll: -.015}, eo3(p));
+          const camDolly = (p: number): CamSpec => {
+            const fov = 48 + 52*p;
+            const dist = 1.4 / Math.tan((fov*Math.PI/180)/2);
+            return {p:[0, 1.35, 1.4+dist], l:[0, 1.2, 1.2], fov};
+          };
+          const camLow = (p: number): CamSpec => camLerp(
+            {p:[-1.4,.6,3.2], l:[0,1.0,1.4], fov: 50, roll: -.05},
+            {p:[-1.0,.9,2.8], l:[0,1.0,1.4], fov: 54, roll: .04}, eo3(p));
+
+          const S1: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Desk pos={[0,0,1.4]} w={1.8} d={.9} col="#3a2a4a" />
+              <Monitor pos={[0,.77,1.4]} rot={[0,0,0]} kind="chat" s={1.1} />
+              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.sit} t={u}
+                top="#e08a5a" pants="#2c3550" hair="short"
+                face={{eyes:'wide', mouth:'o', brow:.8}} />
+              <Pt color="#ff8866" intensity={1} distance={3} position={[0,1.8,1.2]} />
+            </Scene>
+          );
+
+          const S2: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Character id="u1" pos={[0,0,2.3]} rotY={0} pose={POSE.hold} t={u} prop="phone"
+                top="#e08a5a" face={{eyes:'wide', mouth:'frown', brow:1}} />
+              <Art kind="chat" pos={[0.9,1.4,0.06]} w={.7} />
+              <Art kind="chart" pos={[-0.9,1.3,0.06]} w={.6} />
+              <Pt color="#ff5577" intensity={1.2} distance={4} position={[.9,1.8,1]} />
+            </Scene>
+          );
+
+          const S3: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Desk pos={[0,0,1.4]} w={1.6} d={.8} col="#3a2a4a" />
+              <Monitor pos={[0,.77,1.4]} kind="slide" s={.95} />
+              <Character id="u1" pos={[0,0,2.15]} rotY={0} pose={POSE.desk} t={u}
+                wL={[-.2,.83,.3]} wR={[.2,.83,.3]} top="#e08a5a" face={{eyes:'dot', mouth:'flat'}} />
+            </Scene>
+          );
+
+          const S4: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Art kind="whiteboard" pos={[-1.4,1.6,0.06]} w={1.2} />
+              <Character id="u1" pos={[-.5,0,1.9]} rotY={Math.PI/2} pose={POSE.push} t={u}
+                wR={[-.15,1.3,.2]} top="#e08a5a" face={{eyes:'dot', mouth:'talk', brow:-.4}} />
+              <Pendant pos={[-1.0,2.6,1.5]} />
+            </Scene>
+          );
+
+          const S5: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Desk pos={[0,0,1.4]} w={1.6} d={.8} col="#3a2a4a" />
+              <Monitor pos={[0,.77,1.4]} kind="slide" s={.95} />
+              <Character id="u1" pos={[0,0,2.15]} rotY={0} pose={POSE.sit} t={u}
+                wL={[-.22,.83,.3]} wR={[.22,.83,.3]} top="#e08a5a"
+                face={{eyes:'happy', mouth:'talk'}} />
+            </Scene>
+          );
+
+          const S6: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Art kind="chart" pos={[0,1.3,0.06]} w={.9} />
+              <Character id="u2" pos={[-.6,0,2.1]} rotY={.3} pose={POSE.cheer} t={u}
+                top="#4ac0b0" hair="bun" face={{eyes:'happy', mouth:'grin', blush:true}} />
+            </Scene>
+          );
+
+          const S7: React.FC<{p:number;u:number}> = ({u}) => {
+            const a = u<.8, b = u>=.8&&u<1.6, c = u>=1.6;
+            return (
+              <Scene>
+                {a && <Character id="u1" pos={[0,0,2.1]} rotY={0} pose={POSE.wave} t={u} top="#e08a5a" face={{eyes:'dot', mouth:'smile'}} />}
+                {b && <Monitor pos={[0,1.2,.06]} kind="slide" s={.9} />}
+                {c && <Character id="u1" pos={[0,0,2.1]} rotY={0} pose={POSE.cheer} t={u+1} top="#e08a5a" face={{eyes:'happy', mouth:'grin', blush:true}} />}
+              </Scene>
+            );
+          };
+
+          const S8: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Art kind="chart" pos={[0,1.3,0.06]} w={1.0} />
+              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={mixPose(POSE.hold, POSE.cheer, u/2)} t={u}
+                top="#e08a5a" face={{eyes:'wide', mouth:'o', brow:-.5}} />
+              <Pt color="#4ac0b0" intensity={1.5} distance={5} position={[0,2,1.5]} />
+            </Scene>
+          );
+
+          const S9: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Character id="u1" pos={[-.5,0,2.1]} rotY={.2} pose={POSE.stand} t={u} top="#e08a5a"
+                face={{eyes:'happy', mouth:'grin', blush:true}} />
+              <Character id="u2" pos={[.5,0,2.2]} rotY={-.2} pose={POSE.cheer} t={u+.5} top="#4ac0b0" hair="bun"
+                face={{eyes:'happy', mouth:'grin'}} />
+              <Pt color="#ffd6a0" intensity={1.2} distance={5} position={[0,2.2,1.5]} />
+            </Scene>
+          );
+
+          const S10: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Art kind="whiteboard" pos={[-1.2,1.5,0.06]} w={1.1} />
+              <Character id="u1" pos={[.2,0,2.0]} rotY={Math.PI/2.2} pose={POSE.push} t={u} top="#e08a5a"
+                wR={[.1,1.2,.15]} face={{eyes:'dot', mouth:'talk'}} />
+            </Scene>
+          );
+
+          const S11: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Character id="u1" pos={[0,0,2.1]} rotY={0} pose={POSE.hold} t={u} top="#e08a5a"
+                face={{eyes:'sleepy', mouth:'flat', brow:.3}} />
+              <Pendant pos={[0,2.7,1.8]} />
+            </Scene>
+          );
+
+          const S12: React.FC<{p:number;u:number}> = ({u}) => (
+            <Scene>
+              <Desk pos={[0,0,1.4]} w={1.8} d={.9} col="#3a2a4a" />
+              <Monitor pos={[0,.77,1.4]} kind="chart" s={1.05} />
+              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.sit} t={u} top="#e08a5a"
+                face={{eyes:'happy', mouth:'smile', blush:true}} />
+              <Pt color="#ffd6a0" intensity={1.4} distance={5} position={[0,2,1.5]} />
+            </Scene>
+          );
+
+          export const SHOTS: any[] = [
+            {d:2.0, cam:camLow, Scene:S1, g:{tint:'#ff9a5a', ti:.12, vig:.55}},
+            {d:2.2, cam:camWide, Scene:S2, g:{tint:'#ff5577', ti:.1, vig:.6}},
+            {d:2.0, cam:camClose, Scene:S3, g:{tint:'#7a6aff', ti:.08, vig:.55}},
+            {d:2.4, cam:camWide, Scene:S4, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
+            {d:2.0, cam:camClose, Scene:S5, g:{tint:'#7a6aff', ti:.08, vig:.55}},
+            {d:2.0, cam:camWide, Scene:S6, g:{tint:'#4ac0b0', ti:.1, vig:.5}},
+            {d:1.8, cam:camClose, Scene:S7, g:{tint:'#ffd6a0', ti:.12, vig:.5, flash:.15}},
+            {d:2.4, cam:camDolly, Scene:S8, g:{tint:'#4ac0b0', ti:.14, vig:.6, lines:(p:number)=>Math.max(0,1-Math.abs(p-.6)*4)*.8}},
+            {d:2.0, cam:camWide, Scene:S9, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
+            {d:2.2, cam:camLow, Scene:S10, g:{tint:'#ffd6a0', ti:.08, vig:.55}},
+            {d:2.0, cam:camClose, Scene:S11, g:{tint:'#7a6aff', ti:.06, vig:.65}},
+            {d:2.4, cam:camWide, Scene:S12, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
+          ];
+          EOF
+      - name: Stub lib tambahan
+        run: |
+          cat > src/lib/tex.ts <<'EOF'
+          export {};
+          EOF
+          cat > src/lib/art.ts <<'EOF'
+          export const ART_ASPECT = (_k: string) => 0.625;
+          export {};
+          EOF
+          cat > src/lib/Art.tsx <<'EOF'
+          export {};
+          EOF
+          cat > src/lib/i18n.ts <<'EOF'
+          export const allText = () => '';
+          export const LANG = 'en';
+          export {};
+          EOF
+
+      - name: Install deps
         run: npm install --no-audit --no-fund
 
-      - name: Render (no audio)
+      - name: Render (tanpa audio)
         env:
           CONC: '2'
           GL: 'swangle'
-        run: |
-          # Durasi total = jumlah d = 24.8s -> 744 frame @30fps. Script render memakai env TS bila tersedia.
-          export TS=$(node -e "const s=require('./src/shots.tsx');" 2>/dev/null || echo 24.8)
-          sh scripts/render.sh ai_sosmed.mp4
+        run: sh scripts/render.sh ai_sosmed.mp4
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
