@@ -260,7 +260,7 @@ jobs:
             const q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(l[2], 0, 0, 'XYZ'));
             const K = H.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q1).multiplyScalar(L1));
             const A = K.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q2).applyQuaternion(q1).multiplyScalar(L2));
-            return {K, A};
+            return {E: K, W: A};
           };
 
           const Bone: React.FC<{a: THREE.Vector3; b: THREE.Vector3; r: number; c: string}> = ({a, b, r, c}) => {
