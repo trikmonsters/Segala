@@ -1,0 +1,244 @@
+name: Render Reel 3D Optimized
+
+on:
+  workflow_dispatch:
+    inputs:
+      audio_file:
+        description: 'Path file audio di repo (kosongkan jika public/narration.wav & src/captions.json sudah siap)'
+        required: false
+        default: 'audio_anda.mp3'
+        type: string
+      script_file:
+        description: 'Path file naskah teks'
+        required: false
+        default: 'example/naskah.txt'
+        type: string
+      lang:
+        description: 'Kode bahasa (id, en, ja, dll)'
+        required: false
+        default: 'id'
+        type: string
+      output_name:
+        description: 'Nama file MP4 keluaran'
+        required: false
+        default: 'hasil_sosmed.mp4'
+        type: string
+
+concurrency:
+  group: render-reel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: 1. Prepare Audio & Bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      total_frames: ${{ steps.prep.outputs.frames }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache node_modules & npm
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node22-deps-${{ hashFiles('package.json', 'package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node22-deps-
+
+      - name: Install dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --no-audit --no-fund
+
+      - name: Prepare audio, captions, fonts & bundle
+        id: prep
+        run: |
+          AUDIO="${{ inputs.audio_file }}"
+          SCRIPT="${{ inputs.script_file }}"
+          LANG_CODE="${{ inputs.lang }}"
+
+          if [ -n "$AUDIO" ] && [ -f "$AUDIO" ]; then
+            if [ -n "$SCRIPT" ] && [ -f "$SCRIPT" ]; then
+              sh scripts/prepare.sh "$AUDIO" --script "$SCRIPT" --lang "$LANG_CODE"
+            else
+              sh scripts/prepare.sh "$AUDIO" --asr --lang "$LANG_CODE"
+            fi
+          else
+            echo "Audio input '$AUDIO' tidak ditemukan, memakai public/narration.wav & src/captions.json yang sudah ada."
+            [ -f public/narration.wav ] && [ -f src/captions.json ] || {
+              echo "ERROR: File audio '$AUDIO' maupun public/narration.wav tidak ditemukan!"
+              exit 1
+            }
+            node scripts/setup-fonts.mjs "$LANG_CODE"
+          fi
+
+          FRAMES=$(node -e "const c=require('./src/captions.json'); console.log(Math.max(30, Math.ceil((c.duration + 0.6) * 30)))")
+          echo "frames=$FRAMES" >> "$GITHUB_OUTPUT"
+          echo "Total frames to render: $FRAMES"
+
+          npx remotion bundle src/index.ts --out-dir remotion-bundle
+
+      - name: Upload prepared bundle & audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: remotion-prepared
+          path: |
+            remotion-bundle
+            public/narration.wav
+            src/captions.json
+          retention-days: 1
+
+  render-worker:
+    name: 2. Render Worker ${{ matrix.worker }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [0, 1, 2, 3, 4, 5]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Restore node_modules cache
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node22-deps-${{ hashFiles('package.json', 'package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node22-deps-
+
+      - name: Install dependencies (fallback if cache missed)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --no-audit --no-fund
+
+      - name: Cache Remotion Chrome Headless Shell
+        id: cache-browser
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.remotion
+          key: ${{ runner.os }}-remotion-browser-${{ hashFiles('package.json', 'package-lock.json') }}
+
+      - name: Install Chromium OS dependencies & ensure browser
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libnss3 libgbm1 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+            libxrandr2 libpango-1.0-0 libcairo2 libexpat1 libxshmfence1 || true
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2 || true
+          npx remotion browser ensure
+
+      - name: Download prepared bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: remotion-prepared
+
+      - name: Render assigned frame range
+        run: |
+          FRAMES=${{ needs.prepare.outputs.total_frames }}
+          WORKERS=6
+          W=${{ matrix.worker }}
+          CHUNK=$(( (FRAMES + WORKERS - 1) / WORKERS ))
+          START=$(( W * CHUNK ))
+          END=$(( START + CHUNK - 1 ))
+          if [ "$END" -ge "$FRAMES" ]; then END=$(( FRAMES - 1 )); fi
+
+          mkdir -p chunks
+          if [ "$START" -ge "$FRAMES" ]; then
+            echo "Worker $W: no frames assigned (START=$START >= FRAMES=$FRAMES), skipping."
+            exit 0
+          fi
+
+          CORES=$(nproc)
+          if [ "$CORES" -ge 4 ]; then CONC=3; else CONC=2; fi
+          OUT_CHUNK=$(printf "chunks/part_%02d.mp4" "$W")
+
+          echo "Worker $W rendering frames $START-$END (total $FRAMES) | vCPU=$CORES | CONC=$CONC"
+          npx remotion render remotion-bundle Reel "$OUT_CHUNK" \
+            --frames="${START}-${END}" \
+            --muted \
+            --gl=swangle \
+            --concurrency="$CONC" \
+            --codec=h264 \
+            --crf=17 \
+            --log=error
+
+      - name: Upload rendered chunk
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-${{ matrix.worker }}
+          path: chunks/part_*.mp4
+          if-no-files-found: ignore
+          retention-days: 1
+
+  merge:
+    name: 3. Merge Video + Audio
+    needs: [prepare, render-worker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download prepared assets (narration.wav)
+        uses: actions/download-artifact@v4
+        with:
+          name: remotion-prepared
+
+      - name: Download all video chunks
+        uses: actions/download-artifact@v4
+        with:
+          pattern: chunk-*
+          merge-multiple: true
+          path: chunks
+
+      - name: Install ffmpeg if missing
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+
+      - name: Concat chunks, attach audio & generate contact sheet
+        run: |
+          mkdir -p out
+          OUT_NAME="${{ inputs.output_name }}"
+          ls chunks/part_*.mp4 | sort | sed "s#chunks/##; s/^/file '/; s/$/'/" > chunks/list.txt
+          cat chunks/list.txt
+
+          ffmpeg -v error -y -f concat -safe 0 -i chunks/list.txt -c copy out/video_silent.mp4
+          ffmpeg -v error -y -i out/video_silent.mp4 -i public/narration.wav \
+            -map 0:v -map 1:a -c:v copy -af apad -c:a aac -b:a 192k -shortest "out/$OUT_NAME"
+
+          echo "=== VERIFIKASI HASIL ==="
+          ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,width,height,r_frame_rate -of default=nw=1 "out/$OUT_NAME"
+
+          ffmpeg -v error -y -i "out/$OUT_NAME" -vf "fps=1/3,scale=360:-1,tile=4x3" -frames:v 1 out/preview_sheet.png || true
+
+      - name: Upload final MP4 & preview sheet
+        uses: actions/upload-artifact@v4
+        with:
+          name: reel-final-video
+          path: |
+            out/${{ inputs.output_name }}
+            out/preview_sheet.png
+          if-no-files-found: error
+          retention-days: 7
