@@ -96,7 +96,8 @@ jobs:
           export const Root: React.FC = () => <Composition id="Reel" component={Reel}
             durationInFrames={Math.max(30, Math.ceil(TOTAL_S * 30))} fps={30} width={1080} height={1920} />;
           EOF
-                - name: Write Reel (tanpa Caption)
+      
+      - name: Write Reel (tanpa Caption)
         run: |
           cat > src/Reel.tsx <<'EOF'
           import React, {useLayoutEffect} from 'react';
@@ -176,7 +177,8 @@ jobs:
           });
           export const TOTAL_S = cursor;
           EOF
-                - name: Write lib core (disederhanakan)
+      
+      - name: Write lib core (disederhanakan)
         run: |
           cat > src/lib/core.tsx <<'EOF'
           import * as THREE from 'three';
@@ -205,7 +207,8 @@ jobs:
           export const INK = '#1a1424';
           export {THREE};
           EOF
-                - name: Write karakter + set
+      
+      - name: Write karakter + set
         run: |
           cat > src/lib/Character.tsx <<'EOF'
           import React, {useMemo} from 'react';
@@ -508,7 +511,8 @@ jobs:
             );
           };
           EOF
-                - name: Write storyboard AI sosmed
+      
+      - name: Write storyboard AI sosmed
         run: |
           cat > src/shots.tsx <<'EOF'
           import React from 'react';
