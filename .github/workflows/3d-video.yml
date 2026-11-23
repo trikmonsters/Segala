@@ -1,4 +1,4 @@
-name: reel-ai-sosmed
+name: reel-comedy-2d
 on:
   workflow_dispatch:
   push:
@@ -17,31 +17,26 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y ffmpeg chromium-browser || sudo apt-get install -y ffmpeg chromium
-      - name: Write project
+      - name: Write project - Comedy 2D Anak Kos vs Kucing Oren
         run: |
           set -e
           rm -rf src scripts public out chunks
           mkdir -p src/lib scripts public out chunks
           python3 - <<'PY'
           import json, pathlib
-          # Build package.json via python so the font package name is written byte-exact, no chat markup can leak in
           font_pkg = "@fontsource/" + "".join(chr(c) for c in [105,110,116,101,114])
           pkg = {
-            "name": "reel-cartoon-3d",
+            "name": "reel-comedy-2d",
             "version": "1.0.0",
             "private": True,
             "dependencies": {
-              "@react-three/fiber": "^8.17.10",
               "@remotion/bundler": "^4.0.250",
               "@remotion/cli": "^4.0.250",
               "@remotion/renderer": "^4.0.250",
-              "@remotion/three": "^4.0.250",
               "@types/react": "18.3.3",
-              "@types/three": "0.169.0",
               "react": "^18.3.1",
               "react-dom": "^18.3.1",
               "remotion": "^4.0.250",
-              "three": "^0.169.0",
               "typescript": "5.5.4",
               "@fontsource/montserrat": "^5.1.0",
               "@fontsource/oswald": "^5.1.0",
@@ -51,8 +46,6 @@ jobs:
           }
           pkg["dependencies"][font_pkg] = "^5.1.0"
           pathlib.Path("package.json").write_text(json.dumps(pkg, indent=1))
-          print("package.json OK:", font_pkg)
-          # fonts.generated.ts - also built via python
           fam = ["Montserrat","Oswald","".join(chr(c) for c in [73,110,116,101,114]),"Caveat"]
           imp = "\n".join([
             "import '@fontsource/montserrat/800.css';",
@@ -64,8 +57,8 @@ jobs:
             "import '@fontsource/caveat/600.css';",
             "import '@fontsource/caveat/700.css';",
           ])
-          pathlib.Path("src/fonts.generated.ts").write_text(imp + f"\nexport const FAMILIES: string[] = {json.dumps(fam)};\nexport const CAPTION_STACK = 'Montserrat, Inter, sans-serif';\n")
-          print("fonts.generated.ts OK")
+          pathlib.Path("src/fonts.generated.ts").write_text(imp + f"\nexport const FAMILIES: string[] = {json.dumps(fam)};\n")
+          print("package OK")
           PY
           cat > tsconfig.json <<'EOF'
           {"compilerOptions":{"target":"ES2020","module":"ESNext","moduleResolution":"bundler","jsx":"react-jsx","strict":false,"skipLibCheck":true,"esModuleInterop":true,"types":["react"]}}
@@ -85,9 +78,6 @@ jobs:
           import {Root} from './Root';
           registerRoot(Root);
           EOF
-          cat > src/captions.json <<'EOF'
-          { "lang": "en", "duration": 0, "source": "none", "speech": {}, "words": [] }
-          EOF
           cat > src/Root.tsx <<'EOF'
           import React from 'react';
           import {Composition} from 'remotion';
@@ -96,599 +86,340 @@ jobs:
           export const Root: React.FC = () => <Composition id="Reel" component={Reel}
             durationInFrames={Math.max(30, Math.ceil(TOTAL_S * 30))} fps={30} width={1080} height={1920} />;
           EOF
+          cat > src/timeline.ts <<'EOF'
+          import {SHOTS} from './shots';
+          export type TLEntry = { a: number; D: number; d: number; Scene: React.FC<{p: number; u: number}>; cap?: string; sfx?: string; shake?: number; flash?: number };
+          let cursor = 0;
+          export const TL: TLEntry[] = SHOTS.map((s: any) => {
+            const e = { a: cursor, D: s.d, d: s.d, Scene: s.Scene, cap: s.cap, sfx: s.sfx, shake: s.shake, flash: s.flash };
+            cursor += s.d; return e;
+          });
+          export const TOTAL_S = cursor;
+          EOF
+          cat > src/lib/characters.tsx <<'EOF'
+          import React from 'react';
+
+          export const Caption: React.FC<{text: string; sub?: string; color?: string}> = ({text, sub, color='#FFD93D'}) => (
+            <div style={{position:'absolute', left:0, right:0, top: 110, textAlign:'center', zIndex: 50, padding: '0 40px'}}>
+              <div style={{display:'inline-block', background: '#111', border: '4px solid #fff', borderRadius: 28, padding: '14px 28px', transform: 'rotate(-1.5deg)', boxShadow: '0 10px 0 rgba(0,0,0,.35)'}}>
+                <div style={{fontFamily:'Montserrat, sans-serif', fontWeight: 900, fontSize: 56, lineHeight: 1.05, color, WebkitTextStroke: '1px #000', textTransform:'uppercase'}}>{text}</div>
+                {sub && <div style={{fontFamily:'Caveat, cursive', fontSize: 42, color:'#fff', marginTop: 4}}>{sub}</div>}
+              </div>
+            </div>
+          );
+          export const SFX: React.FC<{text: string; x?: number; y?: number; rot?: number; color?: string}> = ({text, x=700, y=700, rot=-8, color='#FF4D4D'}) => (
+            <div style={{position:'absolute', left: x, top: y, zIndex: 60, transform: `rotate(${rot}deg) scale(1.05)`, background: color, color:'#fff', fontFamily:'Montserrat, sans-serif', fontWeight: 900, fontSize: 64, padding: '10px 22px', borderRadius: 18, border: '4px solid #fff', boxShadow: '0 8px 0 rgba(0,0,0,.3)'}}>{text}</div>
+          );
+          export const Bubble: React.FC<{text: string; x?: number; y?: number; w?: number}> = ({text, x=120, y=420, w=360}) => (
+            <div style={{position:'absolute', left: x, top: y, width: w, zIndex: 55, background:'#fff', borderRadius: 28, padding: '16px 20px', border: '4px solid #111', textAlign:'center'}}>
+              <div style={{fontFamily:'Montserrat, sans-serif', fontWeight: 800, fontSize: 34, lineHeight: 1.15, color:'#111'}}>{text}</div>
+              <div style={{position:'absolute', bottom: -18, left: 40, width: 30, height: 30, background:'#fff', borderRight:'4px solid #111', borderBottom:'4px solid #111', transform:'rotate(45deg)'}} />
+            </div>
+          );
+
+          // --- ROOM ---
+          export const Room: React.FC<{night?: boolean; children?: React.ReactNode}> = ({night=true, children}) => (
+            <div style={{position:'absolute', inset:0, background: night ? '#2A1E3F' : '#3A2A55', overflow:'hidden'}}>
+              {/* wall */}
+              <div style={{position:'absolute', left:0, right:0, top:0, height: 1320, background: 'linear-gradient(#3B2A5A, #2A1E3F)'}} />
+              {/* window moon */}
+              <div style={{position:'absolute', left: 70, top: 90, width: 280, height: 280, background:'#1A1230', border:'10px solid #FFD93D', borderRadius: 20, overflow:'hidden'}}>
+                <div style={{position:'absolute', left: 140, top: 40, width: 90, height: 90, background:'#FFF6A0', borderRadius: '50%', boxShadow:'0 0 40px #FFF6A0'}} />
+                <div style={{position:'absolute', left: 20, top: 180, color:'#fff', fontSize: 28, fontFamily:'Montserrat', fontWeight: 800}}>JAM 02:00</div>
+                <div style={{position:'absolute', left: 20, top: 215, color:'#FFD93D', fontSize: 24, fontFamily:'Montserrat', fontWeight: 700}}>KOSAN SEPI...</div>
+              </div>
+              {/* poster */}
+              <div style={{position:'absolute', right: 70, top: 100, width: 280, height: 360, background:'#FF6B6B', border:'8px solid #fff', borderRadius: 16, transform:'rotate(3deg)', textAlign:'center', paddingTop: 20}}>
+                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 38, color:'#fff', lineHeight: 1}}>DILARANG<br/>LAPAR<br/>MALAM</div>
+                <div style={{fontSize: 70, marginTop: 10}}>🍜</div>
+                <div style={{fontFamily:'Caveat', fontSize: 34, color:'#fff'}}>tapi selalu lapar :(</div>
+              </div>
+              {/* floor */}
+              <div style={{position:'absolute', left:0, right:0, bottom:0, height: 600, background:'#8B5A2B'}} />
+              <div style={{position:'absolute', left:0, right:0, bottom: 600, height: 18, background:'#FFD93D'}} />
+              {/* bed */}
+              <div style={{position:'absolute', left: 60, bottom: 180, width: 380, height: 220, background:'#E85D75', borderRadius: 20, border:'6px solid #111'}}>
+                <div style={{position:'absolute', left: 20, top: 20, width: 180, height: 80, background:'#fff', borderRadius: 14}} />
+              </div>
+              {/* desk */}
+              <div style={{position:'absolute', right: 60, bottom: 200, width: 420, height: 28, background:'#5A3A1A', borderRadius: 8, border:'4px solid #111'}} />
+              <div style={{position:'absolute', right: 80, bottom: 60, width: 24, height: 140, background:'#5A3A1A'}} />
+              <div style={{position:'absolute', right: 430, bottom: 60, width: 24, height: 140, background:'#5A3A1A'}} />
+              {/* rice cooker */}
+              <div style={{position:'absolute', left: 70, bottom: 620, width: 150, height: 110, background:'#fff', borderRadius: 20, border:'5px solid #111', textAlign:'center', fontSize: 50, paddingTop: 10}}>🍚</div>
+              {children}
+            </div>
+          );
+
+          // --- BOY ---
+          export const Boy: React.FC<{x?: number; y?: number; s?: number; mood?: string; pose?: string; flip?: boolean; cry?: boolean; jump?: number}> = ({x=340, y=950, s=1, mood='normal', pose='stand', flip=false, cry=false, jump=0}) => {
+            const bounce = pose === 'dance' ? Math.abs(Math.sin(jump * 8)) * 26 : 0;
+            const rot = pose === 'shock' ? -6 : pose === 'cry' ? 4 : pose === 'run' ? 8 : 0;
+            const mouth = mood === 'happy' ? 'D' : mood === 'shock' ? 'O' : mood === 'cry' ? 'W' : mood === 'angry' ? '><' : '—';
+            const eye = mood === 'shock' ? '◎' : mood === 'cry' ? '😭' : mood === 'happy' ? '✦' : mood === 'sleepy' ? '—' : '●';
+            return (
+              <div style={{position:'absolute', left: x, top: y - bounce - jump, width: 240*s, height: 460*s, zIndex: 20, transform: `scaleX(${flip ? -1 : 1}) rotate(${rot}deg)`, transformOrigin:'bottom center'}}>
+                {/* legs */}
+                <div style={{position:'absolute', left: 60, top: 330, width: 50, height: 110, background:'#2B2B3A', borderRadius: 14}} />
+                <div style={{position:'absolute', left: 130, top: 330, width: 50, height: 110, background:'#2B2B3A', borderRadius: 14}} />
+                <div style={{position:'absolute', left: 45, top: 430, width: 80, height: 28, background:'#111', borderRadius: 12}} />
+                <div style={{position:'absolute', left: 120, top: 430, width: 80, height: 28, background:'#111', borderRadius: 12}} />
+                {/* body - kaos oblong */}
+                <div style={{position:'absolute', left: 20, top: 190, width: 200, height: 160, background: '#FF8A3D', borderRadius: 28, border:'5px solid #111', textAlign:'center', paddingTop: 18}}>
+                  <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 28, color:'#fff'}}>ANAK KOS</div>
+                  <div style={{fontSize: 52}}>🍜</div>
+                </div>
+                {/* arms */}
+                <div style={{position:'absolute', left: -10, top: 210, width: 46, height: 110, background:'#FFC79A', borderRadius: 22, border:'4px solid #111', transform: pose==='cheer' ? 'rotate(-140deg)' : pose==='hold' ? 'rotate(30deg)' : 'rotate(12deg)', transformOrigin:'top center'}} />
+                <div style={{position:'absolute', right: -10, top: 210, width: 46, height: 110, background:'#FFC79A', borderRadius: 22, border:'4px solid #111', transform: pose==='cheer' ? 'rotate(140deg)' : pose==='hold' ? 'rotate(-30deg)' : 'rotate(-12deg)', transformOrigin:'top center'}} />
+                {/* head */}
+                <div style={{position:'absolute', left: 20, top: 0, width: 200, height: 200, background:'#FFC79A', borderRadius: '50%', border:'5px solid #111', overflow:'visible'}}>
+                  {/* hair messy */}
+                  <div style={{position:'absolute', left: -10, top: -18, width: 220, height: 80, background:'#2B1A12', borderRadius: '60% 60% 20% 20%'}} />
+                  <div style={{position:'absolute', left: 30, top: -32, width: 40, height: 50, background:'#2B1A12', borderRadius: '50%', transform:'rotate(-20deg)'}} />
+                  <div style={{position:'absolute', right: 30, top: -28, width: 34, height: 44, background:'#2B1A12', borderRadius: '50%', transform:'rotate(20deg)'}} />
+                  {/* eyes */}
+                  <div style={{position:'absolute', left: 35, top: 78, width: 52, height: 52, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 38, lineHeight: '52px'}}>{eye}</div>
+                  <div style={{position:'absolute', right: 35, top: 78, width: 52, height: 52, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 38, lineHeight: '52px'}}>{eye}</div>
+                  {/* blush */}
+                  <div style={{position:'absolute', left: 18, top: 138, width: 36, height: 18, background:'#FF8A8A', borderRadius: '50%', opacity: .7}} />
+                  <div style={{position:'absolute', right: 18, top: 138, width: 36, height: 18, background:'#FF8A8A', borderRadius: '50%', opacity: .7}} />
+                  {/* mouth */}
+                  <div style={{position:'absolute', left: '50%', top: 148, transform:'translateX(-50%)', fontFamily:'Montserrat', fontWeight: 900, fontSize: mood==='cry' ? 36 : 42, color:'#7A1A1A'}}>{mouth}</div>
+                  {cry && <div style={{position:'absolute', left: 20, top: 110, fontSize: 38}}>💧💧</div>}
+                  {cry && <div style={{position:'absolute', right: 20, top: 110, fontSize: 38}}>💧💧</div>}
+                </div>
+                {mood==='happy' && <div style={{position:'absolute', left: -30, top: -30, fontSize: 48}}>✨✨</div>}
+              </div>
+            );
+          };
+
+          // --- CAT OREN ---
+          export const Cat: React.FC<{x?: number; y?: number; s?: number; mood?: string; pose?: string; flip?: boolean; jump?: number}> = ({x=650, y=1150, s=1, mood='sneaky', pose='sit', flip=false, jump=0}) => {
+            const bounce = pose === 'jump' ? Math.abs(Math.sin(jump * 6)) * 90 : pose === 'run' ? Math.abs(Math.sin(jump * 12)) * 18 : 0;
+            const rot = pose === 'jump' ? -12 : pose === 'eat' ? 3 : 0;
+            const eye = mood === 'shock' ? '◎' : mood === 'smug' ? '😼' : mood === 'happy' ? '😻' : mood === 'angry' ? '😾' : '●';
+            return (
+              <div style={{position:'absolute', left: x, top: y - bounce - jump, width: 260*s, height: 240*s, zIndex: 25, transform: `scaleX(${flip ? -1 : 1}) rotate(${rot}deg)`, transformOrigin:'bottom center'}}>
+                {/* tail */}
+                <div style={{position:'absolute', right: -40, top: 80, width: 90, height: 30, background:'#FF9A2B', borderRadius: 20, border:'4px solid #111', transform:'rotate(-30deg)'}} />
+                <div style={{position:'absolute', right: -55, top: 45, width: 30, height: 40, background:'#FF9A2B', borderRadius: '50%', border:'4px solid #111'}} />
+                {/* body */}
+                <div style={{position:'absolute', left: 20, top: 100, width: 210, height: 130, background:'#FF9A2B', borderRadius: '50%', border:'5px solid #111'}}>
+                  <div style={{position:'absolute', left: 30, top: 40, width: 60, height: 40, background:'#FFD08A', borderRadius: '50%'}} />
+                  <div style={{position:'absolute', right: 30, top: 40, width: 60, height: 40, background:'#FFD08A', borderRadius: '50%'}} />
+                  <div style={{position:'absolute', left: '50%', top: 70, transform:'translateX(-50%)', fontSize: 28}}>🐾</div>
+                </div>
+                {/* head */}
+                <div style={{position:'absolute', left: 30, top: 0, width: 190, height: 150, background:'#FF9A2B', borderRadius: '50%', border:'5px solid #111'}}>
+                  {/* ears */}
+                  <div style={{position:'absolute', left: 10, top: -28, width: 0, height: 0, borderLeft:'28px solid transparent', borderRight:'28px solid transparent', borderBottom:'52px solid #FF9A2B'}} />
+                  <div style={{position:'absolute', right: 10, top: -28, width: 0, height: 0, borderLeft:'28px solid transparent', borderRight:'28px solid transparent', borderBottom:'52px solid #FF9A2B'}} />
+                  <div style={{position:'absolute', left: 18, top: -14, width: 0, height: 0, borderLeft:'16px solid transparent', borderRight:'16px solid transparent', borderBottom:'30px solid #FFC79A'}} />
+                  <div style={{position:'absolute', right: 18, top: -14, width: 0, height: 0, borderLeft:'16px solid transparent', borderRight:'16px solid transparent', borderBottom:'30px solid #FFC79A'}} />
+                  {/* eyes */}
+                  <div style={{position:'absolute', left: 28, top: 50, width: 58, height: 58, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 42, lineHeight: '58px'}}>{eye}</div>
+                  <div style={{position:'absolute', right: 28, top: 50, width: 58, height: 58, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 42, lineHeight: '58px'}}>{eye}</div>
+                  {/* nose + mouth */}
+                  <div style={{position:'absolute', left: '50%', top: 108, transform:'translateX(-50%)', width: 22, height: 16, background:'#FF4D4D', borderRadius: '50%', border:'2px solid #111'}} />
+                  <div style={{position:'absolute', left: '50%', top: 126, transform:'translateX(-50%)', fontWeight: 900, fontSize: 26, color:'#111'}}>{mood==='happy' ? 'ω' : mood==='smug' ? '‿' : 'w'}</div>
+                  {/* whiskers */}
+                  <div style={{position:'absolute', left: -28, top: 95, width: 50, height: 3, background:'#111', transform:'rotate(-8deg)'}} />
+                  <div style={{position:'absolute', left: -28, top: 110, width: 50, height: 3, background:'#111'}} />
+                  <div style={{position:'absolute', right: -28, top: 95, width: 50, height: 3, background:'#111', transform:'rotate(8deg)'}} />
+                  <div style={{position:'absolute', right: -28, top: 110, width: 50, height: 3, background:'#111'}} />
+                </div>
+                {/* legs */}
+                <div style={{position:'absolute', left: 40, top: 210, width: 36, height: 26, background:'#FF9A2B', borderRadius: 10, border:'3px solid #111'}} />
+                <div style={{position:'absolute', right: 40, top: 210, width: 36, height: 26, background:'#FF9A2B', borderRadius: 10, border:'3px solid #111'}} />
+                {mood==='sneaky' && <div style={{position:'absolute', left: -20, top: -40, fontSize: 44}}>👀</div>}
+              </div>
+            );
+          };
+
+          export const Bowl: React.FC<{x?: number; y?: number; s?: number; flying?: boolean; rot?: number}> = ({x=400, y=1250, s=1, flying=false, rot=0}) => (
+            <div style={{position:'absolute', left: x, top: y, width: 200*s, height: 140*s, zIndex: 30, transform:`rotate(${rot}deg)`}}>
+              <div style={{width: 200*s, height: 110*s, background:'#fff', borderRadius: '0 0 100px 100px', border:'6px solid #111', textAlign:'center', paddingTop: 18}}>
+                <div style={{fontSize: 62}}>🍜</div>
+                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 20}}>MIE TERAKHIR</div>
+              </div>
+              {flying && <div style={{position:'absolute', left: -30, top: -40, fontSize: 48}}>💨</div>}
+              <div style={{position:'absolute', left: 30, top: -22, fontSize: 36, opacity: .8}}>♨️ ♨️ ♨️</div>
+            </div>
+          );
+          EOF
           cat > src/Reel.tsx <<'EOF'
-          import React, {useMemo} from 'react';
-          import * as THREE from 'three';
+          import React from 'react';
           import {AbsoluteFill, useCurrentFrame, useVideoConfig, delayRender, continueRender} from 'remotion';
-          import {ThreeCanvas} from '@remotion/three';
-          import {useThree} from '@react-three/fiber';
           import {TL, TOTAL_S} from './timeline';
-          import {CamSpec, handheld, setStyle} from './lib/core';
           import {loadFonts} from './fonts';
-          const CameraRig: React.FC<{cam: CamSpec}> = ({cam}) => {
-            const {camera} = useThree();
-            React.useLayoutEffect(() => {
-              const c = camera as THREE.PerspectiveCamera;
-              c.position.set(...cam.p); c.up.set(0, 1, 0); c.lookAt(...cam.l);
-              c.rotateZ(cam.roll || 0); c.fov = cam.fov; c.near = .05; c.far = 80; c.updateProjectionMatrix();
-            });
-            return null;
-          };
-          const buildSpeed = (t: number, n = 24) => {
-            let d = '';
-            for (let i = 0; i < n; i++) {
-              const a = i / n * 6.2832 + Math.sin(i * 7.7) * .2,
-                r0 = 330 + ((t * 7 + i) % 3) * 20 + (Math.sin(i * 3.1) + 1) * 90,
-                r1 = r0 + 280 + (Math.sin(i * 5.3) + 1) * 220;
-              d += `M${540 + Math.cos(a) * r0} ${960 + Math.sin(a) * r0 * 1.5}L${540 + Math.cos(a) * r1} ${960 + Math.sin(a) * r1 * 1.5}`;
-            }
-            return d;
-          };
           export const Reel: React.FC = () => {
-            setStyle('toon');
             const [ready, setReady] = React.useState(false);
             const [hnd] = React.useState(() => delayRender('fonts'));
-            React.useEffect(() => {
-              loadFonts().then(() => setReady(true)).catch(() => setReady(true)).finally(() => continueRender(hnd));
-            }, []);
-            const f = useCurrentFrame(); const {width, height, fps} = useVideoConfig();
+            React.useEffect(() => { loadFonts().then(()=>setReady(true)).catch(()=>setReady(true)).finally(()=>continueRender(hnd)); }, []);
+            const f = useCurrentFrame(); const {fps} = useVideoConfig();
             const t = Math.min(f / fps, TOTAL_S - .001);
-            const speedPath = useMemo(() => buildSpeed(Math.floor(t * 30) / 30), [Math.floor(t * 30)]);
             if (!ready || !TL.length) return null;
             let sh = TL[TL.length - 1];
             for (const s of TL) if (t >= s.a && t < s.a + s.D) { sh = s; break; }
-            const ua = t - sh.a, p = Math.min(1, ua / sh.D), u = p * sh.dd;
-            const cam = handheld(sh.cam(p, u), u, sh.hh ?? .01);
-            const g: any = sh.g || {};
-            const flash = g.flash ? Math.max(0, 1 - ua / .2) * g.flash : 0;
-            const lines = g.lines ? g.lines(p, u) : 0;
+            const ua = t - sh.a, p = Math.min(1, ua / sh.D), u = ua;
+            const shake = sh.shake ? Math.sin(u * 40) * sh.shake : 0;
+            const flash = sh.flash ? Math.max(0, 1 - ua / .3) * sh.flash : 0;
             return (
-              <AbsoluteFill style={{background: '#000'}}>
-                <ThreeCanvas width={width} height={height} shadows
-                  gl={{antialias: true, toneMapping: THREE.NoToneMapping, preserveDrawingBuffer: true}}
-                  camera={{fov: cam.fov, position: cam.p, near: .05, far: 80}}>
-                  <CameraRig cam={cam} />
+              <AbsoluteFill style={{background:'#000', overflow:'hidden'}}>
+                <div style={{position:'absolute', inset:0, transform:`translate(${shake}px, ${shake*0.5}px)`}}>
                   <sh.Scene p={p} u={u} />
-                </ThreeCanvas>
-                {g.tint && <AbsoluteFill style={{background: g.tint, opacity: g.ti ?? .15, mixBlendMode: 'multiply'}} />}
-                <AbsoluteFill style={{background: 'linear-gradient(to bottom, rgba(255,255,255,.10), rgba(255,255,255,0) 45%, rgba(0,0,0,.25))'}} />
-                <AbsoluteFill style={{background: `radial-gradient(ellipse at 50% 48%, rgba(0,0,0,0) 52%, rgba(0,0,0,${g.vig ?? .5}) 100%)`}} />
-                {lines > 0 && <svg width={width} height={height} style={{position: 'absolute', inset: 0, opacity: lines}}>
-                  <path d={speedPath} stroke="#fff" strokeWidth="5" strokeLinecap="round" fill="none" opacity=".55" /></svg>}
-                {flash > 0 && <AbsoluteFill style={{background: '#fff', opacity: flash}} />}
+                </div>
+                <AbsoluteFill style={{background: 'radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 55%, rgba(0,0,0,.45) 100%)', pointerEvents:'none'}} />
+                {flash > 0 && <AbsoluteFill style={{background:'#fff', opacity: flash}} />}
+                {/* progress bar bottom like Reels */}
+                <div style={{position:'absolute', left: 0, right: 0, bottom: 0, height: 10, background:'rgba(255,255,255,.25)'}}>
+                  <div style={{height: '100%', width: `${(t / TOTAL_S)*100}%`, background:'#FFD93D'}} />
+                </div>
+                <div style={{position:'absolute', left: 24, bottom: 28, background:'rgba(0,0,0,.6)', color:'#fff', fontFamily:'Montserrat', fontWeight: 800, fontSize: 22, padding: '6px 12px', borderRadius: 20}}>ANAK KOS VS KUCING OREN • 45s</div>
               </AbsoluteFill>
             );
           };
           EOF
-          cat > src/timeline.ts <<'EOF'
-          import {SHOTS} from './shots';
-          import {CamSpec} from './lib/core';
-          export type TLEntry = { a: number; D: number; dd: number; d: number; cam: (p: number, u: number) => CamSpec; Scene: React.FC<{p: number; u: number}>; g?: any; hh?: number };
-          const FALLBACK_D = 2.0;
-          let cursor = 0;
-          export const TL: TLEntry[] = SHOTS.map((s: any) => {
-            const d = s.d || FALLBACK_D;
-            const e = { a: cursor, D: d, dd: d, d, cam: s.cam, Scene: s.Scene, g: s.g, hh: s.hh };
-            cursor += d; return e;
-          });
-          export const TOTAL_S = cursor;
-          EOF
-          cat > src/lib/core.tsx <<'EOF'
-          import * as THREE from 'three';
-          export type V3 = [number, number, number];
-          export type CamSpec = {p: V3; l: V3; fov: number; roll?: number};
-          export const eo3 = (p: number) => { const c = Math.min(1, Math.max(0, p)); return c < .5 ? 2*c*c : 1 - Math.pow(-2*c+2, 2)/2; };
-          export const lerp = (a: number, b: number, t: number) => a + (b-a)*t;
-          export const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
-          export const prog = (u: number, a: number, b: number) => clamp((u-a)/(b-a), 0, 1);
-          export const camLerp = (a: CamSpec, b: CamSpec, t: number): CamSpec => ({
-            p: [lerp(a.p[0], b.p[0], t), lerp(a.p[1], b.p[1], t), lerp(a.p[2], b.p[2], t)],
-            l: [lerp(a.l[0], b.l[0], t), lerp(a.l[1], b.l[1], t), lerp(a.l[2], b.l[2], t)],
-            fov: lerp(a.fov, b.fov, t), roll: lerp(a.roll||0, b.roll||0, t)
-          });
-          export const handheld = (c: CamSpec, t: number, amp = .008): CamSpec => ({
-            ...c,
-            p: [c.p[0]+Math.sin(t*1.7)*amp, c.p[1]+Math.sin(t*2.3+1)*amp, c.p[2]+Math.sin(t*1.1+2)*amp],
-            l: [c.l[0]+Math.sin(t*1.3)*amp*.4, c.l[1]+Math.sin(t*1.9+1)*amp*.4, c.l[2]]
-          });
-          const matCache = new Map<string, THREE.MeshStandardMaterial>();
-          export const MAT = (color: string, opts: any = {}) => {
-            const key = `${color}|${opts.roughness ?? .55}|${opts.metalness ?? 0}|${opts.emissive ?? '#000000'}|${opts.emissiveIntensity ?? 0}`;
-            let m = matCache.get(key);
-            if (!m) {
-              m = new THREE.MeshStandardMaterial({
-                color: new THREE.Color(color), roughness: opts.roughness ?? .55, metalness: opts.metalness ?? 0,
-                emissive: new THREE.Color(opts.emissive ?? '#000000'), emissiveIntensity: opts.emissiveIntensity ?? 0,
-              });
-              matCache.set(key, m);
-            }
-            return m;
-          };
-          export const setStyle = (_s: string) => {};
-          export const getStyle = () => 'toon';
-          export const INK = '#1a1424';
-          export {THREE};
-          EOF
-          cat > src/lib/Character.tsx <<'EOF'
-          import React from 'react';
-          import * as THREE from 'three';
-          import {MAT, V3} from './core';
-          export type Arm = [number, number, number];
-          export type Pose = {sitH: number; lean: number; hx: number; hy: number; hz: number; aL: Arm; aR: Arm; lL: Arm; lR: Arm};
-          const d = (x: number) => (x * Math.PI) / 180;
-          const base = (o: Partial<Pose>): Pose => ({sitH: 0, lean: 0, hx: 0, hy: 0, hz: 0, aL: [d(4), d(10), d(12)], aR: [d(4), d(10), d(12)], lL: [0, d(2), 0], lR: [0, d(2), 0], ...o});
-          export const POSE: Record<string, Pose> = {
-            stand: base({}),
-            hold: base({lean: d(3), hx: d(4)}),
-            sit: base({sitH: 1, aL: [d(25), d(8), d(70)], aR: [d(25), d(8), d(70)], lL: [d(90), d(3), d(90)], lR: [d(90), d(3), d(90)]}),
-            cheer: base({hx: d(-8), aL: [d(10), d(150), d(10)], aR: [d(10), d(150), d(10)]}),
-            desk: base({lean: d(6), hx: d(4)}),
-            push: base({lean: d(20), hx: d(10)}),
-            wave: base({aR: [d(10), d(150), d(70)]}),
-          };
-          export const mixPose = (a: Pose, b: Pose, t: number): Pose => {
-            const tt = Math.min(1, Math.max(0, t));
-            const o: any = {};
-            for (const k in a) o[k] = Array.isArray((a as any)[k]) ? (a as any)[k].map((v: number, i: number) => v + ((b as any)[k][i]-v)*tt) : (a as any)[k] + ((b as any)[k]-a[k])*tt;
-            return o;
-          };
-          export const walkPose = (ph: number): Pose => {
-            const s = Math.sin(ph);
-            return base({lean: d(4), lL: [d(32)*s, d(2), Math.max(0,-s)*d(55)], lR: [-d(32)*s, d(2), Math.max(0,s)*d(55)], aL: [-d(26)*s, d(8), d(16)], aR: [d(26)*s, d(8), d(16)]});
-          };
-          const DM = {headR: .135, SY: 1.12, torsoW: .38, torsoH: .48, torsoD: .24, shX: .215, arm1: .30, arm2: .27, hand: .05,
-                      thigh: .45, shin: .43, ankle: .06, hipX: .1, rL1: .075, rL2: .058, foot: [.1,.08,.27], neckL: .08, rN: .052, pelW: .35, pelH: .2, seat: .485};
-          const ik2 = (S: THREE.Vector3, W0: THREE.Vector3, L1: number, L2: number, pole: THREE.Vector3) => {
-            const dv = W0.clone().sub(S); let dist = dv.length(); const dMax = L1+L2-1e-3, W = W0.clone();
-            if (dist > dMax) { W.copy(S).add(dv.multiplyScalar(dMax/dist)); dist = dMax; }
-            dist = Math.max(dist, Math.abs(L1-L2)+1e-3);
-            const dir = W.clone().sub(S).normalize(), a = (L1*L1-L2*L2+dist*dist)/(2*dist), h = Math.sqrt(Math.max(0, L1*L1-a*a));
-            const mid = S.clone().add(dir.clone().multiplyScalar(a)); const pp = pole.clone().sub(dir.clone().multiplyScalar(pole.dot(dir)));
-            if (pp.lengthSq() < 1e-6) pp.set(0,0,1); pp.normalize();
-            return {E: mid.add(pp.multiplyScalar(h)), W};
-          };
-          const fkArm = (S: THREE.Vector3, side: number, a: Arm, L1: number, L2: number) => {
-            const q1 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-a[0], 0, side*a[1], 'XYZ'));
-            const q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-a[2], 0, 0, 'XYZ'));
-            const E = S.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q1).multiplyScalar(L1));
-            const W = E.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q2).applyQuaternion(q1).multiplyScalar(L2));
-            return {E, W};
-          };
-          const fkLeg = (H: THREE.Vector3, side: number, l: Arm, L1: number, L2: number) => {
-            const q1 = new THREE.Quaternion().setFromEuler(new THREE.Euler(-l[0], 0, side*l[1], 'XYZ'));
-            const q2 = new THREE.Quaternion().setFromEuler(new THREE.Euler(l[2], 0, 0, 'XYZ'));
-            const K = H.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q1).multiplyScalar(L1));
-            const A = K.clone().add(new THREE.Vector3(0,-1,0).applyQuaternion(q2).applyQuaternion(q1).multiplyScalar(L2));
-            return {E: K, W: A};
-          };
-          const Bone: React.FC<{a: THREE.Vector3; b: THREE.Vector3; r: number; c: string}> = ({a, b, r, c}) => {
-            const len = Math.max(0.001, a.distanceTo(b));
-            const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), b.clone().sub(a).normalize());
-            const mid = a.clone().add(b).multiplyScalar(0.5);
-            return (
-              <group position={mid.toArray() as V3} quaternion={q}>
-                <mesh material={MAT(c, {roughness:.6})} castShadow>
-                  <capsuleGeometry args={[r, len, 4, 10]} />
-                </mesh>
-              </group>
-            );
-          };
-          const Joint: React.FC<{p: THREE.Vector3; r: number; c: string}> = ({p, r, c}) => (
-            <mesh position={p.toArray() as V3} material={MAT(c, {roughness:.65})} castShadow>
-              <sphereGeometry args={[r * 1.08, 12, 10]} />
-            </mesh>
-          );
-          const faceTexes = new Map<string, THREE.CanvasTexture>();
-          const FW = 512, FH = 256;
-          const fx = (x: number) => 128 + Math.asin(Math.max(-1, Math.min(1, x/.135)))*(FW/360)*0.9;
-          const fy = (y: number) => 128 - Math.asin(Math.max(-1, Math.min(1, y/.135)))*(FH/180)*0.9;
-          export type Face = {eyes?: 'dot'|'wide'|'happy'|'sleepy'|'closed'; mouth?: 'grin'|'smile'|'flat'|'frown'|'wobble'|'o'|'scream'|'talk'; brow?: number; blush?: boolean; look?: [number, number]};
-          const drawFace = (c: CanvasRenderingContext2D, skin: string, f: Face, t: number) => {
-            c.fillStyle = skin; c.fillRect(0,0,FW,FH);
-            const g = c.createRadialGradient(128,120,20,128,120,140); g.addColorStop(0,'rgba(255,235,210,.18)'); g.addColorStop(1,'rgba(120,60,40,.25)'); c.fillStyle = g; c.fillRect(0,0,FW,FH);
-            const eyes = f.eyes || 'dot', blink = Math.sin(t*2.3) > .985 || eyes === 'closed', lk = f.look || [0,0];
-            if (f.blush) for (const sx of [-1,1]) { c.fillStyle = 'rgba(230,120,110,.4)'; c.beginPath(); c.ellipse(fx(sx*.05), fy(-.03), 22, 13, 0, 0, 6.3); c.fill(); }
-            for (const sx of [-1,1]) {
-              const cx = fx(sx*.05), cy = fy(.02), rx = 22;
-              if (blink || eyes === 'sleepy') { c.strokeStyle = '#2a1a16'; c.lineWidth = 6; c.beginPath(); c.moveTo(cx-rx,cy); c.quadraticCurveTo(cx,cy+6,cx+rx,cy); c.stroke(); }
-              else if (eyes === 'happy') { c.strokeStyle = '#2a1a16'; c.lineWidth = 6; c.beginPath(); c.arc(cx,cy+6,rx*.9,Math.PI*1.1,Math.PI*1.9); c.stroke(); }
-              else {
-                c.fillStyle = '#f4efe8'; c.beginPath(); c.ellipse(cx,cy,rx,rx*.6,0,0,6.3); c.fill();
-                c.fillStyle = '#2a1a10'; c.beginPath(); c.arc(cx+lk[0]*6, cy+lk[1]*5, rx*.42, 0, 6.3); c.fill();
-                c.fillStyle = '#000'; c.beginPath(); c.arc(cx+lk[0]*6, cy+lk[1]*5, rx*.2, 0, 6.3); c.fill();
-                c.fillStyle = '#fff'; c.beginPath(); c.arc(cx+lk[0]*6-rx*.14, cy+lk[1]*5-rx*.16, rx*.1, 0, 6.3); c.fill();
-                c.strokeStyle = '#22140f'; c.lineWidth = 5; c.beginPath(); c.ellipse(cx,cy,rx,rx*.62,0,Math.PI*1.05,Math.PI*1.95); c.stroke();
-              }
-              if (f.brow) { c.strokeStyle = '#2a1a16'; c.lineWidth = 5; const by = fy(.06), s2 = f.brow*sx*8; c.beginPath(); c.moveTo(cx-16, by+s2); c.lineTo(cx+16, by-s2); c.stroke(); }
-            }
-            const m = f.mouth || 'smile', mx = fx(0), my = fy(-.05);
-            c.strokeStyle = '#7a3a38'; c.fillStyle = '#d27a74'; c.lineWidth = 6;
-            if (m === 'smile') { c.beginPath(); c.moveTo(mx-26,my); c.quadraticCurveTo(mx,my+18,mx+26,my); c.stroke(); }
-            else if (m === 'grin') { c.fillStyle = '#4a1a1c'; c.beginPath(); c.ellipse(mx,my+8,32,16,0,0,6.3); c.fill(); c.fillStyle = '#f6f2ea'; c.fillRect(mx-30,my-2,60,9); }
-            else if (m === 'flat') { c.beginPath(); c.moveTo(mx-22,my); c.lineTo(mx+22,my); c.stroke(); }
-            else if (m === 'frown') { c.beginPath(); c.moveTo(mx-22,my+6); c.quadraticCurveTo(mx,my-6,mx+22,my+6); c.stroke(); }
-            else if (m === 'talk') { const o = .4+.6*Math.abs(Math.sin(t*13)); c.fillStyle = '#3a1218'; c.beginPath(); c.ellipse(mx,my+6,14,10*o,0,0,6.3); c.fill(); }
-            else if (m === 'o' || m === 'wobble') { c.fillStyle = '#3a1218'; c.beginPath(); c.ellipse(mx,my+6,12,14,0,0,6.3); c.fill(); }
-            else if (m === 'scream') { c.fillStyle = '#4a1426'; c.beginPath(); c.ellipse(mx,my+8,26,30,0,0,6.3); c.fill(); }
-          };
-          const useFaceTex = (id: string, skin: string, f: Face, t: number) => {
-            let tx = faceTexes.get(id);
-            if (!tx) { const cv = document.createElement('canvas'); cv.width = FW; cv.height = FH; tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; faceTexes.set(id, tx); }
-            const ctx = (tx.image as HTMLCanvasElement).getContext('2d')!; drawFace(ctx, skin, f, t); tx.needsUpdate = true; return tx;
-          };
-          export type CharP = {
-            id: string; pos: V3; rotY?: number; s?: number; pose?: Pose;
-            skin?: string; top?: string; pants?: string; shoe?: string; hairCol?: string; hair?: 'short'|'spiky'|'bun'|'bald';
-            face?: Face; t?: number; prop?: 'phone'|'cup'|'case'|'env'; sweat?: boolean;
-            wL?: V3; wR?: V3; fL?: V3; fR?: V3;
-          };
-          export const Character: React.FC<CharP> = (p) => {
-            const t = p.t || 0, D = DM, pose = p.pose || POSE.stand;
-            const skin = p.skin || '#e8b98f', top = p.top || '#3a7ca5', pants = p.pants || '#2c3550', shoe = p.shoe || '#1a1825';
-            const hc = p.hairCol || '#2a1d18', hair = p.hair || 'short';
-            const face = useFaceTex(p.id, skin, p.face || {}, t);
-            const bob = Math.sin(t*1.8)*.006;
-            const stand = D.thigh+D.shin+D.ankle;
-            const hip = pose.sitH > .5 ? (D.seat + bob) : (stand + bob);
-            const P = new THREE.Vector3(0, hip, 0);
-            const qT = new THREE.Quaternion().setFromEuler(new THREE.Euler(-pose.lean,0,0));
-            const toChar = (v: THREE.Vector3) => v.clone().applyQuaternion(qT).add(P);
-            const shY = .07+D.torsoH-.05, neckBase = .07+D.torsoH, headC = neckBase+D.neckL+D.headR*D.SY*.88;
-            const sL = toChar(new THREE.Vector3(-D.shX, shY, 0));
-            const sR = toChar(new THREE.Vector3(D.shX, shY, 0));
-            let tL: THREE.Vector3|null = p.wL ? new THREE.Vector3(...p.wL) : null;
-            let tR: THREE.Vector3|null = p.wR ? new THREE.Vector3(...p.wR) : null;
-            if (p.prop === 'phone') tR = toChar(new THREE.Vector3(.1, neckBase+.03, D.torsoD/2+.16));
-            if (p.prop === 'cup') tR = toChar(new THREE.Vector3(.1, .07+D.torsoH*.75, D.torsoD/2+.16));
-            const isRaised = pose.aL[1] > 0.5 || pose.aR[1] > 0.5;
-            const solveArm = (S: THREE.Vector3, Slocal: THREE.Vector3, side: number, ang: Arm, target: THREE.Vector3|null, pole: THREE.Vector3, sideTarget: THREE.Vector3) => {
-              if (target) return ik2(S, target, D.arm1, D.arm2, pole);
-              if (!isRaised) return ik2(S, sideTarget, D.arm1, D.arm2, pole);
-              const fk = fkArm(Slocal, side, ang, D.arm1, D.arm2);
-              return { E: toChar(fk.E), W: toChar(fk.W) };
-            };
-            const armSideL = toChar(new THREE.Vector3(-(D.shX + .08), hip - .15, .05));
-            const armSideR = toChar(new THREE.Vector3(D.shX + .08, hip - .15, .05));
-            const aL = solveArm(sL, new THREE.Vector3(-D.shX, shY, 0), -1, pose.aL, tL, new THREE.Vector3(-.8,.2,-.3), armSideL);
-            const aR = solveArm(sR, new THREE.Vector3(D.shX, shY, 0), 1, pose.aR, tR, new THREE.Vector3(.8,.2,-.3), armSideR);
-            const hL = new THREE.Vector3(-D.hipX, hip-.01, 0), hR = new THREE.Vector3(D.hipX, hip-.01, 0);
-            const clampF = (v?: V3) => v ? new THREE.Vector3(v[0], Math.max(v[1], D.ankle + .02), v[2]) : null;
-            const fL = clampF(p.fL), fR = clampF(p.fR);
-            const lL = fL ? ik2(hL, fL, D.thigh, D.shin, new THREE.Vector3(0,1,.4)) : fkLeg(hL,-1,pose.lL,D.thigh,D.shin);
-            const lR = fR ? ik2(hR, fR, D.thigh, D.shin, new THREE.Vector3(0,1,.4)) : fkLeg(hR,1,pose.lR,D.thigh,D.shin);
-            return (
-              <group position={p.pos} rotation={[0,p.rotY||0,0]} scale={p.s||1}>
-                <Joint p={hL} r={D.rL1} c={pants} /><Joint p={hR} r={D.rL1} c={pants} />
-                <Bone a={hL} b={lL.E} r={D.rL1} c={pants} /><Joint p={lL.E} r={D.rL1} c={pants} /><Bone a={lL.E} b={lL.W} r={D.rL2} c={pants} />
-                <Bone a={hR} b={lR.E} r={D.rL1} c={pants} /><Joint p={lR.E} r={D.rL1} c={pants} /><Bone a={lR.E} b={lR.W} r={D.rL2} c={pants} />
-                {[lL.W, lR.W].map((A,i) => (
-                  <mesh key={i} position={[A.x, Math.max(A.y-.04, .04), A.z+.04]} material={MAT(shoe, {roughness:.4})} castShadow>
-                    <boxGeometry args={D.foot} /></mesh>
-                ))}
-                <mesh position={[0, hip+D.pelH*.35, 0]} material={MAT(pants, {roughness:.7})} castShadow>
-                  <boxGeometry args={[D.pelW, D.pelH, D.torsoD*.95]} /></mesh>
-                <group position={P.toArray() as V3} quaternion={qT}>
-                  <mesh position={[0, .07+D.torsoH/2, 0]} material={MAT(top, {roughness:.55})} castShadow receiveShadow>
-                    <boxGeometry args={[D.torsoW, D.torsoH, D.torsoD]} /></mesh>
-                  <mesh position={[0, .07+D.torsoH-.02, D.torsoD/2+.005]} material={MAT('#f5f2ec', {roughness:.5})}>
-                    <planeGeometry args={[.14,.07]} /></mesh>
-                  <mesh position={[0, .07+D.torsoH*.55, D.torsoD/2+.006]} material={MAT('#a02828', {roughness:.45})}>
-                    <planeGeometry args={[.05,.18]} /></mesh>
-                  <mesh position={[0, neckBase+D.neckL*.5, 0]} material={MAT(skin, {roughness:.7})} castShadow>
-                    <cylinderGeometry args={[D.rN,D.rN,D.neckL,16]} /></mesh>
-                  <group position={[0, headC, 0]}>
-                    <mesh scale={[1,D.SY,1]} castShadow>
-                      <sphereGeometry args={[D.headR, 24, 18]} />
-                      <meshStandardMaterial map={face} roughness={.75} />
-                    </mesh>
-                    <mesh position={[0, -.005, D.headR+.01]} rotation={[Math.PI/2,0,0]} material={MAT(skin, {roughness:.7})} castShadow>
-                      <coneGeometry args={[.018,.045,12]} /></mesh>
-                    {[-1,1].map(sx => <mesh key={sx} position={[sx*D.headR*.98, -.01, 0]} scale={[.5,1,.7]} material={MAT(skin,{roughness:.75})}><sphereGeometry args={[D.headR*.18,12,10]} /></mesh>)}
-                    {hair !== 'bald' && <mesh position={[0,.02,-.015]} material={MAT(hc, {roughness:.85})} castShadow>
-                      <sphereGeometry args={[D.headR*1.05, 20, 12, 0, Math.PI*2, 0, Math.PI*.5]} /></mesh>}
-                    {hair === 'bun' && <mesh position={[0, D.headR*.55, -D.headR*.85]} material={MAT(hc,{roughness:.85})}><sphereGeometry args={[D.headR*.4,12,10]} /></mesh>}
-                  </group>
-                </group>
-                <Joint p={sL} r={.05} c={top} /><Joint p={sR} r={.05} c={top} />
-                <Bone a={sL} b={aL.E} r={.047} c={top} /><Joint p={aL.E} r={.047} c={top} /><Bone a={aL.E} b={aL.W} r={.038} c={top} /><Joint p={aL.W} r={D.hand} c={skin} />
-                <Bone a={sR} b={aR.E} r={.047} c={top} /><Joint p={aR.E} r={.047} c={top} /><Bone a={aR.E} b={aR.W} r={.038} c={top} /><Joint p={aR.W} r={D.hand} c={skin} />
-                {p.prop === 'phone' && aR.W && <mesh position={[aR.W.x, aR.W.y+.02, aR.W.z+.02]} rotation={[.2,0,0]} material={MAT('#1a1a22', {roughness:.2, metalness:.5})}>
-                  <boxGeometry args={[.07,.14,.012]} /></mesh>}
-              </group>
-            );
-          };
-          EOF
-          cat > src/lib/Set.tsx <<'EOF'
-          import React, {useMemo} from 'react';
-          import * as THREE from 'three';
-          import {MAT, V3} from './core';
-          export const PALS: Record<string, any> = {
-            dusk: {wall:'#2a2038', floor:'#1a1424', accent:'#ff9a5a', l1:'#ffd6a0', l2:'#7a6aff'},
-          };
-          export const Room: React.FC<{w:number;d:number;h:number;pal:string}> = ({w,d,h,pal}) => {
-            const P = PALS[pal] || PALS.dusk;
-            return (
-              <group>
-                <mesh rotation={[-Math.PI/2,0,0]} position={[0,0,d/2]} receiveShadow>
-                  <planeGeometry args={[w,d]} /><meshStandardMaterial color={P.floor} roughness={.8} metalness={.1} /></mesh>
-                <mesh position={[0,h/2,0]} receiveShadow>
-                  <planeGeometry args={[w,h]} /><meshStandardMaterial color={P.wall} roughness={.9} /></mesh>
-                <mesh rotation={[0,Math.PI/2,0]} position={[-w/2,h/2,d/2]} receiveShadow>
-                  <planeGeometry args={[d,h]} /><meshStandardMaterial color={P.wall} roughness={.9} /></mesh>
-                <mesh rotation={[0,-Math.PI/2,0]} position={[w/2,h/2,d/2]} receiveShadow>
-                  <planeGeometry args={[d,h]} /><meshStandardMaterial color={P.wall} roughness={.9} /></mesh>
-              </group>
-            );
-          };
-          export const Lights: React.FC<{pal?:string}> = ({pal='dusk'}) => {
-            const P = PALS[pal] || PALS.dusk;
-            return (
-              <>
-                <ambientLight intensity={.35} color="#9a8ab0" />
-                <directionalLight position={[3,5,4]} intensity={1.2} color={P.l1} castShadow shadow-mapSize={[512,512]} />
-                <pointLight position={[-2,2.5,3]} intensity={.8} color={P.l2} distance={8} />
-                <pointLight position={[2,2,1.5]} intensity={.5} color={P.accent} distance={6} />
-              </>
-            );
-          };
-          export const Pt: React.FC<{color:string; intensity:number; distance:number; position:V3}> = (p) =>
-            <pointLight {...p} castShadow />;
-          export const Pendant: React.FC<{pos: V3}> = ({pos}) => (
-            <group position={pos}>
-              <mesh position={[0,.6,0]}><cylinderGeometry args={[.005,.005,1.2,8]} /><meshStandardMaterial color="#222" /></mesh>
-              <mesh material={MAT('#333', {metalness:.7, roughness:.3})}><coneGeometry args={[.12,.14,24,1,true]} /></mesh>
-              <pointLight position={[0,-.05,0]} intensity={1.2} color="#ffd9a0" distance={4} castShadow />
-            </group>
-          );
-          export const Desk: React.FC<{pos:V3; w:number; d:number; col:string}> = ({pos,w,d,col}) => (
-            <group position={pos}>
-              <mesh position={[0,.77,0]} material={MAT(col, {roughness:.4})} castShadow receiveShadow>
-                <boxGeometry args={[w,.05,d]} /></mesh>
-              {[[-1,-1],[1,-1],[-1,1],[1,1]].map(([x,z],i) => (
-                <mesh key={i} position={[x*(w/2-.06), .38, z*(d/2-.06)]} material={MAT('#1a1525', {metalness:.6, roughness:.4})} castShadow>
-                  <boxGeometry args={[.04,.76,.04]} /></mesh>
-              ))}
-            </group>
-          );
-          export const Chair: React.FC<{pos:V3; rot?:number; col?:string}> = ({pos, rot=0, col='#2a2038'}) => (
-            <group position={pos} rotation={[0,rot,0]}>
-              <mesh position={[0,.44,0]} material={MAT(col,{roughness:.7})} castShadow><boxGeometry args={[.42,.06,.42]} /></mesh>
-              <mesh position={[0,.7,-.18]} material={MAT(col,{roughness:.7})} castShadow><boxGeometry args={[.42,.5,.06]} /></mesh>
-              <mesh position={[0,.22,0]} material={MAT('#1a1525',{metalness:.7,roughness:.3})}><cylinderGeometry args={[.03,.03,.44,12]} /></mesh>
-            </group>
-          );
-          const screenCache = new Map<string, THREE.CanvasTexture>();
-          const makeScreenTex = (type: string) => {
-            const hit = screenCache.get(type);
-            if (hit) return hit;
-            const cv = document.createElement('canvas'); cv.width = 512; cv.height = 320;
-            const c = cv.getContext('2d')!;
-            c.fillStyle = '#0a1020'; c.fillRect(0,0,512,320);
-            if (type === 'chat') {
-              c.fillStyle = '#1e2a45'; c.fillRect(0,0,512,50);
-              c.fillStyle = '#e0e8ff'; c.font = 'bold 22px Inter'; c.fillText('Messages', 20, 34);
-              const msgs = [['AI HATE?', '#ff5577'], ['#trending', '#ffaa44'], ['Explain yourself', '#88bbff']];
-              msgs.forEach(([txt,col], i) => {
-                c.fillStyle = '#2a3a5a'; c.beginPath(); c.roundRect(20, 80+i*70, 380, 50, 20); c.fill();
-                c.fillStyle = col as string; c.font = '18px Inter'; c.fillText(txt as string, 40, 110+i*70);
-              });
-            } else if (type === 'chart') {
-              c.fillStyle = '#e0e8ff'; c.font = 'bold 28px Inter'; c.fillText('ENGAGEMENT', 30, 50);
-              const pts = [40,120,80,180,220,280,320,400];
-              c.strokeStyle = '#4ac0b0'; c.lineWidth = 6; c.beginPath();
-              pts.forEach((y,i) => { const x = 40+i*60; if(i===0)c.moveTo(x,320-y); else c.lineTo(x,320-y); }); c.stroke();
-              c.fillStyle = '#4ac0b0'; pts.forEach((y,i) => { c.beginPath(); c.arc(40+i*60,320-y,8,0,6.3); c.fill(); });
-            } else if (type === 'slide') {
-              c.fillStyle = '#1a2040'; c.fillRect(0,0,512,320);
-              c.fillStyle = '#ffd9a0'; c.font = 'bold 36px Inter'; c.fillText('PROBLEM SOLVING', 40, 90);
-              c.fillStyle = '#88bbff'; c.font = '22px Inter';
-              ['1. Understand', '2. Break down', '3. Prompt clearly', '4. Verify'].forEach((s,i) => c.fillText(s, 50, 150+i*38));
-            } else if (type === 'whiteboard') {
-              c.fillStyle = '#f4f4ee'; c.fillRect(0,0,512,320);
-              c.strokeStyle = '#3a6a9a'; c.lineWidth = 4;
-              c.strokeRect(30,40,450,240);
-              c.fillStyle = '#2a4060'; c.font = 'bold 28px Montserrat';
-              c.fillText('AI PROBLEM', 60, 100); c.fillText('SOLVING', 60, 140);
-              c.strokeStyle = '#aa3355'; c.beginPath(); c.moveTo(80,180); c.lineTo(420,180); c.stroke();
-              c.fillStyle = '#2a4060'; c.font = '20px Inter';
-              c.fillText('1. Listen  2. Analyze  3. Act', 80, 230);
-            }
-            const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 4;
-            screenCache.set(type, tx);
-            return tx;
-          };
-          export const Monitor: React.FC<{pos:V3; rot?:V3; kind:string; s?:number}> = ({pos, rot=[0,0,0], kind, s=1}) => {
-            const tex = useMemo(() => makeScreenTex(kind), [kind]);
-            return (
-              <group position={pos} rotation={rot} scale={s}>
-                <mesh material={MAT('#0a0a12',{roughness:.2,metalness:.4})} castShadow><boxGeometry args={[.62,.42,.03]} /></mesh>
-                <mesh position={[0,0,.017]} material={new THREE.MeshBasicMaterial({map: tex, toneMapped: false})}>
-                  <planeGeometry args={[.58,.38]} /></mesh>
-                <mesh position={[0,-.22,0]} material={MAT('#1a1a22',{metalness:.8,roughness:.3})}>
-                  <cylinderGeometry args={[.02,.03,.06,12]} /></mesh>
-                <mesh position={[0,-.26,.02]} material={MAT('#1a1a22',{metalness:.8,roughness:.3})}>
-                  <boxGeometry args={[.18,.015,.12]} /></mesh>
-              </group>
-            );
-          };
-          export const Art: React.FC<{kind:string; data?:any; pos:V3; rot?:V3; w:number}> = ({kind,pos,rot=[0,0,0],w}) => {
-            const tex = useMemo(() => makeScreenTex(kind), [kind]);
-            const h = w*0.625;
-            return (
-              <group position={pos} rotation={rot}>
-                <mesh material={MAT('#2a2038',{roughness:.5})}><boxGeometry args={[w+.04,h+.04,.02]} /></mesh>
-                <mesh position={[0,0,.012]} material={new THREE.MeshBasicMaterial({map: tex, toneMapped: false})}>
-                  <planeGeometry args={[w,h]} /></mesh>
-              </group>
-            );
-          };
-          EOF
-          cat > src/lib/tex.ts <<'EOF'
-          export {};
-          EOF
-          cat > src/lib/art.ts <<'EOF'
-          export const ART_ASPECT = (_k: string) => 0.625;
-          export {};
-          EOF
-          cat > src/lib/Art.tsx <<'EOF'
-          export {};
-          EOF
-          cat > src/lib/i18n.ts <<'EOF'
-          export const allText = () => '';
-          export const LANG = 'en';
-          export {};
-          EOF
           cat > src/shots.tsx <<'EOF'
           import React from 'react';
-          import {Character, POSE, mixPose} from './lib/Character';
-          import {Room, Lights, Desk, Chair, Monitor, Art, Pt, Pendant} from './lib/Set';
-          import {CamSpec, eo3, camLerp} from './lib/core';
-          const Scene: React.FC<{children: React.ReactNode}> = ({children}) => (
-            <>
-              <color attach="background" args={['#1a1626']} />
-              <Lights pal="dusk" />
-              <Room w={7} d={7} h={3.2} pal="dusk" />
-              {children}
-            </>
-          );
-          const camWide = (p: number): CamSpec => camLerp(
-            {p:[1.2,1.55,4.5], l:[0,1.0,1.4], fov: 42},
-            {p:[0.8,1.45,3.6], l:[0,1.1,1.4], fov: 46}, eo3(p));
-          const camClose = (p: number): CamSpec => camLerp(
-            {p:[0.6,1.35,3.0], l:[0,1.2,1.5], fov: 50, roll: .02},
-            {p:[0.4,1.25,2.4], l:[0,1.25,1.5], fov: 56, roll: -.015}, eo3(p));
-          const camDolly = (p: number): CamSpec => {
-            const fov = 48 + 12*p;
-            const dist = 1.4 / Math.tan((fov*Math.PI/180)/2);
-            return {p:[0, 1.35, 1.4+dist], l:[0, 1.2, 1.2], fov};
-          };
-          const camLow = (p: number): CamSpec => camLerp(
-            {p:[-1.4,.6,3.2], l:[0,1.0,1.4], fov: 50, roll: -.05},
-            {p:[-1.0,.9,2.8], l:[0,1.0,1.4], fov: 54, roll: .04}, eo3(p));
-          const DESK = (col='#3a2a4a', w=1.8, d=.9) => <Desk pos={[0,0,2.2]} w={w} d={d} col={col} />;
-          const CHAIR = (z=1.8) => <Chair pos={[0,0,z]} rot={0} col="#2a2038" />;
-          const MON = (kind='chat', s=1) => <Monitor pos={[0,1.05,2.2]} rot={[0,Math.PI,0]} kind={kind} s={s} />;
-          const SIT_HANDS = { wL: [-.22,.82,.38] as [number,number,number], wR: [.22,.82,.38] as [number,number,number], fL: [-.12,.06,.45] as [number,number,number], fR: [.12,.06,.45] as [number,number,number] };
+          import {Room, Boy, Cat, Bowl, Caption, SFX, Bubble} from './lib/characters';
+
           const S1: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              {DESK()}{CHAIR(1.8)}{MON('chat',1.1)}
-              <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                {...SIT_HANDS}
-                top="#e08a5a" pants="#2c3550" hair="short"
-                face={{eyes:'wide', mouth:'o', brow:.8}} />
-              <Pt color="#ff8866" intensity={1} distance={3} position={[0,1.8,2.0]} />
-            </Scene>
+            <Room><Boy x={380} y={1020} mood={u>1.5 ? 'shock' : 'sleepy'} pose="stand" jump={u} />
+              <div style={{position:'absolute', left: 380, top: 880, fontSize: 90}}>😴</div>
+              <div style={{position:'absolute', left: 250, top: 1450, width: 580, height: 90, background:'#fff', borderRadius: 40, border:'5px solid #111', textAlign:'center', fontFamily:'Montserrat', fontWeight: 900, fontSize: 36, paddingTop: 18}}>KRUUK... KRUUK... 🥺</div>
+              <Caption text="JAM 2 PAGI" sub="perut bunyi, dompet juga bunyi" />
+            </Room>
           );
           const S2: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.hold} t={u} prop="phone"
-                top="#e08a5a" face={{eyes:'wide', mouth:'frown', brow:1}} />
-              <Art kind="chat" pos={[0.9,1.4,0.06]} w={.7} />
-              <Art kind="chart" pos={[-0.9,1.3,0.06]} w={.6} />
-              <Pt color="#ff5577" intensity={1.2} distance={4} position={[.9,1.8,1]} />
-            </Scene>
+            <Room><Boy x={320} y={1000} mood="happy" pose="cheer" jump={u} />
+              <div style={{position:'absolute', left: 620, top: 1250, fontSize: 120, transform: `scale(${1 + Math.sin(u*8)*.08})`}}>🍜✨</div>
+              <Bubble text="YES! MASIH ADA 1 MIE TERAKHIR!" x={90} y={430} w={420} />
+              <Caption text="KETEMU HARTA KARUN!" sub="1 mie = 1 kebahagiaan" />
+              <SFX text="JACKPOT!" x={620} y={760} color="#2ECC71" />
+            </Room>
           );
           const S3: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              {DESK('#3a2a4a',1.6,.8)}{CHAIR(1.8)}{MON('slide',.95)}
-              <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                {...SIT_HANDS}
-                top="#e08a5a" face={{eyes:'dot', mouth:'flat'}} />
-            </Scene>
+            <Room><Boy x={300} y={1020} mood="happy" pose="dance" jump={u} />
+              <Bowl x={580} y={1180} s={1.15} />
+              <div style={{position:'absolute', left: 580, top: 1080, fontSize: 64}}>♨️♨️♨️</div>
+              <div style={{position:'absolute', left: 100, top: 1500, fontSize: 60}}>🎵 masak mie tengah malam 🎵</div>
+              <Caption text="MASAK MIE DULU" sub="wanginya sampai ke tetangga" />
+            </Room>
           );
           const S4: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              <Art kind="whiteboard" pos={[-1.4,1.6,0.06]} w={1.2} />
-              <Character id="u1" pos={[-.5,0,2.2]} rotY={Math.PI} pose={POSE.push} t={u}
-                wR={[.15,1.35,.45]} top="#e08a5a" face={{eyes:'dot', mouth:'talk', brow:-.4}} />
-              <Pendant pos={[-1.0,2.6,1.5]} />
-            </Scene>
+            <Room><Boy x={300} y={1020} mood="happy" pose="hold" />
+              <Bowl x={560} y={1180} />
+              <Cat x={760} y={1280} mood="sneaky" pose="sit" />
+              <div style={{position:'absolute', left: 720, top: 1150, background:'#111', color:'#fff', padding: '8px 14px', borderRadius: 18, fontFamily:'Montserrat', fontWeight: 800}}>ngintip...</div>
+              <Caption text="ADA YANG NGINTIP" sub="si oren udah cium bau mie" />
+              <SFX text="MEONG?" x={700} y={900} color="#FF9A2B" rot={6} />
+            </Room>
           );
-          const S5: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              {DESK('#3a2a4a',1.6,.8)}{CHAIR(1.8)}{MON('slide',.95)}
-              <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                {...SIT_HANDS}
-                top="#e08a5a" face={{eyes:'happy', mouth:'talk'}} />
-            </Scene>
-          );
-          const S6: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              <Art kind="chart" pos={[0,1.3,0.06]} w={.9} />
-              <Character id="u2" pos={[-.6,0,2.2]} rotY={.3} pose={POSE.cheer} t={u}
-                top="#4ac0b0" hair="bun" face={{eyes:'happy', mouth:'grin', blush:true}} />
-            </Scene>
-          );
-          const S7: React.FC<{p:number;u:number}> = ({p,u}) => {
-            const a = p<.33, b = p>=.33&&p<.66, c = p>=.66;
+          const S5: React.FC<{p:number;u:number}> = ({p,u}) => {
+            const tug = Math.sin(u*14)*18;
             return (
-              <Scene>
-                {a && <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.wave} t={u} top="#e08a5a" face={{eyes:'dot', mouth:'smile'}} />}
-                {b && <Monitor pos={[0,1.2,.06]} kind="slide" s={.9} />}
-                {c && <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.cheer} t={u+1} top="#e08a5a" face={{eyes:'happy', mouth:'grin', blush:true}} />}
-              </Scene>
+              <Room><Boy x={260 + tug} y={1020} mood="angry" pose="hold" />
+                <Cat x={620 - tug} y={1200} mood="angry" pose="jump" jump={u} />
+                <Bowl x={440} y={1200} rot={tug*0.4} />
+                <Caption text="REBUTAN MIE!" sub="siapa cepat dia dapat" />
+                <SFX text="TARIK!" x={380} y={780} />
+                <SFX text="LEPASIN!" x={600} y={950} color="#2E86FF" rot={8} />
+              </Room>
             );
           };
-          const S8: React.FC<{p:number;u:number}> = ({p,u}) => (
-            <Scene>
-              <Art kind="chart" pos={[0,1.3,0.06]} w={1.0} />
-              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={mixPose(POSE.hold, POSE.cheer, p)} t={u}
-                top="#e08a5a" face={{eyes:'wide', mouth:'o', brow:-.5}} />
-              <Pt color="#4ac0b0" intensity={1.5} distance={5} position={[0,2,1.5]} />
-            </Scene>
+          const S6: React.FC<{p:number;u:number}> = ({p,u}) => (
+            <Room><Boy x={280} y={1020} mood="shock" pose="shock" />
+              <Cat x={650} y={1200} mood="shock" pose="jump" jump={u} />
+              <Bowl x={420 + p*40} y={1050 - Math.sin(p*Math.PI)*220} rot={p*180} flying />
+              <div style={{position:'absolute', left: 400, top: 900, fontSize: 80}}>🍜💨</div>
+              <Caption text="MIE-NYA TERBANG!" sub="slow-mo drama 3 detik" color="#FF6B6B" />
+              <SFX text="GUBRAK!!" x={360} y={700} />
+            </Room>
           );
-          const S9: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              <Character id="u1" pos={[-.5,0,2.2]} rotY={.2} pose={POSE.stand} t={u} top="#e08a5a"
-                face={{eyes:'happy', mouth:'grin', blush:true}} />
-              <Character id="u2" pos={[.5,0,2.2]} rotY={-.2} pose={POSE.cheer} t={u+.5} top="#4ac0b0" hair="bun"
-                face={{eyes:'happy', mouth:'grin'}} />
-              <Pt color="#ffd6a0" intensity={1.2} distance={5} position={[0,2.2,1.5]} />
-            </Scene>
+          const S7: React.FC<{p:number;u:number}> = ({u}) => (
+            <Room><Boy x={260} y={1020} mood="cry" pose="cry" cry jump={u} />
+              <Cat x={620} y={1280} mood="happy" pose="eat" />
+              <div style={{position:'absolute', left: 600, top: 1450, width: 300, height: 80, background:'#fff', borderRadius: 20, border:'4px solid #111', textAlign:'center', fontFamily:'Montserrat', fontWeight: 900, paddingTop: 16}}>SLURP... ENAK! 😻</div>
+              <Caption text="KUCING YANG MAKAN" sub="anak kos cuma bisa nangis" color="#FF6B6B" />
+            </Room>
           );
+          const S8: React.FC<{p:number;u:number}> = ({u}) => (
+            <Room><Boy x={380} y={1000} mood="happy" pose="cheer" jump={u} />
+              <div style={{position:'absolute', left: 620, top: 1300, fontSize: 110}}>🍜👀</div>
+              <Bubble text="HA! MASIH ADA 1 LAGI DI BAWAH KASUR!" x={90} y={430} w={440} />
+              <Caption text="PLOT TWIST!" sub="mie cadangan anak kos sejati" />
+              <SFX text="ADA LAGI!" x={580} y={800} color="#2ECC71" />
+            </Room>
+          );
+          const S9: React.FC<{p:number;u:number}> = ({p,u}) => {
+            const x = 200 + Math.sin(u*6)*280;
+            return (
+              <Room><Boy x={x} y={1020} mood="shock" pose="run" flip={Math.cos(u*6)<0} />
+                <Cat x={x+180} y={1250} mood="angry" pose="run" jump={u} flip={Math.cos(u*6)<0} />
+                <div style={{position:'absolute', left: 300, top: 1480, fontSize: 50}}>💨💨💨</div>
+                <Caption text="KEJAR-KEJARAN!" sub="kosan jadi arena balap" />
+              </Room>
+            );
+          };
           const S10: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              <Art kind="whiteboard" pos={[-1.2,1.5,0.06]} w={1.1} />
-              <Character id="u1" pos={[.2,0,2.2]} rotY={Math.PI} pose={POSE.push} t={u} top="#e08a5a"
-                wR={[.1,1.2,.45]} face={{eyes:'dot', mouth:'talk'}} />
-            </Scene>
+            <Room><Boy x={250} y={1020} mood="cry" pose="stand" />
+              <Cat x={580} y={1250} mood="smug" pose="sit" />
+              <Bowl x={600} y={1450} s={0.9} />
+              <Bubble text="PUNYAKU. TITIK." x={560} y={1050} w={320} />
+              <Caption text="KUCING MENANG" sub="anak kos pasrah total" />
+            </Room>
           );
           const S11: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              <Character id="u1" pos={[0,0,2.2]} rotY={0} pose={POSE.hold} t={u} top="#e08a5a"
-                face={{eyes:'sleepy', mouth:'flat', brow:.3}} />
-              <Pendant pos={[0,2.7,1.8]} />
-            </Scene>
+            <Room><Boy x={250} y={1020} mood="happy" pose="hold" />
+              <Cat x={600} y={1250} mood="happy" pose="sit" />
+              <Bowl x={380} y={1250} s={1.1} />
+              <div style={{position:'absolute', left: 380, top: 1450, fontSize: 60}}>🥢🥢</div>
+              <Bubble text="YA UDAH, MAKAN BARENG AJA" x={80} y={420} w={420} />
+              <Caption text="DAMAI!" sub="mie dibagi dua, hati dibagi satu" color="#2ECC71" />
+            </Room>
           );
           const S12: React.FC<{p:number;u:number}> = ({u}) => (
-            <Scene>
-              {DESK()}{CHAIR(1.8)}{MON('chart',1.05)}
-              <Character id="u1" pos={[0,0,1.8]} rotY={0} pose={POSE.sit} t={u}
-                {...SIT_HANDS}
-                top="#e08a5a" face={{eyes:'happy', mouth:'smile', blush:true}} />
-              <Pt color="#ffd6a0" intensity={1.4} distance={5} position={[0,2,1.5]} />
-            </Scene>
+            <Room><Boy x={280} y={1020} mood="shock" pose="shock" />
+              <Cat x={620} y={1250} mood="happy" pose="jump" jump={u} />
+              <Bubble text="TAMBAH LAGI DONG!" x={560} y={1050} w={340} />
+              <Caption text="KUCING NAGIH!" sub="ini kucing apa preman?" />
+              <SFX text="LAGI?!" x={300} y={760} />
+            </Room>
+          );
+          const S13: React.FC<{p:number;u:number}> = ({p,u}) => (
+            <Room><Boy x={320} y={1020} mood="cry" pose="cry" />
+              <Cat x={620} y={1250} mood="smug" pose="sit" />
+              <div style={{position:'absolute', left: 90, right: 90, top: 380, textAlign:'center', background:'#FFD93D', border:'6px solid #111', borderRadius: 28, padding: '20px 10px'}}>
+                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 52, lineHeight: 1.05}}>BESOK KAMU<br/>YANG BELI MIE!</div>
+                <div style={{fontFamily:'Caveat', fontSize: 42}}>- kata kucing oren -</div>
+              </div>
+              <div style={{position:'absolute', left: 180, right: 180, bottom: 380, textAlign:'center', background:'#111', color:'#fff', borderRadius: 30, padding: '18px 10px', fontFamily:'Montserrat', fontWeight: 900, fontSize: 38}}>FOLLOW BIAR OREN<br/>GAK LAPAR LAGI 😹</div>
+              <div style={{position:'absolute', left: 0, right: 0, bottom: 180, textAlign:'center', fontSize: 44}}>❤️ 🔁 💬</div>
+            </Room>
           );
           export const SHOTS: any[] = [
-            {d:2.0, cam:camLow, Scene:S1, g:{tint:'#ff9a5a', ti:.12, vig:.55}},
-            {d:2.2, cam:camWide, Scene:S2, g:{tint:'#ff5577', ti:.1, vig:.6}},
-            {d:2.0, cam:camClose, Scene:S3, g:{tint:'#7a6aff', ti:.08, vig:.55}},
-            {d:2.4, cam:camWide, Scene:S4, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
-            {d:2.0, cam:camClose, Scene:S5, g:{tint:'#7a6aff', ti:.08, vig:.55}},
-            {d:2.0, cam:camWide, Scene:S6, g:{tint:'#4ac0b0', ti:.1, vig:.5}},
-            {d:1.8, cam:camClose, Scene:S7, g:{tint:'#ffd6a0', ti:.12, vig:.5, flash:.15}},
-            {d:2.4, cam:camDolly, Scene:S8, g:{tint:'#4ac0b0', ti:.14, vig:.6, lines:(p:number)=>Math.max(0,1-Math.abs(p-.6)*4)*.8}},
-            {d:2.0, cam:camWide, Scene:S9, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
-            {d:2.2, cam:camLow, Scene:S10, g:{tint:'#ffd6a0', ti:.08, vig:.55}},
-            {d:2.0, cam:camClose, Scene:S11, g:{tint:'#7a6aff', ti:.06, vig:.65}},
-            {d:2.4, cam:camWide, Scene:S12, g:{tint:'#ffd6a0', ti:.1, vig:.5}},
+            {d:3.0, Scene:S1, cap:'jam 2 pagi'},
+            {d:3.5, Scene:S2, cap:'ketemu mie'},
+            {d:3.5, Scene:S3, cap:'masak mie'},
+            {d:3.5, Scene:S4, cap:'kucing ngintip'},
+            {d:3.5, Scene:S5, cap:'rebutan', shake: 6},
+            {d:3.5, Scene:S6, cap:'mie terbang', shake: 10, flash: .3},
+            {d:3.5, Scene:S7, cap:'kucing makan'},
+            {d:3.5, Scene:S8, cap:'plot twist'},
+            {d:3.5, Scene:S9, cap:'kejar-kejaran', shake: 4},
+            {d:3.5, Scene:S10, cap:'kucing menang'},
+            {d:3.5, Scene:S11, cap:'damai'},
+            {d:3.5, Scene:S12, cap:'kucing nagih'},
+            {d:3.5, Scene:S13, cap:'punchline + CTA'},
           ];
           EOF
           cat > scripts/render.sh <<'EOF'
           #!/bin/sh
           set -e
           OUT="${1:-final.mp4}"
-          FRAMES=$(node -e "const fs=require('fs');const t=fs.readFileSync('src/shots.tsx','utf8');const ds=[...t.matchAll(/d:\s*([\d.]+)/g)].map(m=>parseFloat(m[1]));console.log(Math.ceil((ds.reduce((a,b)=>a+b,0)||24)*30))")
+          FRAMES=$(node -e "const fs=require('fs');const t=fs.readFileSync('src/shots.tsx','utf8');const ds=[...t.matchAll(/d:\s*([\d.]+)/g)].map(m=>parseFloat(m[1]));console.log(Math.ceil((ds.reduce((a,b)=>a+b,0)||45)*30))")
           echo "FRAMES=$FRAMES"
           CHR="${CHROME:-$(ls /opt/pw-browsers/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)}"
           echo "CHROME=$CHR"
@@ -725,7 +456,7 @@ jobs:
         run: |
           set -e
           npm install --no-audit --no-fund
-          npm ls @react-three/fiber three remotion @remotion/three || true
+          npm ls remotion || true
       - name: Smoke test 1 frame
         env:
           GL: 'swangle'
@@ -733,18 +464,18 @@ jobs:
           set -e
           npx remotion still src/index.ts Reel out/test.png --frame=10 --gl=swangle --concurrency=1 --log=info || { echo "SMOKE TEST GAGAL"; exit 1; }
           ls -l out/test.png
-      - name: Render
+      - name: Render 45s
         env:
           CONC: '1'
           GL: 'swangle'
         run: |
           set -e
-          sh scripts/render.sh ai_sosmed.mp4
+          sh scripts/render.sh comedy_anak_kos_vs_kucing_oren.mp4
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: reel-ai-sosmed
+          name: reel-comedy-2d-45s
           path: |
-            out/ai_sosmed.mp4
+            out/comedy_anak_kos_vs_kucing_oren.mp4
             out/test.png
           retention-days: 7
