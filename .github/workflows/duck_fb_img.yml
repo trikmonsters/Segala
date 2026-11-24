@@ -49,12 +49,28 @@ jobs:
           MANUAL_PROMPT: ${{ github.event.inputs.manual_override_prompt }}
         run: |
           cat > gemini_content.py << 'PYEOF'
-          import os, json, re, time
+          import os, json, re, time, random
           from datetime import datetime, timedelta
           from google import genai
           from google.genai import types
           from google.genai.errors import ServerError, ClientError
 
+          # ===================== KONFIGURASI =====================
+          # Urutan model: paling stabil & murah di atas, fallback ke bawah.
+          MODELS = [
+              "gemini-4-hydrogen",
+              "gemini-3.8-flash",
+              "gemini-3.5-flash-lite",
+              "gemini-3.1-flash-lite",
+          ]
+
+          # Error code yang layak di-retry (server sibuk / rate limit)
+          RETRYABLE_CODES = {429, 500, 502, 503, 504}
+
+          # Maksimal retry per kombinasi (model x key)
+          MAX_RETRIES = 3
+
+          # ===================== HELPER TOPIK =====================
           def load_recent_topics(days=7):
               try:
                   with open('used_topics.json', 'r') as f:
@@ -62,14 +78,14 @@ jobs:
                   cutoff = (datetime.now() - timedelta(days=days)).isoformat()
                   recent = [item['topic'] for item in data if item.get('date', '') > cutoff]
                   return recent[-10:]
-              except:
+              except Exception:
                   return []
 
           def save_topic(topic):
               try:
                   with open('used_topics.json', 'r') as f:
                       data = json.load(f)
-              except:
+              except Exception:
                   data = []
               data.append({'topic': topic, 'date': datetime.now().isoformat()})
               cutoff = (datetime.now() - timedelta(days=30)).isoformat()
@@ -77,35 +93,72 @@ jobs:
               with open('used_topics.json', 'w') as f:
                   json.dump(data, f)
 
-          def generate_with_retry(api_keys, prompt, schema):
-              last_err = None
-              for key in api_keys:
-                  if not key:
-                      continue
-                  for attempt in range(3):
-                      try:
-                          client = genai.Client(api_key=key)
-                          return client.models.generate_content(
-                              model='gemini-3.8-flash',
-                              contents=prompt,
-                              config=types.GenerateContentConfig(
-                                  response_mime_type='application/json',
-                                  response_schema=schema
-                              )
-                          )
-                      except ServerError as e:
-                          last_err = e
-                          wait = 2 ** (attempt + 1)
-                          print(f"503 sibuk, retry dalam {wait}s...")
-                          time.sleep(wait)
-                      except ClientError as e:
-                          print(f"ClientError fatal: {e}")
-                          raise e
-                      except Exception as e:
-                          print(f"Error fatal: {e}")
-                          raise e
-              raise last_err if last_err else RuntimeError("Semua key dan retry gagal")
+          # ===================== CORE: MULTI-MODEL + MULTI-KEY RETRY =====================
+          def generate_with_retry(api_keys, prompt, schema, max_retries=MAX_RETRIES):
+              """
+              Coba SEMUA kombinasi model x api_key.
+              - 429/5xx -> retry maks max_retries dengan backoff + jitter
+              - 400/403/404 (model tidak valid / tidak akses) -> skip ke model/key berikutnya
+              - raise hanya jika SEMUA kombinasi habis
+              """
+              api_keys = [k for k in api_keys if k]
+              if not api_keys:
+                  raise RuntimeError("Tidak ada API key yang tersedia")
 
+              last_err = None
+              total_attempts = 0
+
+              for model_name in MODELS:
+                  for key_idx, key in enumerate(api_keys, start=1):
+                      for attempt in range(1, max_retries + 1):
+                          total_attempts += 1
+                          try:
+                              client = genai.Client(api_key=key)
+                              print(f"[{model_name}] key#{key_idx} attempt {attempt}/{max_retries}")
+                              return client.models.generate_content(
+                                  model=model_name,
+                                  contents=prompt,
+                                  config=types.GenerateContentConfig(
+                                      response_mime_type='application/json',
+                                      response_schema=schema,
+                                  ),
+                              )
+
+                          except ServerError as e:
+                              last_err = e
+                              if attempt < max_retries:
+                                  wait = (2 ** attempt) + random.uniform(0, 1)
+                                  print(f"  ↳ ServerError ({getattr(e, 'code', '5xx')}), retry {wait:.1f}s...")
+                                  time.sleep(wait)
+                              else:
+                                  print(f"  ↳ ServerError habis retry, pindah key/model")
+                                  break
+
+                          except ClientError as e:
+                              code = getattr(e, "code", None) or getattr(e, "status_code", None)
+                              last_err = e
+                              if code in RETRYABLE_CODES and attempt < max_retries:
+                                  wait = (2 ** attempt) + random.uniform(0, 1)
+                                  print(f"  ↳ ClientError {code} (rate limit), retry {wait:.1f}s...")
+                                  time.sleep(wait)
+                                  continue
+                              print(f"  ↳ ClientError {code}: {str(e)[:120]} → skip model/key ini")
+                              break
+
+                          except Exception as e:
+                              last_err = e
+                              print(f"  ↳ Exception tak terduga: {e} → retry")
+                              if attempt < max_retries:
+                                  time.sleep(2 ** attempt)
+                              else:
+                                  break
+
+              raise RuntimeError(
+                  f"Semua model & key gagal setelah {total_attempts} percobaan. "
+                  f"Error terakhir: {last_err}"
+              )
+
+          # ===================== MAIN =====================
           def main():
               manual = os.environ.get('MANUAL_PROMPT', '').strip()
               if manual:
@@ -117,11 +170,13 @@ jobs:
                   }
                   with open('gemini_result.json', 'w') as f:
                       json.dump(result, f)
+                  print("Mode manual aktif.")
                   return
 
               api_keys = [
                   os.environ.get('GEMINI_API_KEY'),
-                  os.environ.get('GEMINI_API_KEY_2')
+                  os.environ.get('GEMINI_API_KEY_2'),
+                  os.environ.get('GEMINI_API_KEY_3'),
               ]
               today = datetime.now().strftime('%Y-%m-%d')
               recent_topics = load_recent_topics()
@@ -148,6 +203,7 @@ jobs:
 
                   Pastikan keyword utama SEO muncul di awal title dan di caption. Gunakan Bahasa Inggris Target USA
                   """
+
               schema = {
                   "type": "OBJECT",
                   "properties": {
