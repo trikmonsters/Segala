@@ -1,4 +1,4 @@
-name: reel-comedy-2d
+name: reel-comedy-toilet-kecoa
 on:
   workflow_dispatch:
   push:
@@ -17,7 +17,7 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y ffmpeg chromium-browser || sudo apt-get install -y ffmpeg chromium
-      - name: Write project - Comedy 2D Anak Kos vs Kucing Oren
+      - name: Write project - Toilet Drama Kecoa Lamaran
         run: |
           set -e
           rm -rf src scripts public out chunks
@@ -26,7 +26,7 @@ jobs:
           import json, pathlib
           font_pkg = "@fontsource/" + "".join(chr(c) for c in [105,110,116,101,114])
           pkg = {
-            "name": "reel-comedy-2d",
+            "name": "reel-comedy-toilet-kecoa",
             "version": "1.0.0",
             "private": True,
             "dependencies": {
@@ -88,10 +88,10 @@ jobs:
           EOF
           cat > src/timeline.ts <<'EOF'
           import {SHOTS} from './shots';
-          export type TLEntry = { a: number; D: number; d: number; Scene: React.FC<{p: number; u: number}>; cap?: string; sfx?: string; shake?: number; flash?: number };
+          export type TLEntry = { a: number; D: number; d: number; Scene: React.FC<{p: number; u: number}>; shake?: number; flash?: number };
           let cursor = 0;
           export const TL: TLEntry[] = SHOTS.map((s: any) => {
-            const e = { a: cursor, D: s.d, d: s.d, Scene: s.Scene, cap: s.cap, sfx: s.sfx, shake: s.shake, flash: s.flash };
+            const e = { a: cursor, D: s.d, d: s.d, Scene: s.Scene, shake: s.shake, flash: s.flash };
             cursor += s.d; return e;
           });
           export const TOTAL_S = cursor;
@@ -108,143 +108,128 @@ jobs:
             </div>
           );
           export const SFX: React.FC<{text: string; x?: number; y?: number; rot?: number; color?: string}> = ({text, x=700, y=700, rot=-8, color='#FF4D4D'}) => (
-            <div style={{position:'absolute', left: x, top: y, zIndex: 60, transform: `rotate(${rot}deg) scale(1.05)`, background: color, color:'#fff', fontFamily:'Montserrat, sans-serif', fontWeight: 900, fontSize: 64, padding: '10px 22px', borderRadius: 18, border: '4px solid #fff', boxShadow: '0 8px 0 rgba(0,0,0,.3)'}}>{text}</div>
+            <div style={{position:'absolute', left: x, top: y, zIndex: 60, transform: `rotate(${rot}deg) scale(1.05)`, background: color, color:'#fff', fontFamily:'Montserrat, sans-serif', fontWeight: 900, fontSize: 58, padding: '10px 22px', borderRadius: 18, border: '4px solid #fff', boxShadow: '0 8px 0 rgba(0,0,0,.3)'}}>{text}</div>
           );
           export const Bubble: React.FC<{text: string; x?: number; y?: number; w?: number}> = ({text, x=120, y=420, w=360}) => (
             <div style={{position:'absolute', left: x, top: y, width: w, zIndex: 55, background:'#fff', borderRadius: 28, padding: '16px 20px', border: '4px solid #111', textAlign:'center'}}>
-              <div style={{fontFamily:'Montserrat, sans-serif', fontWeight: 800, fontSize: 34, lineHeight: 1.15, color:'#111'}}>{text}</div>
+              <div style={{fontFamily:'Montserrat, sans-serif', fontWeight: 800, fontSize: 32, lineHeight: 1.15, color:'#111'}}>{text}</div>
               <div style={{position:'absolute', bottom: -18, left: 40, width: 30, height: 30, background:'#fff', borderRight:'4px solid #111', borderBottom:'4px solid #111', transform:'rotate(45deg)'}} />
             </div>
           );
 
-          // --- ROOM ---
-          export const Room: React.FC<{night?: boolean; children?: React.ReactNode}> = ({night=true, children}) => (
-            <div style={{position:'absolute', inset:0, background: night ? '#2A1E3F' : '#3A2A55', overflow:'hidden'}}>
-              {/* wall */}
-              <div style={{position:'absolute', left:0, right:0, top:0, height: 1320, background: 'linear-gradient(#3B2A5A, #2A1E3F)'}} />
-              {/* window moon */}
-              <div style={{position:'absolute', left: 70, top: 90, width: 280, height: 280, background:'#1A1230', border:'10px solid #FFD93D', borderRadius: 20, overflow:'hidden'}}>
-                <div style={{position:'absolute', left: 140, top: 40, width: 90, height: 90, background:'#FFF6A0', borderRadius: '50%', boxShadow:'0 0 40px #FFF6A0'}} />
-                <div style={{position:'absolute', left: 20, top: 180, color:'#fff', fontSize: 28, fontFamily:'Montserrat', fontWeight: 800}}>JAM 02:00</div>
-                <div style={{position:'absolute', left: 20, top: 215, color:'#FFD93D', fontSize: 24, fontFamily:'Montserrat', fontWeight: 700}}>KOSAN SEPI...</div>
+          // --- BATHROOM ala Toonkart + LaughByAnimation ---
+          export const Bathroom: React.FC<{children?: React.ReactNode}> = ({children}) => (
+            <div style={{position:'absolute', inset:0, background:'#BFE8F5', overflow:'hidden'}}>
+              {/* tiles */}
+              <div style={{position:'absolute', left:0, right:0, top:0, height: 1250, background: 'repeating-linear-gradient(0deg, #A8D8F0 0 90px, #fff 90px 96px), repeating-linear-gradient(90deg, #A8D8F0 0 90px, #fff 90px 96px)'}} />
+              <div style={{position:'absolute', left:0, right:0, top:0, height: 1250, background:'rgba(255,255,255,.15)'}} />
+              {/* window */}
+              <div style={{position:'absolute', left: 70, top: 80, width: 260, height: 220, background:'#EAF6FF', border:'10px solid #fff', borderRadius: 16}}>
+                <div style={{position:'absolute', left: 60, top: 50, fontSize: 70}}>🌙</div>
+                <div style={{position:'absolute', left: 20, top: 150, fontFamily:'Montserrat', fontWeight: 800, fontSize: 24}}>MALAM...</div>
               </div>
-              {/* poster */}
-              <div style={{position:'absolute', right: 70, top: 100, width: 280, height: 360, background:'#FF6B6B', border:'8px solid #fff', borderRadius: 16, transform:'rotate(3deg)', textAlign:'center', paddingTop: 20}}>
-                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 38, color:'#fff', lineHeight: 1}}>DILARANG<br/>LAPAR<br/>MALAM</div>
-                <div style={{fontSize: 70, marginTop: 10}}>🍜</div>
-                <div style={{fontFamily:'Caveat', fontSize: 34, color:'#fff'}}>tapi selalu lapar :(</div>
+              {/* poster dilarang */}
+              <div style={{position:'absolute', right: 70, top: 90, width: 280, height: 320, background:'#FF6B6B', border:'8px solid #fff', borderRadius: 16, transform:'rotate(3deg)', textAlign:'center', paddingTop: 18}}>
+                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 34, color:'#fff', lineHeight: 1}}>JANGAN<br/>MAIN HP<br/>DI TOILET</div>
+                <div style={{fontSize: 60}}>📵🚽</div>
               </div>
               {/* floor */}
-              <div style={{position:'absolute', left:0, right:0, bottom:0, height: 600, background:'#8B5A2B'}} />
-              <div style={{position:'absolute', left:0, right:0, bottom: 600, height: 18, background:'#FFD93D'}} />
-              {/* bed */}
-              <div style={{position:'absolute', left: 60, bottom: 180, width: 380, height: 220, background:'#E85D75', borderRadius: 20, border:'6px solid #111'}}>
-                <div style={{position:'absolute', left: 20, top: 20, width: 180, height: 80, background:'#fff', borderRadius: 14}} />
-              </div>
-              {/* desk */}
-              <div style={{position:'absolute', right: 60, bottom: 200, width: 420, height: 28, background:'#5A3A1A', borderRadius: 8, border:'4px solid #111'}} />
-              <div style={{position:'absolute', right: 80, bottom: 60, width: 24, height: 140, background:'#5A3A1A'}} />
-              <div style={{position:'absolute', right: 430, bottom: 60, width: 24, height: 140, background:'#5A3A1A'}} />
-              {/* rice cooker */}
-              <div style={{position:'absolute', left: 70, bottom: 620, width: 150, height: 110, background:'#fff', borderRadius: 20, border:'5px solid #111', textAlign:'center', fontSize: 50, paddingTop: 10}}>🍚</div>
+              <div style={{position:'absolute', left:0, right:0, bottom:0, height: 670, background:'#7A9BA8'}} />
+              <div style={{position:'absolute', left:0, right:0, bottom: 670, height: 16, background:'#FFD93D'}} />
+              {/* toilet paper */}
+              <div style={{position:'absolute', left: 70, top: 900, width: 130, height: 130, background:'#fff', borderRadius: '50%', border:'6px solid #111', textAlign:'center', fontSize: 60, paddingTop: 10}}>🧻</div>
+              <div style={{position:'absolute', left: 110, top: 1030, width: 50, height: 180, background:'#fff', border:'4px solid #111'}} />
+              {/* bucket */}
+              <div style={{position:'absolute', right: 80, bottom: 180, width: 150, height: 160, background:'#2E86FF', borderRadius: '10px 10px 40px 40px', border:'5px solid #111', textAlign:'center', fontSize: 60, paddingTop: 20}}>🪣</div>
               {children}
             </div>
           );
 
-          // --- BOY ---
-          export const Boy: React.FC<{x?: number; y?: number; s?: number; mood?: string; pose?: string; flip?: boolean; cry?: boolean; jump?: number}> = ({x=340, y=950, s=1, mood='normal', pose='stand', flip=false, cry=false, jump=0}) => {
-            const bounce = pose === 'dance' ? Math.abs(Math.sin(jump * 8)) * 26 : 0;
-            const rot = pose === 'shock' ? -6 : pose === 'cry' ? 4 : pose === 'run' ? 8 : 0;
-            const mouth = mood === 'happy' ? 'D' : mood === 'shock' ? 'O' : mood === 'cry' ? 'W' : mood === 'angry' ? '><' : '—';
-            const eye = mood === 'shock' ? '◎' : mood === 'cry' ? '😭' : mood === 'happy' ? '✦' : mood === 'sleepy' ? '—' : '●';
+          // --- MAN on toilet - style Toonkart bald + LaughByAnimation teal shirt ---
+          export const Man: React.FC<{x?: number; y?: number; s?: number; mood?: string; pose?: string; jump?: number}> = ({x=300, y=900, s=1, mood='focus', pose='sit', jump=0}) => {
+            const shake = pose==='shake' ? Math.sin(jump*20)*10 : 0;
+            const rot = mood==='shock' ? -7 : mood==='cry' ? 5 : 0;
+            const mouth = mood==='focus' ? '😝' : mood==='shock' ? '😱' : mood==='cry' ? '😭' : mood==='angry' ? '😡' : mood==='happy' ? '😁' : '😐';
             return (
-              <div style={{position:'absolute', left: x, top: y - bounce - jump, width: 240*s, height: 460*s, zIndex: 20, transform: `scaleX(${flip ? -1 : 1}) rotate(${rot}deg)`, transformOrigin:'bottom center'}}>
+              <div style={{position:'absolute', left: x+shake, top: y, width: 380*s, height: 600*s, zIndex: 20, transform:`rotate(${rot}deg)`}}>
+                {/* toilet */}
+                <div style={{position:'absolute', left: 40, top: 340, width: 300, height: 240, background:'#fff', borderRadius: 24, border:'7px solid #111'}}>
+                  <div style={{position:'absolute', left: 20, top: 20, right: 20, height: 50, background:'#D9F0FF', borderRadius: 14}} />
+                  <div style={{position:'absolute', left: 20, top: 100, fontSize: 40}}>💧 TOILET</div>
+                </div>
+                <div style={{position:'absolute', left: 20, top: 280, width: 340, height: 60, background:'#fff', borderRadius: 30, border:'6px solid #111'}} />
                 {/* legs */}
-                <div style={{position:'absolute', left: 60, top: 330, width: 50, height: 110, background:'#2B2B3A', borderRadius: 14}} />
-                <div style={{position:'absolute', left: 130, top: 330, width: 50, height: 110, background:'#2B2B3A', borderRadius: 14}} />
-                <div style={{position:'absolute', left: 45, top: 430, width: 80, height: 28, background:'#111', borderRadius: 12}} />
-                <div style={{position:'absolute', left: 120, top: 430, width: 80, height: 28, background:'#111', borderRadius: 12}} />
-                {/* body - kaos oblong */}
-                <div style={{position:'absolute', left: 20, top: 190, width: 200, height: 160, background: '#FF8A3D', borderRadius: 28, border:'5px solid #111', textAlign:'center', paddingTop: 18}}>
-                  <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 28, color:'#fff'}}>ANAK KOS</div>
-                  <div style={{fontSize: 52}}>🍜</div>
+                <div style={{position:'absolute', left: 80, top: 430, width: 70, height: 130, background:'#FFC79A', borderRadius: 20, border:'4px solid #111', transform:'rotate(10deg)'}} />
+                <div style={{position:'absolute', right: 80, top: 430, width: 70, height: 130, background:'#FFC79A', borderRadius: 20, border:'4px solid #111', transform:'rotate(-10deg)'}} />
+                <div style={{position:'absolute', left: 60, top: 550, width: 100, height: 30, background:'#111', borderRadius: 12}} />
+                <div style={{position:'absolute', right: 60, top: 550, width: 100, height: 30, background:'#111', borderRadius: 12}} />
+                {/* body teal shirt */}
+                <div style={{position:'absolute', left: 60, top: 180, width: 260, height: 200, background:'#2EC4B6', borderRadius: 28, border:'5px solid #111', textAlign:'center', paddingTop: 14}}>
+                  <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 26, color:'#fff'}}>GAMER TOILET</div>
+                  <div style={{fontSize: 56}}>🎮</div>
                 </div>
-                {/* arms */}
-                <div style={{position:'absolute', left: -10, top: 210, width: 46, height: 110, background:'#FFC79A', borderRadius: 22, border:'4px solid #111', transform: pose==='cheer' ? 'rotate(-140deg)' : pose==='hold' ? 'rotate(30deg)' : 'rotate(12deg)', transformOrigin:'top center'}} />
-                <div style={{position:'absolute', right: -10, top: 210, width: 46, height: 110, background:'#FFC79A', borderRadius: 22, border:'4px solid #111', transform: pose==='cheer' ? 'rotate(140deg)' : pose==='hold' ? 'rotate(-30deg)' : 'rotate(-12deg)', transformOrigin:'top center'}} />
-                {/* head */}
-                <div style={{position:'absolute', left: 20, top: 0, width: 200, height: 200, background:'#FFC79A', borderRadius: '50%', border:'5px solid #111', overflow:'visible'}}>
-                  {/* hair messy */}
-                  <div style={{position:'absolute', left: -10, top: -18, width: 220, height: 80, background:'#2B1A12', borderRadius: '60% 60% 20% 20%'}} />
-                  <div style={{position:'absolute', left: 30, top: -32, width: 40, height: 50, background:'#2B1A12', borderRadius: '50%', transform:'rotate(-20deg)'}} />
-                  <div style={{position:'absolute', right: 30, top: -28, width: 34, height: 44, background:'#2B1A12', borderRadius: '50%', transform:'rotate(20deg)'}} />
-                  {/* eyes */}
-                  <div style={{position:'absolute', left: 35, top: 78, width: 52, height: 52, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 38, lineHeight: '52px'}}>{eye}</div>
-                  <div style={{position:'absolute', right: 35, top: 78, width: 52, height: 52, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 38, lineHeight: '52px'}}>{eye}</div>
-                  {/* blush */}
-                  <div style={{position:'absolute', left: 18, top: 138, width: 36, height: 18, background:'#FF8A8A', borderRadius: '50%', opacity: .7}} />
-                  <div style={{position:'absolute', right: 18, top: 138, width: 36, height: 18, background:'#FF8A8A', borderRadius: '50%', opacity: .7}} />
-                  {/* mouth */}
-                  <div style={{position:'absolute', left: '50%', top: 148, transform:'translateX(-50%)', fontFamily:'Montserrat', fontWeight: 900, fontSize: mood==='cry' ? 36 : 42, color:'#7A1A1A'}}>{mouth}</div>
-                  {cry && <div style={{position:'absolute', left: 20, top: 110, fontSize: 38}}>💧💧</div>}
-                  {cry && <div style={{position:'absolute', right: 20, top: 110, fontSize: 38}}>💧💧</div>}
+                {/* arms holding phone */}
+                <div style={{position:'absolute', left: 10, top: 230, width: 60, height: 130, background:'#FFC79A', borderRadius: 22, border:'4px solid #111', transform:'rotate(35deg)'}} />
+                <div style={{position:'absolute', right: 10, top: 230, width: 60, height: 130, background:'#FFC79A', borderRadius: 22, border:'4px solid #111', transform:'rotate(-35deg)'}} />
+                {/* phone */}
+                <div style={{position:'absolute', left: 130, top: 330, width: 120, height: 180, background:'#111', borderRadius: 18, border:'4px solid #fff', textAlign:'center', paddingTop: 10}}>
+                  <div style={{fontSize: 52}}>🎮🔥</div>
+                  <div style={{color:'#FFD93D', fontFamily:'Montserrat', fontWeight: 900, fontSize: 20}}>RANK UP!</div>
+                  {mood==='shock' && <div style={{color:'#FF4D4D', fontWeight: 900, fontSize: 22}}>HP JATOH!</div>}
                 </div>
-                {mood==='happy' && <div style={{position:'absolute', left: -30, top: -30, fontSize: 48}}>✨✨</div>}
+                {/* head bald + black side hair ala Toonkart */}
+                <div style={{position:'absolute', left: 80, top: -10, width: 220, height: 210, background:'#FFC79A', borderRadius: '50%', border:'5px solid #111'}}>
+                  <div style={{position:'absolute', left: -6, top: 40, width: 28, height: 90, background:'#111', borderRadius: 14}} />
+                  <div style={{position:'absolute', right: -6, top: 40, width: 28, height: 90, background:'#111', borderRadius: 14}} />
+                  <div style={{position:'absolute', left: 45, top: 65, width: 60, height: 60, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 44, lineHeight: '60px'}}>{mood==='shock' ? '◎' : mood==='cry' ? '😭' : '●'}</div>
+                  <div style={{position:'absolute', right: 45, top: 65, width: 60, height: 60, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 44, lineHeight: '60px'}}>{mood==='shock' ? '◎' : mood==='cry' ? '😭' : '●'}</div>
+                  <div style={{position:'absolute', left: '50%', top: 135, transform:'translateX(-50%)', fontSize: 52}}>{mouth}</div>
+                  <div style={{position:'absolute', left: 30, top: 140, width: 36, height: 16, background:'#FF8A8A', borderRadius: '50%', opacity: .7}} />
+                  <div style={{position:'absolute', right: 30, top: 140, width: 36, height: 16, background:'#FF8A8A', borderRadius: '50%', opacity: .7}} />
+                  {mood==='cry' && <div style={{position:'absolute', left: 10, top: 100, fontSize: 36}}>💧💧</div>}
+                </div>
               </div>
             );
           };
 
-          // --- CAT OREN ---
-          export const Cat: React.FC<{x?: number; y?: number; s?: number; mood?: string; pose?: string; flip?: boolean; jump?: number}> = ({x=650, y=1150, s=1, mood='sneaky', pose='sit', flip=false, jump=0}) => {
-            const bounce = pose === 'jump' ? Math.abs(Math.sin(jump * 6)) * 90 : pose === 'run' ? Math.abs(Math.sin(jump * 12)) * 18 : 0;
-            const rot = pose === 'jump' ? -12 : pose === 'eat' ? 3 : 0;
-            const eye = mood === 'shock' ? '◎' : mood === 'smug' ? '😼' : mood === 'happy' ? '😻' : mood === 'angry' ? '😾' : '●';
+          // --- COCKROACH couple - ala Animotion romance + LaughByAnimation big roach ---
+          export const Roach: React.FC<{x?: number; y?: number; s?: number; female?: boolean; mood?: string; pose?: string; jump?: number; withRose?: boolean}> = ({x=600, y=1300, s=1, female=false, mood='love', pose='stand', jump=0, withRose=false}) => {
+            const bounce = pose==='jump' ? Math.abs(Math.sin(jump*6))*70 : pose==='walk' ? Math.abs(Math.sin(jump*10))*14 : 0;
+            const rot = pose==='fly' ? -18 : 0;
+            const eye = mood==='shock' ? '◎' : mood==='love' ? '♥' : mood==='happy' ? '😻' : '●';
+            const bodyCol = female ? '#8B5A2B' : '#6B3A1A';
             return (
-              <div style={{position:'absolute', left: x, top: y - bounce - jump, width: 260*s, height: 240*s, zIndex: 25, transform: `scaleX(${flip ? -1 : 1}) rotate(${rot}deg)`, transformOrigin:'bottom center'}}>
-                {/* tail */}
-                <div style={{position:'absolute', right: -40, top: 80, width: 90, height: 30, background:'#FF9A2B', borderRadius: 20, border:'4px solid #111', transform:'rotate(-30deg)'}} />
-                <div style={{position:'absolute', right: -55, top: 45, width: 30, height: 40, background:'#FF9A2B', borderRadius: '50%', border:'4px solid #111'}} />
-                {/* body */}
-                <div style={{position:'absolute', left: 20, top: 100, width: 210, height: 130, background:'#FF9A2B', borderRadius: '50%', border:'5px solid #111'}}>
-                  <div style={{position:'absolute', left: 30, top: 40, width: 60, height: 40, background:'#FFD08A', borderRadius: '50%'}} />
-                  <div style={{position:'absolute', right: 30, top: 40, width: 60, height: 40, background:'#FFD08A', borderRadius: '50%'}} />
-                  <div style={{position:'absolute', left: '50%', top: 70, transform:'translateX(-50%)', fontSize: 28}}>🐾</div>
-                </div>
+              <div style={{position:'absolute', left: x, top: y - bounce, width: 220*s, height: 180*s, zIndex: 28, transform:`rotate(${rot}deg)`}}>
+                {/* wings */}
+                <div style={{position:'absolute', left: 30, top: 20, width: 160, height: 110, background: female ? '#A67C52' : '#7A4A1F', borderRadius: '50%', border:'4px solid #111', opacity: .95}} />
+                <div style={{position:'absolute', left: 50, top: 35, width: 120, height: 80, background:'#D9A066', borderRadius: '50%', opacity: .6}} />
+                {/* antennae */}
+                <div style={{position:'absolute', left: 40, top: -20, width: 4, height: 60, background:'#111', transform:'rotate(-25deg)'}} />
+                <div style={{position:'absolute', right: 40, top: -20, width: 4, height: 60, background:'#111', transform:'rotate(25deg)'}} />
+                <div style={{position:'absolute', left: 20, top: -28, width: 14, height: 14, background:'#111', borderRadius:'50%'}} />
+                <div style={{position:'absolute', right: 20, top: -28, width: 14, height: 14, background:'#111', borderRadius:'50%'}} />
                 {/* head */}
-                <div style={{position:'absolute', left: 30, top: 0, width: 190, height: 150, background:'#FF9A2B', borderRadius: '50%', border:'5px solid #111'}}>
-                  {/* ears */}
-                  <div style={{position:'absolute', left: 10, top: -28, width: 0, height: 0, borderLeft:'28px solid transparent', borderRight:'28px solid transparent', borderBottom:'52px solid #FF9A2B'}} />
-                  <div style={{position:'absolute', right: 10, top: -28, width: 0, height: 0, borderLeft:'28px solid transparent', borderRight:'28px solid transparent', borderBottom:'52px solid #FF9A2B'}} />
-                  <div style={{position:'absolute', left: 18, top: -14, width: 0, height: 0, borderLeft:'16px solid transparent', borderRight:'16px solid transparent', borderBottom:'30px solid #FFC79A'}} />
-                  <div style={{position:'absolute', right: 18, top: -14, width: 0, height: 0, borderLeft:'16px solid transparent', borderRight:'16px solid transparent', borderBottom:'30px solid #FFC79A'}} />
-                  {/* eyes */}
-                  <div style={{position:'absolute', left: 28, top: 50, width: 58, height: 58, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 42, lineHeight: '58px'}}>{eye}</div>
-                  <div style={{position:'absolute', right: 28, top: 50, width: 58, height: 58, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 42, lineHeight: '58px'}}>{eye}</div>
-                  {/* nose + mouth */}
-                  <div style={{position:'absolute', left: '50%', top: 108, transform:'translateX(-50%)', width: 22, height: 16, background:'#FF4D4D', borderRadius: '50%', border:'2px solid #111'}} />
-                  <div style={{position:'absolute', left: '50%', top: 126, transform:'translateX(-50%)', fontWeight: 900, fontSize: 26, color:'#111'}}>{mood==='happy' ? 'ω' : mood==='smug' ? '‿' : 'w'}</div>
-                  {/* whiskers */}
-                  <div style={{position:'absolute', left: -28, top: 95, width: 50, height: 3, background:'#111', transform:'rotate(-8deg)'}} />
-                  <div style={{position:'absolute', left: -28, top: 110, width: 50, height: 3, background:'#111'}} />
-                  <div style={{position:'absolute', right: -28, top: 95, width: 50, height: 3, background:'#111', transform:'rotate(8deg)'}} />
-                  <div style={{position:'absolute', right: -28, top: 110, width: 50, height: 3, background:'#111'}} />
+                <div style={{position:'absolute', left: 50, top: -10, width: 120, height: 110, background: bodyCol, borderRadius:'50%', border:'4px solid #111'}}>
+                  <div style={{position:'absolute', left: 12, top: 22, width: 42, height: 42, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 32, lineHeight:'42px'}}>{eye}</div>
+                  <div style={{position:'absolute', right: 12, top: 22, width: 42, height: 42, background:'#fff', borderRadius:'50%', border:'3px solid #111', textAlign:'center', fontSize: 32, lineHeight:'42px'}}>{eye}</div>
+                  <div style={{position:'absolute', left: '50%', top: 68, transform:'translateX(-50%)', fontSize: 26}}>{mood==='love' ? '😘' : mood==='happy' ? '😁' : '😮'}</div>
+                  {female && <div style={{position:'absolute', left: '50%', top: -22, transform:'translateX(-50%)', fontSize: 36}}>🎀</div>}
                 </div>
                 {/* legs */}
-                <div style={{position:'absolute', left: 40, top: 210, width: 36, height: 26, background:'#FF9A2B', borderRadius: 10, border:'3px solid #111'}} />
-                <div style={{position:'absolute', right: 40, top: 210, width: 36, height: 26, background:'#FF9A2B', borderRadius: 10, border:'3px solid #111'}} />
-                {mood==='sneaky' && <div style={{position:'absolute', left: -20, top: -40, fontSize: 44}}>👀</div>}
+                {[0,1,2].map(i => <div key={i} style={{position:'absolute', left: 20+i*50, top: 130, width: 8, height: 50, background:'#111', transform:`rotate(${i===1?0:i===0?-20:20}deg)`}} />)}
+                {withRose && <div style={{position:'absolute', left: -50, top: 30, fontSize: 72, transform:'rotate(-10deg)'}}>🌹</div>}
+                {mood==='love' && <div style={{position:'absolute', right: -20, top: -30, fontSize: 40}}>💖</div>}
               </div>
             );
           };
 
-          export const Bowl: React.FC<{x?: number; y?: number; s?: number; flying?: boolean; rot?: number}> = ({x=400, y=1250, s=1, flying=false, rot=0}) => (
-            <div style={{position:'absolute', left: x, top: y, width: 200*s, height: 140*s, zIndex: 30, transform:`rotate(${rot}deg)`}}>
-              <div style={{width: 200*s, height: 110*s, background:'#fff', borderRadius: '0 0 100px 100px', border:'6px solid #111', textAlign:'center', paddingTop: 18}}>
-                <div style={{fontSize: 62}}>🍜</div>
-                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 20}}>MIE TERAKHIR</div>
-              </div>
-              {flying && <div style={{position:'absolute', left: -30, top: -40, fontSize: 48}}>💨</div>}
-              <div style={{position:'absolute', left: 30, top: -22, fontSize: 36, opacity: .8}}>♨️ ♨️ ♨️</div>
+          export const Sandal: React.FC<{x?: number; y?: number; rot?: number}> = ({x=150, y=1250, rot=-18}) => (
+            <div style={{position:'absolute', left: x, top: y, width: 160, height: 70, background:'#FFD93D', borderRadius: 30, border:'5px solid #111', transform:`rotate(${rot}deg)`, textAlign:'center', fontSize: 36, paddingTop: 6, zIndex: 32}}>🩴 SENJATA</div>
+          );
+          export const PhoneWet: React.FC<{x?: number; y?: number}> = ({x=480, y=1500}) => (
+            <div style={{position:'absolute', left: x, top: y, width: 130, height: 190, background:'#111', borderRadius: 18, border:'4px solid #fff', textAlign:'center', paddingTop: 12, zIndex: 30, transform:'rotate(12deg)'}}>
+              <div style={{fontSize: 60}}>📱💧</div>
+              <div style={{color:'#FF4D4D', fontWeight: 900, fontSize: 20}}>MATI TOTAL</div>
             </div>
           );
           EOF
@@ -272,147 +257,148 @@ jobs:
                 </div>
                 <AbsoluteFill style={{background: 'radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 55%, rgba(0,0,0,.45) 100%)', pointerEvents:'none'}} />
                 {flash > 0 && <AbsoluteFill style={{background:'#fff', opacity: flash}} />}
-                {/* progress bar bottom like Reels */}
                 <div style={{position:'absolute', left: 0, right: 0, bottom: 0, height: 10, background:'rgba(255,255,255,.25)'}}>
                   <div style={{height: '100%', width: `${(t / TOTAL_S)*100}%`, background:'#FFD93D'}} />
                 </div>
-                <div style={{position:'absolute', left: 24, bottom: 28, background:'rgba(0,0,0,.6)', color:'#fff', fontFamily:'Montserrat', fontWeight: 800, fontSize: 22, padding: '6px 12px', borderRadius: 20}}>ANAK KOS VS KUCING OREN • 45s</div>
+                <div style={{position:'absolute', left: 24, bottom: 28, background:'rgba(0,0,0,.6)', color:'#fff', fontFamily:'Montserrat', fontWeight: 800, fontSize: 22, padding: '6px 12px', borderRadius: 20}}>TOILET DRAMA • KECOA LAMARAN • 45s</div>
               </AbsoluteFill>
             );
           };
           EOF
           cat > src/shots.tsx <<'EOF'
           import React from 'react';
-          import {Room, Boy, Cat, Bowl, Caption, SFX, Bubble} from './lib/characters';
+          import {Bathroom, Man, Roach, Sandal, PhoneWet, Caption, SFX, Bubble} from './lib/characters';
 
           const S1: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={380} y={1020} mood={u>1.5 ? 'shock' : 'sleepy'} pose="stand" jump={u} />
-              <div style={{position:'absolute', left: 380, top: 880, fontSize: 90}}>😴</div>
-              <div style={{position:'absolute', left: 250, top: 1450, width: 580, height: 90, background:'#fff', borderRadius: 40, border:'5px solid #111', textAlign:'center', fontFamily:'Montserrat', fontWeight: 900, fontSize: 36, paddingTop: 18}}>KRUUK... KRUUK... 🥺</div>
-              <Caption text="JAM 2 PAGI" sub="perut bunyi, dompet juga bunyi" />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="focus" pose="sit" />
+              <Bubble text="DIKIT LAGI RANK UP... JANGAN GANGGU!" x={90} y={420} w={440} />
+              <Caption text="MAIN HP DI TOILET" sub="fokusnya 1000% - kayak video toilet viral" />
+            </Bathroom>
           );
           const S2: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={320} y={1000} mood="happy" pose="cheer" jump={u} />
-              <div style={{position:'absolute', left: 620, top: 1250, fontSize: 120, transform: `scale(${1 + Math.sin(u*8)*.08})`}}>🍜✨</div>
-              <Bubble text="YES! MASIH ADA 1 MIE TERAKHIR!" x={90} y={430} w={420} />
-              <Caption text="KETEMU HARTA KARUN!" sub="1 mie = 1 kebahagiaan" />
-              <SFX text="JACKPOT!" x={620} y={760} color="#2ECC71" />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="focus" />
+              <Roach x={680} y={1350} female={false} mood="love" withRose pose="walk" jump={u} />
+              <div style={{position:'absolute', left: 620, top: 1200, fontSize: 40}}>💖💖</div>
+              <Caption text="ADA TAMU..." sub="kecoa cowok bawa bunga" />
+              <SFX text="TOK TOK!" x={620} y={1050} color="#2E86FF" rot={6} />
+            </Bathroom>
           );
           const S3: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={300} y={1020} mood="happy" pose="dance" jump={u} />
-              <Bowl x={580} y={1180} s={1.15} />
-              <div style={{position:'absolute', left: 580, top: 1080, fontSize: 64}}>♨️♨️♨️</div>
-              <div style={{position:'absolute', left: 100, top: 1500, fontSize: 60}}>🎵 masak mie tengah malam 🎵</div>
-              <Caption text="MASAK MIE DULU" sub="wanginya sampai ke tetangga" />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="shock" />
+              <Roach x={600} y={1380} female={false} mood="love" withRose />
+              <Roach x={760} y={1400} female mood="love" />
+              <div style={{position:'absolute', left: 580, top: 1250, fontSize: 70}}>🌹💍💖</div>
+              <Bubble text="MAU NIKAH SAMA AKU GAK?" x={520} y={1050} w={380} />
+              <Bubble text="IYAAA... 🥺💖" x={720} y={1180} w={280} />
+              <Caption text="KECOA MALAH LAMARAN!" sub="romantisnya ngalahin sinetron" color="#FF6B9D" />
+            </Bathroom>
           );
           const S4: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={300} y={1020} mood="happy" pose="hold" />
-              <Bowl x={560} y={1180} />
-              <Cat x={760} y={1280} mood="sneaky" pose="sit" />
-              <div style={{position:'absolute', left: 720, top: 1150, background:'#111', color:'#fff', padding: '8px 14px', borderRadius: 18, fontFamily:'Montserrat', fontWeight: 800}}>ngintip...</div>
-              <Caption text="ADA YANG NGINTIP" sub="si oren udah cium bau mie" />
-              <SFX text="MEONG?" x={700} y={900} color="#FF9A2B" rot={6} />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="angry" pose="shake" jump={u} />
+              <Roach x={600} y={1380} female={false} mood="love" withRose />
+              <Roach x={760} y={1400} female mood="love" />
+              <Sandal x={140} y={1300} rot={-15} />
+              <Caption text="COWOKNYA NGAMUK" sub="ngambil sendal andalan" />
+              <SFX text="ISH! JIJIK!" x={350} y={760} />
+            </Bathroom>
           );
-          const S5: React.FC<{p:number;u:number}> = ({p,u}) => {
-            const tug = Math.sin(u*14)*18;
-            return (
-              <Room><Boy x={260 + tug} y={1020} mood="angry" pose="hold" />
-                <Cat x={620 - tug} y={1200} mood="angry" pose="jump" jump={u} />
-                <Bowl x={440} y={1200} rot={tug*0.4} />
-                <Caption text="REBUTAN MIE!" sub="siapa cepat dia dapat" />
-                <SFX text="TARIK!" x={380} y={780} />
-                <SFX text="LEPASIN!" x={600} y={950} color="#2E86FF" rot={8} />
-              </Room>
-            );
-          };
-          const S6: React.FC<{p:number;u:number}> = ({p,u}) => (
-            <Room><Boy x={280} y={1020} mood="shock" pose="shock" />
-              <Cat x={650} y={1200} mood="shock" pose="jump" jump={u} />
-              <Bowl x={420 + p*40} y={1050 - Math.sin(p*Math.PI)*220} rot={p*180} flying />
-              <div style={{position:'absolute', left: 400, top: 900, fontSize: 80}}>🍜💨</div>
-              <Caption text="MIE-NYA TERBANG!" sub="slow-mo drama 3 detik" color="#FF6B6B" />
-              <SFX text="GUBRAK!!" x={360} y={700} />
-            </Room>
+          const S5: React.FC<{p:number;u:number}> = ({p,u}) => (
+            <Bathroom><Man x={300} y={920} mood="shock" pose="shake" jump={u} />
+              <Roach x={620 + Math.sin(u*12)*40} y={1320} female={false} mood="shock" pose="jump" jump={u} />
+              <Roach x={780} y={1400} female mood="shock" />
+              <Sandal x={400 + p*80} y={1250 - Math.sin(p*Math.PI)*120} rot={p*180} />
+              <div style={{position:'absolute', left: 480, top: 1550, fontSize: 80}}>📱💨</div>
+              <Caption text="MELESET!" sub="sendal kena HP, HP mental" color="#FF6B6B" />
+              <SFX text="PLAK!" x={400} y={780} />
+            </Bathroom>
+          );
+          const S6: React.FC<{p:number;u:number}> = ({u}) => (
+            <Bathroom><Man x={300} y={920} mood="shock" pose="shake" jump={u} />
+              <PhoneWet x={500} y={1520} />
+              <Roach x={620} y={1380} female={false} mood="happy" />
+              <Roach x={760} y={1400} female mood="happy" />
+              <Caption text="HP NYEMPLUNG!" sub="rank up gagal total" color="#FF6B6B" />
+              <SFX text="AAAAA!!" x={360} y={720} />
+              <SFX text="HAHAHA!" x={620} y={1150} color="#2ECC71" rot={8} />
+            </Bathroom>
           );
           const S7: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={260} y={1020} mood="cry" pose="cry" cry jump={u} />
-              <Cat x={620} y={1280} mood="happy" pose="eat" />
-              <div style={{position:'absolute', left: 600, top: 1450, width: 300, height: 80, background:'#fff', borderRadius: 20, border:'4px solid #111', textAlign:'center', fontFamily:'Montserrat', fontWeight: 900, paddingTop: 16}}>SLURP... ENAK! 😻</div>
-              <Caption text="KUCING YANG MAKAN" sub="anak kos cuma bisa nangis" color="#FF6B6B" />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="angry" pose="shake" jump={u} />
+              <div style={{position:'absolute', left: 620, top: 1150, fontSize: 90}}>🧴💨</div>
+              <Roach x={620} y={1380} female={false} mood="shock" />
+              <Roach x={760} y={1400} female mood="shock" />
+              <div style={{position:'absolute', left: 300, top: 700, background:'#fff', borderRadius: 20, padding: '10px 18px', fontFamily:'Montserrat', fontWeight: 900, fontSize: 30, border:'4px solid #111'}}>💨 SEMPROT BALIK!</div>
+              <Caption text="KENA SEMPROT SENDIRI" sub="batuk-batuk, mata perih" />
+              <SFX text="UHUK UHUK!" x={340} y={820} color="#2E86FF" />
+            </Bathroom>
           );
           const S8: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={380} y={1000} mood="happy" pose="cheer" jump={u} />
-              <div style={{position:'absolute', left: 620, top: 1300, fontSize: 110}}>🍜👀</div>
-              <Bubble text="HA! MASIH ADA 1 LAGI DI BAWAH KASUR!" x={90} y={430} w={440} />
-              <Caption text="PLOT TWIST!" sub="mie cadangan anak kos sejati" />
-              <SFX text="ADA LAGI!" x={580} y={800} color="#2ECC71" />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="cry" />
+              <Roach x={600} y={1380} female={false} mood="love" withRose />
+              <Roach x={760} y={1400} female mood="love" />
+              <div style={{position:'absolute', left: 560, top: 1220, textAlign:'center', background:'#FFD93D', border:'5px solid #111', borderRadius: 20, padding: '10px 16px', fontFamily:'Montserrat', fontWeight: 900, fontSize: 30}}>💒 SAH! 💒</div>
+              <div style={{position:'absolute', left: 600, top: 1320, fontSize: 50}}>💋💖💋</div>
+              <Caption text="KECOA NIKAHAN!" sub="di toilet orang, tanpa izin" color="#FF6B9D" />
+            </Bathroom>
           );
-          const S9: React.FC<{p:number;u:number}> = ({p,u}) => {
-            const x = 200 + Math.sin(u*6)*280;
-            return (
-              <Room><Boy x={x} y={1020} mood="shock" pose="run" flip={Math.cos(u*6)<0} />
-                <Cat x={x+180} y={1250} mood="angry" pose="run" jump={u} flip={Math.cos(u*6)<0} />
-                <div style={{position:'absolute', left: 300, top: 1480, fontSize: 50}}>💨💨💨</div>
-                <Caption text="KEJAR-KEJARAN!" sub="kosan jadi arena balap" />
-              </Room>
-            );
-          };
+          const S9: React.FC<{p:number;u:number}> = ({p,u}) => (
+            <Bathroom><Man x={300 + Math.sin(u*8)*18} y={920} mood="angry" pose="shake" jump={u} />
+              <Roach x={620} y={1380} female={false} mood="shock" pose="jump" jump={u} />
+              <Roach x={760} y={1400} female mood="shock" />
+              <div style={{position:'absolute', left: 150, top: 1450, fontSize: 70}}>🧻💨</div>
+              <Caption text="KEPLESET TISU!" sub="niat mukul, malah jatuh" />
+              <SFX text="GUBRAK!!" x={360} y={720} />
+            </Bathroom>
+          );
           const S10: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={250} y={1020} mood="cry" pose="stand" />
-              <Cat x={580} y={1250} mood="smug" pose="sit" />
-              <Bowl x={600} y={1450} s={0.9} />
-              <Bubble text="PUNYAKU. TITIK." x={560} y={1050} w={320} />
-              <Caption text="KUCING MENANG" sub="anak kos pasrah total" />
-            </Room>
+            <Bathroom><Man x={280} y={980} mood="cry" />
+              <Roach x={600} y={1150} female={false} mood="happy" pose="fly" jump={u} />
+              <Roach x={760} y={1150} female mood="happy" pose="fly" jump={u} />
+              <div style={{position:'absolute', left: 560, top: 1050, fontSize: 50}}>✈️💖✈️</div>
+              <Caption text="BULAN MADU!" sub="kecoanya terbang pergi, cowoknya ditinggal" />
+              <SFX text="DADAH!" x={600} y={900} color="#2ECC71" rot={6} />
+            </Bathroom>
           );
           const S11: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={250} y={1020} mood="happy" pose="hold" />
-              <Cat x={600} y={1250} mood="happy" pose="sit" />
-              <Bowl x={380} y={1250} s={1.1} />
-              <div style={{position:'absolute', left: 380, top: 1450, fontSize: 60}}>🥢🥢</div>
-              <Bubble text="YA UDAH, MAKAN BARENG AJA" x={80} y={420} w={420} />
-              <Caption text="DAMAI!" sub="mie dibagi dua, hati dibagi satu" color="#2ECC71" />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="cry" />
+              <PhoneWet x={500} y={1520} />
+              <div style={{position:'absolute', left: 90, top: 1450, width: 520, height: 90, background:'#fff', borderRadius: 30, border:'4px solid #111', textAlign:'center', fontFamily:'Montserrat', fontWeight: 900, paddingTop: 18, fontSize: 32}}>HP MATI • RANK TURUN • HATI HANCUR</div>
+              <Caption text="PASRAH TOTAL" sub="tisu jadi tisu air mata" color="#FF6B6B" />
+            </Bathroom>
           );
           const S12: React.FC<{p:number;u:number}> = ({u}) => (
-            <Room><Boy x={280} y={1020} mood="shock" pose="shock" />
-              <Cat x={620} y={1250} mood="happy" pose="jump" jump={u} />
-              <Bubble text="TAMBAH LAGI DONG!" x={560} y={1050} w={340} />
-              <Caption text="KUCING NAGIH!" sub="ini kucing apa preman?" />
-              <SFX text="LAGI?!" x={300} y={760} />
-            </Room>
+            <Bathroom><Man x={300} y={920} mood="shock" />
+              <Roach x={650} y={1350} female={false} mood="happy" withRose />
+              <Bubble text="MAKASIH YA, TEMPATNYA ENAK! 🌹" x={520} y={1050} w={400} />
+              <Caption text="BALIK LAGI?!" sub="ngasih bunga sebagai terima kasih" />
+            </Bathroom>
           );
           const S13: React.FC<{p:number;u:number}> = ({p,u}) => (
-            <Room><Boy x={320} y={1020} mood="cry" pose="cry" />
-              <Cat x={620} y={1250} mood="smug" pose="sit" />
+            <Bathroom><Man x={300} y={920} mood="cry" />
+              <Roach x={650} y={1350} female={false} mood="love" withRose />
+              <Roach x={800} y={1380} female mood="love" />
               <div style={{position:'absolute', left: 90, right: 90, top: 380, textAlign:'center', background:'#FFD93D', border:'6px solid #111', borderRadius: 28, padding: '20px 10px'}}>
-                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 52, lineHeight: 1.05}}>BESOK KAMU<br/>YANG BELI MIE!</div>
-                <div style={{fontFamily:'Caveat', fontSize: 42}}>- kata kucing oren -</div>
+                <div style={{fontFamily:'Montserrat', fontWeight: 900, fontSize: 50, lineHeight: 1.05}}>JANGAN GANGGU<br/>ORANG PACARAN!</div>
+                <div style={{fontFamily:'Caveat', fontSize: 40}}>- kata kecoa -</div>
               </div>
-              <div style={{position:'absolute', left: 180, right: 180, bottom: 380, textAlign:'center', background:'#111', color:'#fff', borderRadius: 30, padding: '18px 10px', fontFamily:'Montserrat', fontWeight: 900, fontSize: 38}}>FOLLOW BIAR OREN<br/>GAK LAPAR LAGI 😹</div>
+              <div style={{position:'absolute', left: 180, right: 180, bottom: 380, textAlign:'center', background:'#111', color:'#fff', borderRadius: 30, padding: '18px 10px', fontFamily:'Montserrat', fontWeight: 900, fontSize: 36}}>FOLLOW BIAR GAK<br/>DIGANGGU KECOA 😹</div>
               <div style={{position:'absolute', left: 0, right: 0, bottom: 180, textAlign:'center', fontSize: 44}}>❤️ 🔁 💬</div>
-            </Room>
+            </Bathroom>
           );
           export const SHOTS: any[] = [
-            {d:3.0, Scene:S1, cap:'jam 2 pagi'},
-            {d:3.5, Scene:S2, cap:'ketemu mie'},
-            {d:3.5, Scene:S3, cap:'masak mie'},
-            {d:3.5, Scene:S4, cap:'kucing ngintip'},
-            {d:3.5, Scene:S5, cap:'rebutan', shake: 6},
-            {d:3.5, Scene:S6, cap:'mie terbang', shake: 10, flash: .3},
-            {d:3.5, Scene:S7, cap:'kucing makan'},
-            {d:3.5, Scene:S8, cap:'plot twist'},
-            {d:3.5, Scene:S9, cap:'kejar-kejaran', shake: 4},
-            {d:3.5, Scene:S10, cap:'kucing menang'},
-            {d:3.5, Scene:S11, cap:'damai'},
-            {d:3.5, Scene:S12, cap:'kucing nagih'},
-            {d:3.5, Scene:S13, cap:'punchline + CTA'},
+            {d:3.0, Scene:S1},
+            {d:3.5, Scene:S2},
+            {d:3.5, Scene:S3},
+            {d:3.5, Scene:S4},
+            {d:3.5, Scene:S5, shake: 8},
+            {d:3.5, Scene:S6, shake: 6},
+            {d:3.5, Scene:S7},
+            {d:3.5, Scene:S8},
+            {d:3.5, Scene:S9, shake: 10, flash: .25},
+            {d:3.5, Scene:S10},
+            {d:3.5, Scene:S11},
+            {d:3.5, Scene:S12},
+            {d:3.5, Scene:S13},
           ];
           EOF
           cat > scripts/render.sh <<'EOF'
@@ -470,12 +456,12 @@ jobs:
           GL: 'swangle'
         run: |
           set -e
-          sh scripts/render.sh comedy_anak_kos_vs_kucing_oren.mp4
+          sh scripts/render.sh toilet_kecoa_lamaran.mp4
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: reel-comedy-2d-45s
+          name: reel-comedy-toilet-kecoa-45s
           path: |
-            out/comedy_anak_kos_vs_kucing_oren.mp4
+            out/toilet_kecoa_lamaran.mp4
             out/test.png
           retention-days: 7
