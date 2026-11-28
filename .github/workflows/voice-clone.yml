@@ -26,7 +26,7 @@ on:
         type: string
         default: "MyVoice.wav"
       ref_text:
-        description: "SANGAT disarankan diisi: transkrip PERSIS dari audio referensi (huruf besar/kecil & tanda baca ikut aslinya). Ini mengaktifkan mode ICL yang kualitasnya jauh lebih bersih dari mode x-vector-only. Kosongkan hanya kalau kamu memang tidak tahu transkripnya."
+        description: "SANGAT disarankan diisi: transkrip PERSIS dari audio referensi (mengaktifkan mode ICL). Kosongkan hanya jika tidak tahu transkripnya."
         required: false
         type: string
         default: "I'm at my 10-year college reunion today, but the emotion I feel is not what I expected. I really thought I would enjoy reminiscing and seeing all the old spots, whether it was a significant memory or something more mundane. But the emotion I feel is a little bit more complex. The nostalgia is more like grief—grief over how fast time seems to go by. I cannot believe it's been 10 years, but I think it's good to feel like this every once in a while because it reminds us to savor the present moment. But I don't know if that'll make us feel any different when we look back 10 years from today; at least we'll know that we paid attention."
@@ -39,7 +39,7 @@ on:
           - "0.6B"
           - "1.7B"
       quant:
-        description: "Kuantisasi GGUF (BF16 = kualitas terbaik & paling halus, tapi lambat di CPU. Q8_0 = kompromi. Q4_K_M = tercepat tapi paling banyak artefak/kresek)"
+        description: "Kuantisasi GGUF (BF16 = terbaik, Q8_0 = seimbang, Q4_K_M = tercepat)"
         required: true
         type: choice
         default: "BF16"
@@ -57,9 +57,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cek file referensi ada
+        env:
+          REF_AUDIO_PATH: ${{ inputs.ref_audio_path }}
         run: |
-          if [ ! -f "${{ inputs.ref_audio_path }}" ]; then
-            echo "::error::File referensi '${{ inputs.ref_audio_path }}' tidak ditemukan di repo. Commit dulu file suaranya sebelum run workflow ini."
+          if [ ! -f "$REF_AUDIO_PATH" ]; then
+            echo "::error::File referensi '$REF_AUDIO_PATH' tidak ditemukan di repo. Commit dulu file suaranya sebelum run workflow ini."
             exit 1
           fi
 
@@ -80,14 +82,50 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake ninja-build patchelf
+          sudo apt-get install -y -qq --no-install-recommends cmake ninja-build patchelf
 
-      - name: Clone qwentts-cpp-python + qwentts.cpp (native source, pinned to ABI v2)
+      - name: Clone qwentts-cpp-python & sinkronkan versi qwentts.cpp
         run: |
-          git clone --depth 1 https://github.com/andimarafioti/qwentts-cpp-python.git /tmp/qwentts-cpp-python
+          git clone --depth 1 --recurse-submodules https://github.com/andimarafioti/qwentts-cpp-python.git /tmp/qwentts-cpp-python
           git clone https://github.com/ServeurpersoCom/qwentts.cpp.git /tmp/qwentts.cpp
+
+          PINNED_SHA=$(python3 - <<'PY'
+          import pathlib, re, subprocess
+
+          root = pathlib.Path("/tmp/qwentts-cpp-python")
+          files = [
+              root / "scripts" / "build_native.py",
+              root / "pyproject.toml",
+              *sorted((root / ".github" / "workflows").glob("*.y*ml")),
+              root / "README.md",
+          ]
+          seen = set()
+          for p in files:
+              if not p.exists():
+                  continue
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              for sha in re.findall(r"\b[0-9a-f]{40}\b", text):
+                  if sha in seen:
+                      continue
+                  seen.add(sha)
+                  chk = subprocess.run(
+                      ["git", "-C", "/tmp/qwentts.cpp", "cat-file", "-e", f"{sha}^{{commit}}"],
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
+                  )
+                  if chk.returncode == 0:
+                      print(sha)
+                      raise SystemExit(0)
+          PY
+          )
+
           cd /tmp/qwentts.cpp
-          git checkout 5ce30d34a40f1105f7a05e7d861a6bee9efe2ac6
+          if [ -n "$PINNED_SHA" ]; then
+            echo "Checkout qwentts.cpp commit sesuai qwentts-cpp-python: $PINNED_SHA"
+            git checkout "$PINNED_SHA"
+          else
+            echo "Memakai qwentts.cpp terbaru ($(git rev-parse --short HEAD))"
+          fi
           git submodule update --init --recursive
 
       - name: Build native qwentts.cpp for this runner's CPU (AMX disabled)
@@ -104,11 +142,13 @@ jobs:
             --cmake-arg=-DGGML_AMX_INT8=OFF \
             --cmake-arg=-DGGML_AMX_BF16=OFF
 
-      - name: Install qwentts-cpp-python (from local build) + faster-qwen3-tts
+      - name: Install qwentts-cpp-python (local build) + faster-qwen3-tts
         run: |
-          pip install --upgrade pip
+          pip install -q --upgrade pip
           pip install /tmp/qwentts-cpp-python
           pip install "faster-qwen3-tts[ggml]"
+          # Pastikan build native lokal (AMX off) tidak tertimpa wheel dari PyPI
+          pip install --force-reinstall --no-deps /tmp/qwentts-cpp-python
 
       - name: Generate voice clone
         env:
@@ -137,16 +177,13 @@ jobs:
           if xvec_only:
               print("Ref-text kosong -> pakai mode x-vector-only")
 
-          # Bersihkan audio referensi dulu: hilangkan DC offset & peak-normalize.
-          # Referensi yang sedikit clipping/over-driven bisa ikut ter-"clone"
-          # jadi karakter noise di suara hasil.
           ref_data, ref_sr = sf.read(ref_audio, dtype="float64")
           if ref_data.ndim > 1:
-              ref_data = ref_data.mean(axis=1)  # mono-kan kalau stereo
-          ref_data = ref_data - np.mean(ref_data)  # hilangkan DC offset
+              ref_data = ref_data.mean(axis=1)
+          ref_data = ref_data - np.mean(ref_data)
           ref_peak = float(np.max(np.abs(ref_data))) if ref_data.size else 0.0
           print(f"Peak amplitude referensi asli: {ref_peak:.4f}")
-          target_ref_peak = 10 ** (-1 / 20)  # headroom -1 dBFS
+          target_ref_peak = 10 ** (-1 / 20)
           if ref_peak > 0:
               ref_data = ref_data * (target_ref_peak / ref_peak)
           cleaned_ref_path = "outputs/_ref_cleaned.wav"
@@ -169,15 +206,12 @@ jobs:
           audio = np.concatenate(audio_list) if isinstance(audio_list, list) else audio_list
           audio = np.asarray(audio, dtype=np.float64)
 
-          # Normalisasi peak SEBELUM ditulis ke WAV, supaya tidak ada hard-clip
-          # (menulis WAV float>1.0 langsung sebagai PCM_16 memotong paksa sample-nya,
-          # itulah sumber suara "kresek-kresek").
           peak = float(np.max(np.abs(audio))) if audio.size else 0.0
           print(f"Peak amplitude mentah dari model: {peak:.4f}")
-          target_peak = 10 ** (-1 / 20)  # headroom -1 dBFS (~0.891)
+          target_peak = 10 ** (-1 / 20)
           if peak > target_peak:
               audio = audio * (target_peak / peak)
-              print(f"Peak melebihi batas aman, di-scale turun ke {target_peak:.4f} (bukan dipotong)")
+              print(f"Peak melebihi batas aman, di-scale turun ke {target_peak:.4f}")
           else:
               print("Tidak ada risiko clipping, audio dibiarkan apa adanya.")
 
